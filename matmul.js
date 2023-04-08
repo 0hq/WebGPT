@@ -74,7 +74,7 @@ function createMatMulShader(device) {
     @group(0) @binding(2) var<storage, read_write> C: Matrix;
     @group(0) @binding(3) var<uniform> dimBuffer: Uniforms;
 
-    @compute @workgroup_size(8, 8)
+    @compute @workgroup_size(16, 16)
     fn main (@builtin(global_invocation_id) global_id: vec3<u32>) {
         let row: u32 = global_id.x;
         let col: u32 = global_id.y;
@@ -159,8 +159,8 @@ async function runMatMul(device, pipeline, A, B, verbose = false) {
     ],
   });
 
-  const workgroupSizeX = 8;
-  const workgroupSizeY = 8;
+  const workgroupSizeX = 16;
+  const workgroupSizeY = 16;
   const numWorkgroupsX = Math.min(Math.ceil(masterDimA / workgroupSizeX), 256);
   const numWorkgroupsY = Math.min(Math.ceil(masterDimB / workgroupSizeY), 256);
 
@@ -202,32 +202,4 @@ async function runMatMul(device, pipeline, A, B, verbose = false) {
   }
 
   return resultArray;
-}
-
-async function runMLP(input, weight) {
-  const device = await initializeWebGPU();
-  const pipeline = await createMatMulPipeline(device);
-
-  // let layerOutput = input;
-  // for (let i = 0; i < weights.length; i++) {
-  //   const weight = weights[i];
-  //   // const bias = biases[i];
-
-  //   // Perform matrix multiplication
-  //   layerOutput = await runMatMul(device, pipeline, layerOutput, weight);
-
-  //   // Add biases
-  //   // for (let j = 0; j < layerOutput.length; j++) {
-  //   //   layerOutput[j] += bias[j % bias.length];
-  //   // }
-
-  //   // Apply the activation function
-  //   // if (activation === "relu") {
-  //   //   layerOutput = layerOutput.map((value) => Math.max(0, value));
-  //   // } else if (activation === "sigmoid") {
-  //   //   layerOutput = layerOutput.map((value) => 1 / (1 + Math.exp(-value)));
-  //   // }
-  // }
-
-  return await runMatMul(device, pipeline, input, weight);
 }

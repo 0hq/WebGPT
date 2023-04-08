@@ -8,3 +8,14 @@ function softmax(x) {
 function argmax(x) {
   return x.indexOf(Math.max(...x));
 }
+
+// --- Print / Format Functions ---
+
+function formatAsMatrix(floatArray, dimA, dimB) {
+  const numArray = Array.from(floatArray);
+  const resultMatrix = [];
+  for (let i = 0; i < dimA; i++) {
+    resultMatrix.push(numArray.slice(i * dimB, (i + 1) * dimB));
+  }
+  return resultMatrix;
+}
