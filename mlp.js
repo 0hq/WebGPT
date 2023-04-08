@@ -74,12 +74,17 @@ function createMatMulShader(device) {
     @group(0) @binding(2) var<storage, read_write> C: Matrix;
     @group(0) @binding(3) var<uniform> dimBuffer: Uniforms;
 
-    @compute @workgroup_size(64)
+    @compute @workgroup_size(16, 16)
     fn main (@builtin(global_invocation_id) global_id: vec3<u32>) {
         let row: u32 = global_id.x;
         let col: u32 = global_id.y;
         let dimX: u32 = dimBuffer.dimX;
         let dimY: u32 = dimBuffer.dimY;
+
+        if (row >= dimY || col >= dimX) {
+          return;
+        }
+
         let dimS: u32 = dimBuffer.dimS;
 
         var sum: f32 = 0.0;
@@ -87,9 +92,7 @@ function createMatMulShader(device) {
             sum = sum + A.data[row * dimS + i] * B.data[i * dimX + col];
         }
 
-        if (row < dimY && col < dimX) {
-          C.data[row * dimX + col] = sum;
-        }
+        C.data[row * dimX + col] = sum;
       } 
   `;
 }
@@ -152,14 +155,14 @@ async function runMatMul(device, pipeline, A, B, verbose = false) {
 
   const workgroupSizeX = 8;
   const workgroupSizeY = 8;
-  const numWorkgroupsX = Math.ceil(masterDimA / workgroupSizeX);
-  const numWorkgroupsY = Math.ceil(masterDimB / workgroupSizeY);
+  const numWorkgroupsX = Math.min(Math.ceil(masterDimA / workgroupSizeX), 256);
+  const numWorkgroupsY = Math.min(Math.ceil(masterDimB / workgroupSizeY), 256);
 
   const commandEncoder = device.createCommandEncoder();
   const passEncoder = commandEncoder.beginComputePass();
   passEncoder.setPipeline(pipeline);
   passEncoder.setBindGroup(0, bindGroup);
-  passEncoder.dispatchWorkgroups(masterDimA, masterDimB, 1);
+  passEncoder.dispatchWorkgroups(numWorkgroupsX, numWorkgroupsY, 1);
   passEncoder.end();
 
   const readBuffer = device.createBuffer({
@@ -224,17 +227,22 @@ async function runMLP(input, weight) {
 }
 
 (async () => {
-  // const first = [[0, 1]];
-  // const second = [
-  //   [0, 1],
-  //   [0, 0],
-  // ];
+  const first = [[-5, -4]];
+  const second = [
+    [-6, 3],
+    [2, 6],
+  ];
+  // for (let i = 0; i < 100; i++) {
+  //   const output = await runMLP(first, second);
+  //   console.log("MLP Output:", output);
+  // }
   // const output = await runMLP(first, second);
   // console.log("MLP Output:", output);
 
   const device = await initializeWebGPU();
   const pipeline = await createMatMulPipeline(device);
-  testMatrixMultiplication(device, pipeline);
+  // testMatrixMultiplication(device, pipeline);
+  benchmarkMatrixMultiplication(device, pipeline);
 })();
 
 function generateRandomMatrix(rows, cols) {
@@ -261,15 +269,45 @@ function matMulCPU(A, B) {
   return result;
 }
 
+async function benchmarkMatrixMultiplication(device, pipeline) {
+  const numTests = 1000;
+  const maxDimension = 1000;
+  const rowsA = 1;
+  const colsA = maxDimension;
+  const rowsB = colsA;
+  const colsB = 1;
+
+  const A = generateRandomMatrix(rowsA, colsA);
+  const B = generateRandomMatrix(rowsB, colsB);
+
+  console.log("Running matrix multiplication benchmark...");
+  console.log(`Matrix A: ${rowsA}x${colsA}`);
+  console.log(`Matrix B: ${rowsB}x${colsB}`);
+
+  const start = performance.now();
+  for (let t = 0; t < numTests; t++) {
+    const gpuResult = await runMatMul(device, pipeline, A, B);
+
+    // console.log(`Run ${t + 1}: DONE`);
+  }
+  console.log("DONE");
+
+  const end = performance.now();
+  console.log(`Time taken: ${end - start} ms`);
+  console.log(`Time per run: ${(end - start) / numTests} ms`);
+  console.log(`Runs per second: ${numTests / ((end - start) / 1000)}`);
+  console.log(`Ops per second: ${(maxDimension ** 2 * numTests) / ((end - start) / 1000)}`);
+}
+
 async function testMatrixMultiplication(device, pipeline) {
   const numTests = 100;
-  const maxDimension = 200;
+  const maxDimension = 2000;
 
   for (let t = 0; t < numTests; t++) {
-    const rowsA = Math.ceil(Math.random() * maxDimension);
+    const rowsA = 1;
     const colsA = Math.ceil(Math.random() * maxDimension);
     const rowsB = colsA;
-    const colsB = Math.ceil(Math.random() * maxDimension);
+    const colsB = 1;
 
     const A = generateRandomMatrix(rowsA, colsA);
     const B = generateRandomMatrix(rowsB, colsB);
