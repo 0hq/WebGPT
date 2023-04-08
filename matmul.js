@@ -7,7 +7,9 @@ async function initializeWebGPU() {
   const adapter = await navigator.gpu.requestAdapter();
   const device = await adapter.requestDevice();
 
-  return device;
+  const queue = device.queue;
+
+  return { device, queue };
 }
 
 async function createMatMulPipeline(device) {
@@ -101,7 +103,19 @@ function alignedSize(size, alignment) {
   return Math.ceil(size / alignment) * alignment;
 }
 
-async function runMatMul(device, pipeline, A, B, verbose = false) {
+const flatten = (matrix) => {
+  return Float32Array.from(
+    (function* () {
+      for (const row of matrix) {
+        for (const value of row) {
+          yield value;
+        }
+      }
+    })()
+  );
+};
+
+async function runMatMulDynamic(device, queue, pipeline, A, B, verbose = false) {
   const bindGroupLayout = pipeline.getBindGroupLayout(0);
 
   const minStorageBufferOffsetAlignment = device.limits.minStorageBufferOffsetAlignment;
@@ -135,12 +149,6 @@ async function runMatMul(device, pipeline, A, B, verbose = false) {
     size: 16, // number of bytes, mult of 16
     usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
   });
-
-  const queue = device.queue;
-
-  const flatten = (matrix) => {
-    return matrix.reduce((acc, row) => acc.concat(row), []);
-  };
 
   const flatA = new Float32Array(flatten(A));
   const flatB = new Float32Array(flatten(B));
@@ -202,4 +210,140 @@ async function runMatMul(device, pipeline, A, B, verbose = false) {
   }
 
   return resultArray;
+}
+
+async function runMatMulDiscrete(
+  device,
+  queue,
+  pipeline,
+  A,
+  B,
+  bufferA,
+  bufferB,
+  bufferC,
+  uniformBuffer,
+  dim,
+  masterDimA,
+  masterDimB,
+  bindGroup,
+  numWorkgroupsX,
+  numWorkgroupsY,
+  bufferSizeC
+) {
+  const flatA = flatten(A);
+  const flatB = flatten(B);
+
+  queue.writeBuffer(bufferA, 0, flatA);
+  queue.writeBuffer(bufferB, 0, flatB);
+  queue.writeBuffer(uniformBuffer, 0, new Uint32Array([masterDimA, masterDimB, dim]));
+
+  const commandEncoder = device.createCommandEncoder();
+  const passEncoder = commandEncoder.beginComputePass();
+  passEncoder.setPipeline(pipeline);
+  passEncoder.setBindGroup(0, bindGroup);
+  passEncoder.dispatchWorkgroups(numWorkgroupsX, numWorkgroupsY, 1);
+  passEncoder.end();
+
+  const readBuffer = device.createBuffer({
+    size: bufferSizeC,
+    usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ,
+  });
+
+  commandEncoder.copyBufferToBuffer(bufferC, 0, readBuffer, 0, bufferSizeC);
+
+  queue.submit([commandEncoder.finish()]);
+
+  await readBuffer.mapAsync(GPUMapMode.READ);
+  const arrayBuffer = readBuffer.getMappedRange();
+  const resultArray = new Float32Array(arrayBuffer);
+
+  return resultArray;
+}
+
+async function runMatMulSameMatrix(device, queue, pipeline, bufferC, bindGroup, numWorkgroupsX, numWorkgroupsY, bufferSizeC) {
+  const commandEncoder = device.createCommandEncoder();
+  const passEncoder = commandEncoder.beginComputePass();
+  passEncoder.setPipeline(pipeline);
+  passEncoder.setBindGroup(0, bindGroup);
+  passEncoder.dispatchWorkgroups(numWorkgroupsX, numWorkgroupsY, 1);
+  passEncoder.end();
+
+  const readBuffer = device.createBuffer({
+    size: bufferSizeC,
+    usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ,
+  });
+
+  commandEncoder.copyBufferToBuffer(bufferC, 0, readBuffer, 0, bufferSizeC);
+
+  queue.submit([commandEncoder.finish()]);
+
+  await readBuffer.mapAsync(GPUMapMode.READ);
+  const arrayBuffer = readBuffer.getMappedRange();
+  const resultArray = new Float32Array(arrayBuffer);
+
+  return resultArray;
+}
+
+async function preMatMulDiscrete(device, queue, pipeline, A, B) {
+  const bindGroupLayout = pipeline.getBindGroupLayout(0);
+  const minStorageBufferOffsetAlignment = device.limits.minStorageBufferOffsetAlignment;
+  const bufferSizeA = alignedSize(A.length * A[0].length * Float32Array.BYTES_PER_ELEMENT, minStorageBufferOffsetAlignment);
+  const bufferSizeB = alignedSize(B.length * B[0].length * Float32Array.BYTES_PER_ELEMENT, minStorageBufferOffsetAlignment);
+  const bufferSizeC = alignedSize(B[0].length * A.length * Float32Array.BYTES_PER_ELEMENT, minStorageBufferOffsetAlignment);
+  if (A[0].length !== B.length) throw new Error("Invalid matrix dimensions");
+  const dim = B.length; // or B[0].length
+  const masterDimA = A.length;
+  const masterDimB = B[0].length;
+  const bufferA = device.createBuffer({
+    size: bufferSizeA,
+    usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
+  });
+  const bufferB = device.createBuffer({
+    size: bufferSizeB,
+    usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
+  });
+  const bufferC = device.createBuffer({
+    size: bufferSizeC,
+    usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC,
+  });
+  const uniformBuffer = device.createBuffer({
+    size: 16, // number of bytes, mult of 16
+    usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
+  });
+
+  const bindGroup = device.createBindGroup({
+    layout: bindGroupLayout,
+    entries: [
+      { binding: 0, resource: { buffer: bufferA } },
+      { binding: 1, resource: { buffer: bufferB } },
+      { binding: 2, resource: { buffer: bufferC } },
+      { binding: 3, resource: { buffer: uniformBuffer } },
+    ],
+  });
+
+  const workgroupSizeX = 16;
+  const workgroupSizeY = 16;
+  const numWorkgroupsX = Math.min(Math.ceil(masterDimA / workgroupSizeX), 256);
+  const numWorkgroupsY = Math.min(Math.ceil(masterDimB / workgroupSizeY), 256);
+
+  const flatA = flatten(A);
+  const flatB = flatten(B);
+
+  queue.writeBuffer(bufferA, 0, flatA);
+  queue.writeBuffer(bufferB, 0, flatB);
+  queue.writeBuffer(uniformBuffer, 0, new Uint32Array([masterDimA, masterDimB, dim]));
+
+  return {
+    bufferA,
+    bufferB,
+    bufferC,
+    uniformBuffer,
+    dim,
+    masterDimA,
+    masterDimB,
+    bindGroup,
+    numWorkgroupsX,
+    numWorkgroupsY,
+    bufferSizeC,
+  };
 }

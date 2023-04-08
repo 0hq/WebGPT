@@ -1,11 +1,15 @@
-async function benchmark(device, pipeline, N, workgroupSize, it = 1) {
+async function benchmark(device, pipeline, queue, N, it = 1) {
   const A = new Array(N).fill(null).map(() => new Array(N).fill(null).map(() => Math.random()));
   const B = new Array(N).fill(null).map(() => new Array(N).fill(null).map(() => Math.random()));
 
   const startTime = performance.now();
 
+  const { bufferA, bufferB, bufferC, uniformBuffer, dim, masterDimA, masterDimB, bindGroup, numWorkgroupsX, numWorkgroupsY, bufferSizeC } =
+    await preMatMulDiscrete(device, queue, pipeline, A, B);
+
   for (let i = 0; i < it; i++) {
-    await runMatMul(device, pipeline, A, B);
+    await runMatMulSameMatrix(device, queue, pipeline, bufferC, bindGroup, numWorkgroupsX, numWorkgroupsY, bufferSizeC);
+    // await runMatMulDynamic(device, queue, pipeline, A, B);
   }
 
   const endTime = performance.now();
@@ -13,18 +17,17 @@ async function benchmark(device, pipeline, N, workgroupSize, it = 1) {
   const elapsedTime = endTime - startTime;
   const gflops = (2 * N * N * N * it) / (elapsedTime * 1e6);
 
-  console.log(`N: ${N}, Workgroup Size: ${workgroupSize}x${workgroupSize}, Time: ${elapsedTime.toFixed(2)}ms, GFLOPS: ${gflops.toFixed(2)}`);
+  console.log(`Matrix Size: ${N}x${N}, Time: ${elapsedTime.toFixed(2)}ms, GFLOPS: ${gflops.toFixed(2)}`);
 }
 
 (async () => {
-  const device = await initializeWebGPU();
+  const { device, queue } = await initializeWebGPU();
   const pipeline = await createMatMulPipeline(device);
 
-  const N = 1024;
-  const workgroupSize = 16; // Match the workgroup size defined in createMatMulShader
-  const it = 1;
+  const N = 512;
+  const it = 100;
 
-  for (let i = 0; i < 5; i++) {
-    await benchmark(device, pipeline, N, workgroupSize, it);
+  for (let i = 0; i < 20; i++) {
+    await benchmark(device, pipeline, queue, N, it);
   }
 })();
