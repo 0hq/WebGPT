@@ -1,5 +1,5 @@
-async function createMatMulPipeline(device) {
-  const shader = createMatMulShader(device);
+async function createFFNPipeline(device) {
+  const shader = createFFNShader(device);
 
   const shaderModule = device.createShaderModule({
     code: shader,
@@ -10,12 +10,12 @@ async function createMatMulPipeline(device) {
       {
         binding: 0,
         visibility: GPUShaderStage.COMPUTE,
-        buffer: { type: "read-only-storage" },
+        buffer: { type: "storage" },
       },
       {
         binding: 1,
         visibility: GPUShaderStage.COMPUTE,
-        buffer: { type: "read-only-storage" },
+        buffer: { type: "storage" },
       },
       {
         binding: 2,
@@ -45,8 +45,18 @@ async function createMatMulPipeline(device) {
   return pipeline;
 }
 
-function createMatMulShader(device) {
-  return `
+/*
+{
+  "n_vocab": 50257,
+  "n_ctx": 1024,
+  "n_embd": 768,
+  "n_head": 12,
+  "n_layer": 12
+}
+
+*/
+
+const createFFNShader = () => `
     struct Matrix {
         data: array<f32>, // runtime-sized array
     }
@@ -57,8 +67,26 @@ function createMatMulShader(device) {
       dimS: u32, // shared dimension of A and B
     };
 
-    @group(0) @binding(0) var<storage, read> A: Matrix;
-    @group(0) @binding(1) var<storage, read> B: Matrix;
+    const PI = 3.141592653589793;
+    const SQRPI = 0.7978845608;
+
+    fn gelu(x: f32) -> f32 {
+      if (x < -10.0) {
+        return 0.0;
+      } else if (x > 10.0) {
+        return x;
+      } else {
+        let cdf_approx: f32 = 0.5 * (1.0 + tanh(sqrt(2.0 / PI) * (x + 0.044715 * pow(x, 3))));
+        return x * cdf_approx;
+      }
+    }
+
+    fn relu(x: f32) -> f32 {
+      return max(0.0, x);
+    }
+
+    @group(0) @binding(0) var<storage, read_write> A: Matrix;
+    @group(0) @binding(1) var<storage, read_write> B: Matrix;
     @group(0) @binding(2) var<storage, read_write> C: Matrix;
     @group(0) @binding(3) var<uniform> dimBuffer: Uniforms;
 
@@ -83,9 +111,8 @@ function createMatMulShader(device) {
         C.data[row * dimX + col] = sum;
       } 
   `;
-}
 
-async function runMatMulDynamic(device, queue, pipeline, A, B, verbose = false) {
+async function runFFNDynamic(device, queue, pipeline, A, B, verbose = false) {
   const bindGroupLayout = pipeline.getBindGroupLayout(0);
 
   const minStorageBufferOffsetAlignment = device.limits.minStorageBufferOffsetAlignment;
@@ -177,144 +204,7 @@ async function runMatMulDynamic(device, queue, pipeline, A, B, verbose = false) 
       resultMatrix.push(resultArray.slice(i * B[0].length, (i + 1) * B[0].length));
     }
     console.log("resultMatrix", resultMatrix);
-    console.log("resultMatrix (row 0, elem 0)", resultMatrix[0][0]);
   }
 
   return resultArray;
-}
-
-async function runMatMulDiscrete(
-  device,
-  queue,
-  pipeline,
-  A,
-  B,
-  bufferA,
-  bufferB,
-  bufferC,
-  uniformBuffer,
-  dim,
-  masterDimA,
-  masterDimB,
-  bindGroup,
-  numWorkgroupsX,
-  numWorkgroupsY,
-  bufferSizeC
-) {
-  const flatA = flatten(A);
-  const flatB = flatten(B);
-
-  queue.writeBuffer(bufferA, 0, flatA);
-  queue.writeBuffer(bufferB, 0, flatB);
-  queue.writeBuffer(uniformBuffer, 0, new Uint32Array([masterDimA, masterDimB, dim]));
-
-  const commandEncoder = device.createCommandEncoder();
-  const passEncoder = commandEncoder.beginComputePass();
-  passEncoder.setPipeline(pipeline);
-  passEncoder.setBindGroup(0, bindGroup);
-  passEncoder.dispatchWorkgroups(numWorkgroupsX, numWorkgroupsY, 1);
-  passEncoder.end();
-
-  const readBuffer = device.createBuffer({
-    size: bufferSizeC,
-    usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ,
-  });
-
-  commandEncoder.copyBufferToBuffer(bufferC, 0, readBuffer, 0, bufferSizeC);
-
-  queue.submit([commandEncoder.finish()]);
-
-  await readBuffer.mapAsync(GPUMapMode.READ);
-  const arrayBuffer = readBuffer.getMappedRange();
-  const resultArray = new Float32Array(arrayBuffer);
-
-  return resultArray;
-}
-
-async function runMatMulSameMatrix(device, queue, pipeline, bufferC, bindGroup, numWorkgroupsX, numWorkgroupsY, bufferSizeC) {
-  const commandEncoder = device.createCommandEncoder();
-  const passEncoder = commandEncoder.beginComputePass();
-  passEncoder.setPipeline(pipeline);
-  passEncoder.setBindGroup(0, bindGroup);
-  passEncoder.dispatchWorkgroups(numWorkgroupsX, numWorkgroupsY, 1);
-  passEncoder.end();
-
-  const readBuffer = device.createBuffer({
-    size: bufferSizeC,
-    usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ,
-  });
-
-  commandEncoder.copyBufferToBuffer(bufferC, 0, readBuffer, 0, bufferSizeC);
-
-  queue.submit([commandEncoder.finish()]);
-
-  await readBuffer.mapAsync(GPUMapMode.READ);
-  const arrayBuffer = readBuffer.getMappedRange();
-  const resultArray = new Float32Array(arrayBuffer);
-
-  return resultArray;
-}
-
-async function preMatMulDiscrete(device, queue, pipeline, A, B) {
-  const bindGroupLayout = pipeline.getBindGroupLayout(0);
-  const minStorageBufferOffsetAlignment = device.limits.minStorageBufferOffsetAlignment;
-  const bufferSizeA = alignedSize(A.length * A[0].length * Float32Array.BYTES_PER_ELEMENT, minStorageBufferOffsetAlignment);
-  const bufferSizeB = alignedSize(B.length * B[0].length * Float32Array.BYTES_PER_ELEMENT, minStorageBufferOffsetAlignment);
-  const bufferSizeC = alignedSize(B[0].length * A.length * Float32Array.BYTES_PER_ELEMENT, minStorageBufferOffsetAlignment);
-  if (A[0].length !== B.length) throw new Error("Invalid matrix dimensions");
-  const dim = B.length; // or B[0].length
-  const masterDimA = A.length;
-  const masterDimB = B[0].length;
-  const bufferA = device.createBuffer({
-    size: bufferSizeA,
-    usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
-  });
-  const bufferB = device.createBuffer({
-    size: bufferSizeB,
-    usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
-  });
-  const bufferC = device.createBuffer({
-    size: bufferSizeC,
-    usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC,
-  });
-  const uniformBuffer = device.createBuffer({
-    size: 16, // number of bytes, mult of 16
-    usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
-  });
-
-  const bindGroup = device.createBindGroup({
-    layout: bindGroupLayout,
-    entries: [
-      { binding: 0, resource: { buffer: bufferA } },
-      { binding: 1, resource: { buffer: bufferB } },
-      { binding: 2, resource: { buffer: bufferC } },
-      { binding: 3, resource: { buffer: uniformBuffer } },
-    ],
-  });
-
-  const workgroupSizeX = 16;
-  const workgroupSizeY = 16;
-  const numWorkgroupsX = Math.min(Math.ceil(masterDimA / workgroupSizeX), 256);
-  const numWorkgroupsY = Math.min(Math.ceil(masterDimB / workgroupSizeY), 256);
-
-  const flatA = flatten(A);
-  const flatB = flatten(B);
-
-  queue.writeBuffer(bufferA, 0, flatA);
-  queue.writeBuffer(bufferB, 0, flatB);
-  queue.writeBuffer(uniformBuffer, 0, new Uint32Array([masterDimA, masterDimB, dim]));
-
-  return {
-    bufferA,
-    bufferB,
-    bufferC,
-    uniformBuffer,
-    dim,
-    masterDimA,
-    masterDimB,
-    bindGroup,
-    numWorkgroupsX,
-    numWorkgroupsY,
-    bufferSizeC,
-  };
 }

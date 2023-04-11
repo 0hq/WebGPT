@@ -19,3 +19,19 @@ function formatAsMatrix(floatArray, dimA, dimB) {
   }
   return resultMatrix;
 }
+
+function alignedSize(size, alignment) {
+  return Math.ceil(size / alignment) * alignment;
+}
+
+const flatten = (matrix) => {
+  return Float32Array.from(
+    (function* () {
+      for (const row of matrix) {
+        for (const value of row) {
+          yield value;
+        }
+      }
+    })()
+  );
+};

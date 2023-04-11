@@ -20,14 +20,28 @@ async function benchmark(device, pipeline, queue, N, it = 1) {
   console.log(`Matrix Size: ${N}x${N}, Time: ${elapsedTime.toFixed(2)}ms, GFLOPS: ${gflops.toFixed(2)}`);
 }
 
+// (async () => {
+//   const { device, queue } = await initializeWebGPU();
+//   const pipeline = await createMatMulPipeline(device);
+
+//   const N = 2048;
+//   const it = 10;
+
+//   for (let i = 0; i < 10; i++) {
+//     await benchmark(device, pipeline, queue, N, it);
+//   }
+// })();
+
 (async () => {
   const { device, queue } = await initializeWebGPU();
   const pipeline = await createMatMulPipeline(device);
 
-  const N = 512;
-  const it = 100;
+  const N = 10;
+  const FILL = 10;
+  // A is ones
+  const A = new Array(N).fill(null).map(() => new Array(N).fill(null).map(() => FILL));
+  // B is identity
+  const B = new Array(N).fill(null).map((_, i) => new Array(N).fill(null).map((_, j) => (i === j ? 1 : 0)));
 
-  for (let i = 0; i < 20; i++) {
-    await benchmark(device, pipeline, queue, N, it);
-  }
+  await runMatMulDynamic(device, queue, pipeline, A, B, true);
 })();
