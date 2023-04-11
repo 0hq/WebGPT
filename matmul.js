@@ -68,12 +68,11 @@ function createMatMulShader(device) {
         let col: u32 = global_id.y;
         let dimX: u32 = dimBuffer.dimX;
         let dimY: u32 = dimBuffer.dimY;
+        let dimS: u32 = dimBuffer.dimS;
 
         if (row >= dimY || col >= dimX) {
           return;
         }
-
-        let dimS: u32 = dimBuffer.dimS;
 
         var sum: f32 = 0.0;
         for (var i: u32 = 0; i < dimS; i = i + 1) {

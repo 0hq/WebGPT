@@ -32,16 +32,16 @@ async function benchmark(device, pipeline, queue, N, it = 1) {
 //   }
 // })();
 
-(async () => {
-  const { device, queue } = await initializeWebGPU();
-  const pipeline = await createMatMulPipeline(device);
+// (async () => {
+//   const { device, queue } = await initializeWebGPU();
+//   const pipeline = await createMatMulPipeline(device);
 
-  const N = 10;
-  const FILL = 10;
-  // A is ones
-  const A = new Array(N).fill(null).map(() => new Array(N).fill(null).map(() => FILL));
-  // B is identity
-  const B = new Array(N).fill(null).map((_, i) => new Array(N).fill(null).map((_, j) => (i === j ? 1 : 0)));
+//   const N = 10;
+//   const FILL = 10;
+//   // A is ones
+//   const A = new Array(N).fill(null).map(() => new Array(N).fill(null).map(() => FILL));
+//   // B is identity
+//   const B = new Array(N).fill(null).map((_, i) => new Array(N).fill(null).map((_, j) => (i === j ? 1 : 0)));
 
-  await runMatMulDynamic(device, queue, pipeline, A, B, true);
-})();
+//   await runMatMulDynamic(device, queue, pipeline, A, B, true);
+// })();
