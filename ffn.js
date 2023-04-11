@@ -124,19 +124,19 @@ async function runEntireFFN() {
     bias: new Float32Array(outputLayerSize),
   };
   for (let i = 0; i < contextSize * inputLayerSize; i++) {
-    inputLayer.data[i] = Math.random();
+    inputLayer.data[i] = 1;
   }
   for (let i = 0; i < inputLayerSize * hiddenLayerSize; i++) {
-    inputLayer.weights[i] = Math.random();
+    inputLayer.weights[i] = 1;
   }
   for (let i = 0; i < hiddenLayerSize; i++) {
-    inputLayer.bias[i] = Math.random();
+    inputLayer.bias[i] = 1;
   }
   for (let i = 0; i < hiddenLayerSize * outputLayerSize; i++) {
-    hiddenLayer.weights[i] = Math.random();
+    hiddenLayer.weights[i] = 1;
   }
   for (let i = 0; i < outputLayerSize; i++) {
-    hiddenLayer.bias[i] = Math.random();
+    hiddenLayer.bias[i] = 1;
   }
 
   const inputUniformBuffer = device.createBuffer({
@@ -350,9 +350,6 @@ async function runEntireFFN() {
     entries: [{ binding: 0, resource: { buffer: geluResultBuffer } }],
   });
 
-  // const commandEncoder = device.createCommandEncoder();
-  // const passEncoder = commandEncoder.beginComputePass();
-
   const readBuffer = device.createBuffer({
     size: bufferSizeCalc(contextSize, outputLayerSize),
     usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ,
@@ -360,11 +357,8 @@ async function runEntireFFN() {
 
   const commandEncoder = device.createCommandEncoder();
 
-  const passEncoder1 = commandEncoder.beginComputePass();
-  const passEncoder2 = commandEncoder.beginComputePass();
-  const passEncoder3 = commandEncoder.beginComputePass();
-
   // First linear transformation (expansion from n_embed to hidden_size)
+  const passEncoder1 = commandEncoder.beginComputePass();
   passEncoder1.setPipeline(pipeline);
   passEncoder1.setBindGroup(0, hiddenLayerBindGroup);
   passEncoder1.setBindGroup(1, inputBufferBindGroup);
@@ -372,6 +366,7 @@ async function runEntireFFN() {
   passEncoder1.end();
 
   // Apply GELU activation
+  const passEncoder2 = commandEncoder.beginComputePass();
   passEncoder2.setPipeline(geluPipeline);
   passEncoder2.setBindGroup(0, geluBindGroup); // Reuse the same bind group as input
   passEncoder2.setBindGroup(1, hiddenResultBufferBindGroup); // Use the result from the first linear transformation as input
@@ -379,6 +374,7 @@ async function runEntireFFN() {
   passEncoder2.end();
 
   // Second linear transformation (contraction back down to n_embed)
+  const passEncoder3 = commandEncoder.beginComputePass();
   passEncoder3.setPipeline(pipeline);
   passEncoder3.setBindGroup(0, outputLayerBindGroup);
   passEncoder3.setBindGroup(1, geluResultBufferBindGroup); // Use the result from GELU activation as input
@@ -392,7 +388,14 @@ async function runEntireFFN() {
 
   await readBuffer.mapAsync(GPUMapMode.READ);
   const arrayBuffer = readBuffer.getMappedRange();
+  const resultArray = new Float32Array(arrayBuffer);
   console.log("arrayBuffer", arrayBuffer);
+  const resultMatrix = [];
+  for (let i = 0; i < contextSize; i++) {
+    resultMatrix.push(resultArray.slice(i * outputLayerSize, (i + 1) * outputLayerSize));
+  }
+  console.log("resultMatrix", resultMatrix);
+  console.log("resultMatrix (row 0, elem 0)", resultMatrix[0][0]);
 }
 
 (async () => {
