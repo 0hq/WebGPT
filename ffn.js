@@ -9,8 +9,6 @@
 
 */
 
-// You forgot to write the shaders at all so you gotta write those then set the binding gropus after.
-
 const createFFNShader = () => `
   struct Matrix {
     data: array<f32>, // runtime-sized array
@@ -95,9 +93,6 @@ const createGELUShader = () => `
   `;
 
 async function runEntireFFN() {
-  const { device, queue } = await initializeWebGPU();
-
-  const minStorageBufferOffsetAlignment = device.limits.minStorageBufferOffsetAlignment;
   const n_embd = 768;
   const contextSize = 1024;
   const inputLayerSize = n_embd;
@@ -113,253 +108,86 @@ async function runEntireFFN() {
   // Hidden layer as a transformation matrix (n_embd, n_embd * 4) -> (contextSize, n_embd * 4)
   // Output layer as a transformation matrix (n_embd * 4, n_embd) -> (contextSize, n_embd)
 
-  // Randomize the input data
   const inputLayer = {
-    data: new Float32Array(contextSize * inputLayerSize),
-    weights: new Float32Array(inputLayerSize * hiddenLayerSize),
-    bias: new Float32Array(hiddenLayerSize),
+    data: new Float32Array(contextSize * inputLayerSize).fill(1),
   };
   const hiddenLayer = {
-    weights: new Float32Array(hiddenLayerSize * outputLayerSize),
-    bias: new Float32Array(outputLayerSize),
+    weights: new Float32Array(inputLayerSize * hiddenLayerSize).fill(1),
+    bias: new Float32Array(hiddenLayerSize).fill(0),
   };
-  for (let i = 0; i < contextSize * inputLayerSize; i++) {
-    inputLayer.data[i] = 1;
-  }
-  for (let i = 0; i < inputLayerSize * hiddenLayerSize; i++) {
-    inputLayer.weights[i] = 1;
-  }
-  for (let i = 0; i < hiddenLayerSize; i++) {
-    inputLayer.bias[i] = 1;
-  }
-  for (let i = 0; i < hiddenLayerSize * outputLayerSize; i++) {
-    hiddenLayer.weights[i] = 1;
-  }
-  for (let i = 0; i < outputLayerSize; i++) {
-    hiddenLayer.bias[i] = 1;
-  }
+  const outputLayer = {
+    weights: new Float32Array(hiddenLayerSize * outputLayerSize).fill(1),
+    bias: new Float32Array(outputLayerSize).fill(0),
+  };
 
-  const inputUniformBuffer = device.createBuffer({
-    size: 16, // must be a multiple of 16
-    usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
-  });
-  const inputBuffer = device.createBuffer({
-    size: bufferSizeCalc(contextSize, inputLayerSize),
-    usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
-  });
-  const inputLayerWeightsBuffer = device.createBuffer({
-    size: bufferSizeCalc(inputLayerSize, hiddenLayerSize),
-    usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
-  });
-  const inputLayerBiasBuffer = device.createBuffer({
-    size: bufferSizeCalc(hiddenLayerSize),
-    usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
-  });
-  const inputLayerResultBuffer = device.createBuffer({
-    size: bufferSizeCalc(contextSize, hiddenLayerSize),
-    usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC,
-  });
+  const { device, queue } = await initializeWebGPU();
+  const minStorageBufferOffsetAlignment = device.limits.minStorageBufferOffsetAlignment;
 
-  const geluUniformBuffer = device.createBuffer({
-    size: 16, // must be a multiple of 16
-    usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
-  });
-  const geluResultBuffer = device.createBuffer({
-    size: bufferSizeCalc(contextSize, hiddenLayerSize),
-    usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC,
-  });
+  const inputBuffer = createBuffer(device, bufferSizeCalc(contextSize, inputLayerSize), GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST);
 
-  const hiddenLayerUniformBuffer = device.createBuffer({
-    size: 16, // must be a multiple of 16
-    usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
-  });
-  const hiddenLayerWeightsBuffer = device.createBuffer({
-    size: bufferSizeCalc(hiddenLayerSize, outputLayerSize),
-    usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
-  });
-  const hiddenLayerBiasBuffer = device.createBuffer({
-    size: bufferSizeCalc(outputLayerSize),
-    usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
-  });
-  const hiddenLayerResultBuffer = device.createBuffer({
-    size: bufferSizeCalc(contextSize, outputLayerSize),
-    usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC,
-  });
+  const hiddenLayerUniformBuffer = createBuffer(device, 16, GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST);
+  const hiddenLayerWeightsBuffer = createBuffer(device, bufferSizeCalc(inputLayerSize, hiddenLayerSize), GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST);
+  const hiddenLayerBiasBuffer = createBuffer(device, bufferSizeCalc(hiddenLayerSize), GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST);
+  const hiddenLayerResultBuffer = createBuffer(device, bufferSizeCalc(contextSize, hiddenLayerSize), GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC);
+
+  const geluUniformBuffer = createBuffer(device, 16, GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST);
+  const geluResultBuffer = createBuffer(device, bufferSizeCalc(contextSize, hiddenLayerSize), GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC);
+
+  const outputLayerUniformBuffer = createBuffer(device, 16, GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST);
+  const outputLayerWeightsBuffer = createBuffer(device, bufferSizeCalc(hiddenLayerSize, outputLayerSize), GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST);
+  const outputLayerBiasBuffer = createBuffer(device, bufferSizeCalc(outputLayerSize), GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST);
+  const outputLayerResultBuffer = createBuffer(device, bufferSizeCalc(contextSize, outputLayerSize), GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC);
+
+  // Generic bind group for input buffer.
+  const inputBufferBindGroupLayout = createBindGroupLayout(device, ["read-only-storage"]);
+
+  // FFN pipeline
+  const ffnBindGroupLayout = createBindGroupLayout(device, ["uniform", "read-only-storage", "read-only-storage", "storage"]);
+  const FFNpipeline = createPipeline(device, createFFNShader(), [ffnBindGroupLayout, inputBufferBindGroupLayout]);
+
+  // GELU pipeline
+  const geluBindGroupLayout = createBindGroupLayout(device, ["uniform", "storage"]);
+  const GELUpipeline = createPipeline(device, createGELUShader(), [geluBindGroupLayout, inputBufferBindGroupLayout]);
+
+  // Bind groups for use in FFN pipeline with shared buffers.
+  const inputBufferBindGroup = createBindGroup(device, inputBufferBindGroupLayout, [inputBuffer]);
+  const hiddenLayerBindGroup = createBindGroup(device, ffnBindGroupLayout, [
+    hiddenLayerUniformBuffer,
+    hiddenLayerWeightsBuffer,
+    hiddenLayerBiasBuffer,
+    hiddenLayerResultBuffer,
+  ]);
+
+  // Bind groups for use in GELU pipeline with shared buffers.
+  const hiddenResultBufferBindGroup = createBindGroup(device, inputBufferBindGroupLayout, [hiddenLayerResultBuffer]);
+  const geluBindGroup = createBindGroup(device, geluBindGroupLayout, [geluUniformBuffer, geluResultBuffer]);
+
+  // Bind groups for use in FFN pipeline with shared buffers.
+  const geluResultBufferBindGroup = createBindGroup(device, inputBufferBindGroupLayout, [geluResultBuffer]);
+  const outputLayerBindGroup = createBindGroup(device, ffnBindGroupLayout, [
+    outputLayerUniformBuffer,
+    outputLayerWeightsBuffer,
+    outputLayerBiasBuffer,
+    outputLayerResultBuffer,
+  ]);
 
   queue.writeBuffer(inputBuffer, 0, inputLayer.data);
 
-  queue.writeBuffer(inputUniformBuffer, 0, new Uint32Array([contextSize, hiddenLayerSize, inputLayerSize]));
-  queue.writeBuffer(inputLayerWeightsBuffer, 0, inputLayer.weights);
-  queue.writeBuffer(inputLayerBiasBuffer, 0, inputLayer.bias);
-
-  queue.writeBuffer(geluUniformBuffer, 0, new Uint32Array([contextSize, hiddenLayerSize]));
-
-  queue.writeBuffer(hiddenLayerUniformBuffer, 0, new Uint32Array([contextSize, outputLayerSize, hiddenLayerSize]));
+  queue.writeBuffer(hiddenLayerUniformBuffer, 0, new Uint32Array([contextSize, hiddenLayerSize, inputLayerSize]));
   queue.writeBuffer(hiddenLayerWeightsBuffer, 0, hiddenLayer.weights);
   queue.writeBuffer(hiddenLayerBiasBuffer, 0, hiddenLayer.bias);
 
-  const inputBufferBindGroupLayout = device.createBindGroupLayout({
-    entries: [
-      {
-        binding: 0,
-        visibility: GPUShaderStage.COMPUTE,
-        buffer: { type: "read-only-storage" },
-      },
-    ],
-  });
-  const ffnBindGroupLayout = device.createBindGroupLayout({
-    entries: [
-      {
-        binding: 0,
-        visibility: GPUShaderStage.COMPUTE,
-        buffer: { type: "uniform" },
-      },
-      {
-        binding: 1,
-        visibility: GPUShaderStage.COMPUTE,
-        buffer: { type: "read-only-storage" },
-      },
-      {
-        binding: 2,
-        visibility: GPUShaderStage.COMPUTE,
-        buffer: { type: "read-only-storage" },
-      },
-      {
-        binding: 3,
-        visibility: GPUShaderStage.COMPUTE,
-        buffer: { type: "storage" },
-      },
-    ],
-  });
+  queue.writeBuffer(geluUniformBuffer, 0, new Uint32Array([contextSize, hiddenLayerSize]));
 
-  const ffnShader = createFFNShader();
-  const shaderModule = device.createShaderModule({
-    code: ffnShader,
-  });
-  const pipelineLayout = device.createPipelineLayout({
-    bindGroupLayouts: [ffnBindGroupLayout, inputBufferBindGroupLayout],
-  });
-  const pipeline = device.createComputePipeline({
-    layout: pipelineLayout,
-    compute: {
-      module: shaderModule,
-      entryPoint: "main",
-    },
-  });
-
-  // Bind groups for the feedforward step
-  const hiddenLayerBindGroup = device.createBindGroup({
-    layout: ffnBindGroupLayout,
-    entries: [
-      { binding: 0, resource: { buffer: inputUniformBuffer } },
-      { binding: 1, resource: { buffer: inputLayerWeightsBuffer } },
-      { binding: 2, resource: { buffer: inputLayerBiasBuffer } },
-      { binding: 3, resource: { buffer: inputLayerResultBuffer } },
-    ],
-  });
-
-  const outputLayerBindGroup = device.createBindGroup({
-    layout: ffnBindGroupLayout,
-    entries: [
-      { binding: 0, resource: { buffer: hiddenLayerUniformBuffer } },
-      { binding: 1, resource: { buffer: hiddenLayerWeightsBuffer } },
-      { binding: 2, resource: { buffer: hiddenLayerBiasBuffer } },
-      { binding: 3, resource: { buffer: hiddenLayerResultBuffer } },
-    ],
-  });
-
-  // GELU activation function
-
-  const geluShader = createGELUShader();
-  const geluShaderModule = device.createShaderModule({
-    code: geluShader,
-  });
-  const hiddenResultBufferBindGroupLayout = device.createBindGroupLayout({
-    entries: [
-      {
-        binding: 0,
-        visibility: GPUShaderStage.COMPUTE,
-        buffer: { type: "read-only-storage" },
-      },
-    ],
-  });
-  const geluBindGroupLayout = device.createBindGroupLayout({
-    entries: [
-      {
-        binding: 0,
-        visibility: GPUShaderStage.COMPUTE,
-        buffer: { type: "uniform" },
-      },
-      {
-        binding: 1,
-        visibility: GPUShaderStage.COMPUTE,
-        buffer: { type: "storage" },
-      },
-    ],
-  });
-  const geluPipelineLayout = device.createPipelineLayout({
-    bindGroupLayouts: [geluBindGroupLayout, hiddenResultBufferBindGroupLayout],
-  });
-  const geluPipeline = device.createComputePipeline({
-    layout: geluPipelineLayout,
-    compute: {
-      module: geluShaderModule,
-      entryPoint: "main",
-    },
-  });
-  const geluBindGroup = device.createBindGroup({
-    layout: geluBindGroupLayout,
-    entries: [
-      {
-        binding: 0,
-        resource: {
-          buffer: geluUniformBuffer,
-        },
-      },
-      {
-        binding: 1,
-        resource: {
-          buffer: geluResultBuffer,
-        },
-      },
-    ],
-  });
-
-  const inputBufferBindGroup = device.createBindGroup({
-    layout: inputBufferBindGroupLayout,
-    entries: [{ binding: 0, resource: { buffer: inputBuffer } }],
-  });
-
-  const hiddenResultBufferBindGroup = device.createBindGroup({
-    layout: hiddenResultBufferBindGroupLayout,
-    entries: [{ binding: 0, resource: { buffer: inputLayerResultBuffer } }],
-  });
-
-  // const geluResultBufferBindGroupLayout = device.createBindGroupLayout({
-  //   entries: [
-  //     {
-  //       binding: 0,
-  //       visibility: GPUShaderStage.COMPUTE,
-  //       buffer: { type: "read-only-storage" },
-  //     },
-  //   ],
-  // });
-
-  const geluResultBufferBindGroup = device.createBindGroup({
-    layout: inputBufferBindGroupLayout,
-    entries: [{ binding: 0, resource: { buffer: geluResultBuffer } }],
-  });
-
-  const readBuffer = device.createBuffer({
-    size: bufferSizeCalc(contextSize, outputLayerSize),
-    usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ,
-  });
+  queue.writeBuffer(outputLayerUniformBuffer, 0, new Uint32Array([contextSize, outputLayerSize, hiddenLayerSize]));
+  queue.writeBuffer(outputLayerWeightsBuffer, 0, outputLayer.weights);
+  queue.writeBuffer(outputLayerBiasBuffer, 0, outputLayer.bias);
 
   const commandEncoder = device.createCommandEncoder();
 
   // First linear transformation (expansion from n_embed to hidden_size)
   const passEncoder1 = commandEncoder.beginComputePass();
-  passEncoder1.setPipeline(pipeline);
+  passEncoder1.setPipeline(FFNpipeline);
   passEncoder1.setBindGroup(0, hiddenLayerBindGroup);
   passEncoder1.setBindGroup(1, inputBufferBindGroup);
   passEncoder1.dispatchWorkgroups(workgroupCalc(contextSize, workgroupSizeX), workgroupCalc(hiddenLayerSize, workgroupSizeY));
@@ -367,7 +195,7 @@ async function runEntireFFN() {
 
   // Apply GELU activation
   const passEncoder2 = commandEncoder.beginComputePass();
-  passEncoder2.setPipeline(geluPipeline);
+  passEncoder2.setPipeline(GELUpipeline);
   passEncoder2.setBindGroup(0, geluBindGroup); // Reuse the same bind group as input
   passEncoder2.setBindGroup(1, hiddenResultBufferBindGroup); // Use the result from the first linear transformation as input
   passEncoder2.dispatchWorkgroups(workgroupCalc(contextSize, workgroupSizeX), workgroupCalc(hiddenLayerSize, workgroupSizeY));
@@ -375,14 +203,15 @@ async function runEntireFFN() {
 
   // Second linear transformation (contraction back down to n_embed)
   const passEncoder3 = commandEncoder.beginComputePass();
-  passEncoder3.setPipeline(pipeline);
+  passEncoder3.setPipeline(FFNpipeline);
   passEncoder3.setBindGroup(0, outputLayerBindGroup);
   passEncoder3.setBindGroup(1, geluResultBufferBindGroup); // Use the result from GELU activation as input
   passEncoder3.dispatchWorkgroups(workgroupCalc(contextSize, workgroupSizeX), workgroupCalc(outputLayerSize, workgroupSizeY));
   passEncoder3.end();
 
+  const readBuffer = createBuffer(device, bufferSizeCalc(contextSize, outputLayerSize), GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ);
   const copyCommandEncoder = device.createCommandEncoder();
-  copyCommandEncoder.copyBufferToBuffer(hiddenLayerResultBuffer, 0, readBuffer, 0, bufferSizeCalc(contextSize, outputLayerSize));
+  copyCommandEncoder.copyBufferToBuffer(outputLayerResultBuffer, 0, readBuffer, 0, bufferSizeCalc(contextSize, outputLayerSize));
 
   queue.submit([commandEncoder.finish(), copyCommandEncoder.finish()]);
 
