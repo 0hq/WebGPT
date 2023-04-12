@@ -1,4 +1,5 @@
 /*
+
 {
   "n_vocab": 50257,
   "n_ctx": 1024,
@@ -8,89 +9,6 @@
 }
 
 */
-
-const createFFNShader = () => `
-  struct Matrix {
-    data: array<f32>, // runtime-sized array
-  }
-
-  struct Dimensions {
-    dimY: u32, // row dimension of A and row dimension of C
-    dimX: u32, // col dimension of B and col dimension of C
-    dimS: u32, // shared dimension of A and B
-  };
-
-  @group(1) @binding(0) var<storage, read> Input: Matrix;
-
-  @group(0) @binding(0) var<uniform> DimBuffer: Dimensions;
-  @group(0) @binding(1) var<storage, read> Bias: Matrix;
-  @group(0) @binding(2) var<storage, read> Weight: Matrix;
-  @group(0) @binding(3) var<storage, read_write> Result: Matrix;
-
-  @compute @workgroup_size(16, 16)
-  fn main (@builtin(global_invocation_id) global_id: vec3<u32>) {
-    let row: u32 = global_id.x;
-    let col: u32 = global_id.y;
-    let dimX: u32 = DimBuffer.dimX;
-    let dimY: u32 = DimBuffer.dimY;
-    let dimS: u32 = DimBuffer.dimS;
-
-    if (row >= dimY || col >= dimX) {
-      return;
-    }
-
-    var sum: f32 = 0.0;
-    for (var i: u32 = 0; i < dimS; i = i + 1) {
-        sum = sum + Input.data[row * dimS + i] * Weight.data[i * dimX + col];
-    }
-
-    Result.data[row * dimX + col] = sum + Bias.data[col];
-  }
-  `;
-
-// There's tons of obvious ineffiencies here but I'm pushing them to after this is working.
-
-const createGELUShader = () => `
-  struct Matrix {
-      data: array<f32>, // runtime-sized array
-  }
-
-  struct Dimensions {
-    dimY: u32, // row dimension of input matrix
-    dimX: u32, // col dimension of input matrix
-  };
-
-  const SQRPI: f32 = 0.7978845608;
-  fn gelu(x: f32) -> f32 {
-    if (x < -10.0) {
-      return 0.0;
-    } else if (x > 10.0) {
-      return x;
-    } else {
-      let cdf_approx: f32 = 0.5 * (1.0 + tanh(SQRPI * (x + 0.044715 * pow(x, 3))));
-      return x * cdf_approx;
-    }
-  }
-
-  @group(0) @binding(0) var<uniform> DimBuffer: Dimensions;
-  @group(0) @binding(1) var<storage, read_write> Result: Matrix;
-
-  @group(1) @binding(0) var<storage, read> Input: Matrix;
-
-  @compute @workgroup_size(16, 16)
-  fn main (@builtin(global_invocation_id) global_id: vec3<u32>) {
-      let row: u32 = global_id.x;
-      let col: u32 = global_id.y;
-      let dimX: u32 = DimBuffer.dimX;
-      let dimY: u32 = DimBuffer.dimY;
-
-      if (row >= dimY || col >= dimX) {
-        return;
-      }
-
-      Result.data[row * dimX + col] = gelu(Input.data[row * dimX + col]);
-    } 
-  `;
 
 async function runEntireFFN() {
   const n_embd = 768;
@@ -216,6 +134,7 @@ async function runEntireFFN() {
   queue.submit([commandEncoder.finish(), copyCommandEncoder.finish()]);
 
   await readBuffer.mapAsync(GPUMapMode.READ);
+  console.log("readBuffer", readBuffer);
   const arrayBuffer = readBuffer.getMappedRange();
   const resultArray = new Float32Array(arrayBuffer);
   console.log("arrayBuffer", arrayBuffer);
@@ -226,7 +145,3 @@ async function runEntireFFN() {
   console.log("resultMatrix", resultMatrix);
   console.log("resultMatrix (row 0, elem 0)", resultMatrix[0][0]);
 }
-
-(async () => {
-  runEntireFFN();
-})();
