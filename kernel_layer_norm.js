@@ -82,7 +82,7 @@ async function layerNorm(rows, cols, input, gamma, beta) {
   const { device, queue } = await initializeWebGPU();
   const minStorageBufferOffsetAlignment = device.limits.minStorageBufferOffsetAlignment;
   const bufferSizeCalc = (dimA, dimB = 1) => alignedSize(dimA * dimB * Float32Array.BYTES_PER_ELEMENT, minStorageBufferOffsetAlignment);
-  const workgroup_stats_X = 16; // Dictated by shader.
+  const workgroup_stats_Y = 16; // Dictated by shader.
   const workgroup_norm_X = 16; // Dictated by shader.
   const workgroup_norm_Y = 16; // Dictated by shader.
 
@@ -118,7 +118,7 @@ async function layerNorm(rows, cols, input, gamma, beta) {
   passEncoder1.setPipeline(statsPipeline);
   passEncoder1.setBindGroup(0, statsBindGroup);
   passEncoder1.setBindGroup(1, createBindGroup(device, inputBufferBindGroupLayout, [inputBuffer]));
-  passEncoder1.dispatchWorkgroups(workgroupCalc(rows, workgroup_stats_X));
+  passEncoder1.dispatchWorkgroups(workgroupCalc(rows, workgroup_stats_Y));
   passEncoder1.end();
 
   const passEncoder2 = commandEncoder.beginComputePass();
@@ -141,24 +141,24 @@ async function layerNorm(rows, cols, input, gamma, beta) {
   return readBuffer.getMappedRange();
 }
 
-(async () => {
-  const row = 10;
-  const col = 20;
-  const input = new Float32Array(row * col);
-  for (let i = 0; i < row * col; i++) input[i] = i;
-  const gamma = new Array(row).fill(1);
-  const beta = new Array(row).fill(0);
+// (async () => {
+//   const row = 10;
+//   const col = 20;
+//   const input = new Float32Array(row * col);
+//   for (let i = 0; i < row * col; i++) input[i] = i;
+//   const gamma = new Array(row).fill(1);
+//   const beta = new Array(row).fill(0);
 
-  printMatrix(row, col, input);
+//   printMatrix(row, col, input);
 
-  const result = await layerNorm(row, col, input, gamma, beta);
+//   const result = await layerNorm(row, col, input, gamma, beta);
 
-  const mat = printMatrix(row, col, new Float32Array(result));
-  // for (const row of mat) {
-  //   console.log(row.reduce((a, b) => a + b) / row.length);
-  //   console.log(getStandardDeviation(row));
-  // }
-})();
+//   const mat = printMatrix(row, col, new Float32Array(result));
+//   // for (const row of mat) {
+//   //   console.log(row.reduce((a, b) => a + b) / row.length);
+//   //   console.log(getStandardDeviation(row));
+//   // }
+// })();
 
 function printMatrix(rows, cols, array) {
   const matrix = [];
