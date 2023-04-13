@@ -181,30 +181,23 @@ async function softmax(rows, cols, input) {
   const inputBuffer = createBuffer(device, bufferSizeCalc(rows, cols), GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST);
   queue.writeBuffer(inputBuffer, 0, input);
 
-  const maxUniformBuffer = createBuffer(device, 16, GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST);
+  const dimUniformBuffer = createBuffer(device, 16, GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST);
+  queue.writeBuffer(dimUniformBuffer, 0, new Uint32Array([rows, cols]));
+
   const maxResultBuffer = createBuffer(device, bufferSizeCalc(rows), GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC);
-  const maxBindGroup = createBindGroup(device, operationBindGroupLayout, [maxUniformBuffer, maxResultBuffer]);
-  queue.writeBuffer(maxUniformBuffer, 0, new Uint32Array([rows, cols]));
+  const maxBindGroup = createBindGroup(device, operationBindGroupLayout, [dimUniformBuffer, maxResultBuffer]);
 
-  const addUniformBuffer = createBuffer(device, 16, GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST);
   const addResultBuffer = createBuffer(device, bufferSizeCalc(rows, cols), GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC);
-  const addBindGroup = createBindGroup(device, operationBindGroupLayout, [addUniformBuffer, addResultBuffer]);
-  queue.writeBuffer(addUniformBuffer, 0, new Uint32Array([rows, cols]));
+  const addBindGroup = createBindGroup(device, operationBindGroupLayout, [dimUniformBuffer, addResultBuffer]);
 
-  const expUniformBuffer = createBuffer(device, 16, GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST);
   const expResultBuffer = createBuffer(device, bufferSizeCalc(rows, cols), GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC);
-  const expBindGroup = createBindGroup(device, operationBindGroupLayout, [expUniformBuffer, expResultBuffer]);
-  queue.writeBuffer(expUniformBuffer, 0, new Uint32Array([rows, cols]));
+  const expBindGroup = createBindGroup(device, operationBindGroupLayout, [dimUniformBuffer, expResultBuffer]);
 
-  const sumUniformBuffer = createBuffer(device, 16, GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST);
   const sumResultBuffer = createBuffer(device, bufferSizeCalc(rows), GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC);
-  const sumBindGroup = createBindGroup(device, operationBindGroupLayout, [sumUniformBuffer, sumResultBuffer]);
-  queue.writeBuffer(sumUniformBuffer, 0, new Uint32Array([rows, cols]));
+  const sumBindGroup = createBindGroup(device, operationBindGroupLayout, [dimUniformBuffer, sumResultBuffer]);
 
-  const divUniformBuffer = createBuffer(device, 16, GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST);
   const divResultBuffer = createBuffer(device, bufferSizeCalc(rows, cols), GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC);
-  const divBindGroup = createBindGroup(device, operationBindGroupLayout, [divUniformBuffer, divResultBuffer]);
-  queue.writeBuffer(divUniformBuffer, 0, new Uint32Array([rows, cols]));
+  const divBindGroup = createBindGroup(device, operationBindGroupLayout, [dimUniformBuffer, divResultBuffer]);
 
   console.log("Starting passes");
   const commandEncoder = device.createCommandEncoder();
