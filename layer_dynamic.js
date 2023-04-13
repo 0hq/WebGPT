@@ -1,40 +1,3 @@
-/*
-  dynamicFFN
-   
-  layers: [ 
-    {
-      layer_type: "FFN" 
-      colDim: int
-      sharedDim: int
-      rowDim: int
-      weights: float[]
-      bias: float[]
-    }
-
-    {
-      layer_type: "GELU"
-      rowDim: int
-      colDim: int
-    }
-  ]
-
-  workgroupX: int
-  workgroupY: int
-  
-*/
-
-const flatten = (matrix) => {
-  return Float32Array.from(
-    (function* () {
-      for (const row of matrix) {
-        for (const value of row) {
-          yield value;
-        }
-      }
-    })()
-  );
-};
-
 const createFFNShader = () => `
   struct Matrix {
     data: array<f32>, // runtime-sized array
@@ -118,8 +81,6 @@ const createGELUShader = () => `
     } 
   `;
 
-const workgroupCalc = (dim, size) => Math.min(Math.ceil(dim / size), 256);
-
 async function callDynamicNetwork() {
   // const inputMatrix = [
   //   [1, 2, 3, 4, 5],
@@ -166,7 +127,7 @@ async function callDynamicNetwork() {
   const workgroupY = 16;
 
   const inputMatrix = new Float32Array(1024 * 768).fill(0.1);
-  const result = await dynamicNetwork(layers, workgroupX, workgroupY, inputMatrix);
+  const result = await dynamicFFNNetwork(layers, workgroupX, workgroupY, inputMatrix);
 
   console.log("Done with network:", result);
   const { rowDim, colDim } = layers[layers.length - 1];
@@ -181,21 +142,9 @@ async function callDynamicNetwork() {
   // for (const row of resultMatrix) {
   //   console.log(row);
   // }
-
-  /*
-
-    Resulting matrix:
-    [ 1, 2, 3, 4, 5 ]
-    [ 1, 2, 3, 4, 5 ]
-    [ 1, 2, 3, 4, 5 ]
-    [ 1, 2, 3, 4, 5 ]
-    [ 1, 2, 3, 4, 5 ]
-
-    Why????
-  */
 }
 
-async function dynamicNetwork(layers, workgroupX, workgroupY, input) {
+async function dynamicFFNNetwork(layers, workgroupX, workgroupY, input) {
   const { device, queue } = await initializeWebGPU();
   const minStorageBufferOffsetAlignment = device.limits.minStorageBufferOffsetAlignment;
   const bufferSizeCalc = (dimA, dimB = 1) => alignedSize(dimA * dimB * Float32Array.BYTES_PER_ELEMENT, minStorageBufferOffsetAlignment);
@@ -284,6 +233,6 @@ async function dynamicNetwork(layers, workgroupX, workgroupY, input) {
   return readBuffer.getMappedRange();
 }
 
-(async () => {
-  callDynamicNetwork();
-})();
+// (async () => {
+//   callDynamicNetwork();
+// })();

@@ -24,14 +24,16 @@ function alignedSize(size, alignment) {
   return Math.ceil(size / alignment) * alignment;
 }
 
-// const flatten = (matrix) => {
-//   return Float32Array.from(
-//     (function* () {
-//       for (const row of matrix) {
-//         for (const value of row) {
-//           yield value;
-//         }
-//       }
-//     })()
-//   );
-// };
+const flatten = (matrix) => {
+  return Float32Array.from(
+    (function* () {
+      for (const row of matrix) {
+        for (const value of row) {
+          yield value;
+        }
+      }
+    })()
+  );
+};
+
+const workgroupCalc = (dim, size) => Math.min(Math.ceil(dim / size), 256);
