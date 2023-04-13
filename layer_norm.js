@@ -48,12 +48,11 @@ const createNormShader = () => `
   struct Dimensions {
     dimY: u32, // row dimension of input matrix
     dimX: u32, // col dimension of input matrix
-    gamma: f32, // network parameter
-    beta: f32, // network parameter
   };
 
   @group(0) @binding(0) var<uniform> DimBuffer: Dimensions;
-  @group(0) @binding(1) var<storage, read_write> Result: Matrix;
+  @group(0) @binding(1) var<storage, read> Params: Matrix;
+  @group(0) @binding(2) var<storage, read_write> Result: Matrix;
   
   @group(1) @binding(0) var<storage, read> Input: Matrix;
   @group(2) @binding(0) var<storage, read> Stats: Matrix;
@@ -72,12 +71,14 @@ const createNormShader = () => `
       let mean = Stats.data[row * 2];
       let stdev = Stats.data[row * 2 + 1];
       let output = (Input.data[row * dimX + col] - mean) / stdev;
-      let shift = DimBuffer.gamma * output + DimBuffer.beta;
+      let gamma = Params.data[row * 2];
+      let beta = Params.data[row * 2 + 1];
+      let shift = gamma * output + beta;
       Result.data[row * dimX + col] = shift;
     } 
   `;
 
-async function layerNorm(rows, cols, input, gamma = 1, beta = 0) {
+async function layerNorm(rows, cols, input, gamma, beta) {
   const { device, queue } = await initializeWebGPU();
   const minStorageBufferOffsetAlignment = device.limits.minStorageBufferOffsetAlignment;
   const bufferSizeCalc = (dimA, dimB = 1) => alignedSize(dimA * dimB * Float32Array.BYTES_PER_ELEMENT, minStorageBufferOffsetAlignment);
@@ -91,7 +92,7 @@ async function layerNorm(rows, cols, input, gamma = 1, beta = 0) {
   const statsBindGroupLayout = createBindGroupLayout(device, ["uniform", "storage"]);
   const statsPipeline = createPipeline(device, createNormStatsShader(), [statsBindGroupLayout, inputBufferBindGroupLayout]);
   // NORM pipeline, will be reused.
-  const normBindGroupLayout = createBindGroupLayout(device, ["uniform", "storage"]);
+  const normBindGroupLayout = createBindGroupLayout(device, ["uniform", "read-only-storage", "storage"]);
   const normPipeline = createPipeline(device, createNormShader(), [normBindGroupLayout, inputBufferBindGroupLayout, inputBufferBindGroupLayout]);
 
   console.log("Starting network");
@@ -104,16 +105,11 @@ async function layerNorm(rows, cols, input, gamma = 1, beta = 0) {
   queue.writeBuffer(statsUniformBuffer, 0, new Uint32Array([rows, cols]));
 
   const normUniformBuffer = createBuffer(device, 16, GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST);
+  const normParamsBuffer = createBuffer(device, bufferSizeCalc(rows, 2), GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST);
   const normResultBuffer = createBuffer(device, bufferSizeCalc(rows, cols), GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC);
-  const normBindGroup = createBindGroup(device, normBindGroupLayout, [normUniformBuffer, normResultBuffer]);
+  const normBindGroup = createBindGroup(device, normBindGroupLayout, [normUniformBuffer, normParamsBuffer, normResultBuffer]);
   queue.writeBuffer(normUniformBuffer, 0, new Uint32Array([rows, cols]));
-  queue.writeBuffer(normUniformBuffer, 8, new Float32Array([gamma, beta]));
-
-  /*
-
-  This throws an error because rows and cols are both uint32 but gamma and beta are float32.
-
-  */
+  queue.writeBuffer(normParamsBuffer, 0, new Float32Array(gamma.flatMap((gamma, i) => [gamma, beta[i]])));
 
   console.log("Starting passes");
   const commandEncoder = device.createCommandEncoder();
@@ -149,13 +145,19 @@ async function layerNorm(rows, cols, input, gamma = 1, beta = 0) {
   const row = 10;
   const col = 20;
   const input = new Float32Array(row * col);
-  for (let i = 0; i < row * col; i++) {
-    input[i] = i * 2 + 10;
-  }
-  printMatrix(row, col, input);
-  const result = await layerNorm(row, col, input);
+  for (let i = 0; i < row * col; i++) input[i] = i;
+  const gamma = new Array(row).fill(1);
+  const beta = new Array(row).fill(0);
 
-  printMatrix(row, col, new Float32Array(result));
+  printMatrix(row, col, input);
+
+  const result = await layerNorm(row, col, input, gamma, beta);
+
+  const mat = printMatrix(row, col, new Float32Array(result));
+  // for (const row of mat) {
+  //   console.log(row.reduce((a, b) => a + b) / row.length);
+  //   console.log(getStandardDeviation(row));
+  // }
 })();
 
 function printMatrix(rows, cols, array) {
@@ -164,10 +166,6 @@ function printMatrix(rows, cols, array) {
     matrix.push(Array.from(array.slice(i * cols, (i + 1) * cols)));
   }
   console.log(matrix);
-  for (const row of matrix) {
-    console.log(row.reduce((a, b) => a + b) / row.length);
-    console.log(getStandardDeviation(row));
-  }
   return matrix;
 }
 
