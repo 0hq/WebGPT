@@ -18,7 +18,7 @@ const createNormStatsShader = () => `
     let row: u32 = global_id.x;
     let dimX: u32 = DimBuffer.dimX;
 
-    if (row >= DimBuffer.dimY) {
+    if (row >= DimBuffer.dimY || col >= DimBuffer.dimX) {
       return;
     }
 
