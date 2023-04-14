@@ -65,10 +65,11 @@ const createCausalMaskShader = () => `
       }
 
       let rowMask: u32 = row % dimX;
+      let rowNum: u32 = row / dimX;
       if (col > rowMask) {
         Result.data[row * dimX + col] = -1e9;
       } else {
-        Result.data[row * dimX + col] = Input.data[col * dimY + row];
+        Result.data[row * dimX + col] = Input.data[rowMask * dimY + col + rowNum * dimX];
       }
 
     } 
@@ -334,19 +335,19 @@ async function attention(rows, cols, input, n_heads, qkv_weights, qkv_bias, line
   passEncoder_linear.end();
 
   const output_rows = rows;
-  const output_cols = rows * n_heads;
+  const output_cols = cols;
   const outputBufferSize = bufferSizeCalc(output_rows, output_cols);
   const readBuffer = createBuffer(device, outputBufferSize, GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ);
   const otherBuffer = createBuffer(device, bufferSizeCalc(rows, cols), GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ);
-  const thirdBuffer = createBuffer(device, bufferSizeCalc(rows, rows * n_heads), GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ);
+  const thirdBuffer = createBuffer(device, bufferSizeCalc(rows * n_heads, rows), GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ);
   const VBuffer = createBuffer(device, bufferSizeCalc(rows, cols), GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ);
   const QBuffer = createBuffer(device, bufferSizeCalc(rows, cols), GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ);
   const KBuffer = createBuffer(device, bufferSizeCalc(rows, cols), GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ);
 
   const copyCommandEncoder = device.createCommandEncoder();
-  copyCommandEncoder.copyBufferToBuffer(attentionWeightsResultBuffer, 0, readBuffer, 0, outputBufferSize);
+  copyCommandEncoder.copyBufferToBuffer(attentionValuesResultBuffer, 0, readBuffer, 0, outputBufferSize);
   copyCommandEncoder.copyBufferToBuffer(linearResultBuffer, 0, otherBuffer, 0, bufferSizeCalc(rows, cols));
-  copyCommandEncoder.copyBufferToBuffer(softmaxOutputBuffer, 0, thirdBuffer, 0, bufferSizeCalc(rows, rows * n_heads));
+  copyCommandEncoder.copyBufferToBuffer(softmaxOutputBuffer, 0, thirdBuffer, 0, bufferSizeCalc(rows * n_heads, rows));
   copyCommandEncoder.copyBufferToBuffer(splitVResultBuffer, 0, VBuffer, 0, bufferSizeCalc(rows, cols));
   copyCommandEncoder.copyBufferToBuffer(splitQResultBuffer, 0, QBuffer, 0, bufferSizeCalc(rows, cols));
   copyCommandEncoder.copyBufferToBuffer(splitKResultBuffer, 0, KBuffer, 0, bufferSizeCalc(rows, cols));
@@ -368,10 +369,10 @@ async function attention(rows, cols, input, n_heads, qkv_weights, qkv_bias, line
   const V = VBuffer.getMappedRange();
   printMatrix(output_rows, output_cols, new Float32Array(result));
   // printMatrix(rows, cols, new Float32Array(other));
-  // printMatrix(rows * n_heads, rows, new Float32Array(third));
-  printMatrix(rows, cols, new Float32Array(Q));
-  printMatrix(rows, cols, new Float32Array(K));
-  // printMatrix(rows, cols, new Float32Array(V));
+  printMatrix(rows * n_heads, rows, new Float32Array(third));
+  // printMatrix(rows, cols, new Float32Array(Q));
+  // printMatrix(rows, cols, new Float32Array(K));
+  printMatrix(rows, cols, new Float32Array(V));
   return result;
 }
 
@@ -379,7 +380,11 @@ async function attention(rows, cols, input, n_heads, qkv_weights, qkv_bias, line
   const row = 12;
   const col = 24;
   const input = new Float32Array(row * col);
-  for (let i = 0; i < row * col; i++) input[i] = Math.floor(i / col);
+  for (let y = 0; y < row; y++) {
+    for (let x = 0; x < col; x++) {
+      input[y * col + x] = 0;
+    }
+  }
   const n_heads = 4;
 
   const qkv_bias = new Float32Array(col * 3);
@@ -387,8 +392,7 @@ async function attention(rows, cols, input, n_heads, qkv_weights, qkv_bias, line
   for (let y = 0; y < col; y++) {
     for (let x = 0; x < col * 3; x++) {
       qkv_bias[x] = Math.floor((x * 2) / col);
-      if (x % col === y) qkv_weights[y * col * 3 + x] = 1 + Math.floor(x / col);
-      else qkv_weights[y * col * 3 + x] = 0;
+      qkv_weights[y * col * 3 + x] = x * y;
     }
   }
 
