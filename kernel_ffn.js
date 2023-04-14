@@ -197,3 +197,79 @@ async function dynamicFFNNetwork(layers, workgroupX, workgroupY, input) {
 // (async () => {
 //   callDynamicNetwork();
 // })();
+
+function inlineFFN(
+  device,
+  queue,
+  commandEncoder,
+  context,
+  n_embed,
+  hidden_size,
+  inputBuffer,
+  firstLayerWeightsBuffer,
+  firstLayerBiasBuffer,
+  secondLayerWeightsBuffer,
+  secondLayerBiasBuffer
+) {
+  const minStorageBufferOffsetAlignment = 1; // device.limits.minStorageBufferOffsetAlignment; Bug, check back later.
+  const bufferSizeCalc = (dimA, dimB = 1) => alignedSize(dimA * dimB * Float32Array.BYTES_PER_ELEMENT, minStorageBufferOffsetAlignment);
+  const workgroup_X = 16; // Dictated by shader.
+  const workgroup_Y = 16; // Dictated by shader.
+
+  // Generic bind group for input buffer, will be reused.
+  const inputBufferBindGroupLayout = createBindGroupLayout(device, ["read-only-storage"]);
+  // FFN pipeline, will be reused.
+  const ffnBindGroupLayout = createBindGroupLayout(device, ["uniform", "read-only-storage", "read-only-storage", "storage"]);
+  const FFNpipeline = createPipeline(device, createFFNShader(), [ffnBindGroupLayout, inputBufferBindGroupLayout]);
+  // GELU pipeline, will be reused.
+  const geluBindGroupLayout = createBindGroupLayout(device, ["uniform", "storage"]);
+  const GELUpipeline = createPipeline(device, createGELUShader(), [geluBindGroupLayout, inputBufferBindGroupLayout]);
+
+  const firstLayerUniformBuffer = createBuffer(device, 16, GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST);
+  const firstLayerResultBuffer = createBuffer(device, bufferSizeCalc(context, hidden_size), GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC);
+  const firstLayerBindGroup = createBindGroup(device, ffnBindGroupLayout, [
+    firstLayerUniformBuffer,
+    firstLayerBiasBuffer,
+    firstLayerWeightsBuffer,
+    firstLayerResultBuffer,
+  ]);
+  queue.writeBuffer(firstLayerUniformBuffer, 0, new Uint32Array([context, hidden_size, n_embed]));
+
+  const geluUniformBuffer = createBuffer(device, 16, GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST);
+  const geluResultBuffer = createBuffer(device, bufferSizeCalc(context, hidden_size), GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC);
+  const geluBindGroup = createBindGroup(device, geluBindGroupLayout, [geluUniformBuffer, geluResultBuffer]);
+  queue.writeBuffer(geluUniformBuffer, 0, new Uint32Array([context, hidden_size]));
+
+  const secondLayerUniformBuffer = createBuffer(device, 16, GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST);
+  const secondLayerResultBuffer = createBuffer(device, bufferSizeCalc(context, hidden_size), GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC);
+  const secondLayerBindGroup = createBindGroup(device, ffnBindGroupLayout, [
+    secondLayerUniformBuffer,
+    secondLayerBiasBuffer,
+    secondLayerWeightsBuffer,
+    secondLayerResultBuffer,
+  ]);
+  queue.writeBuffer(secondLayerUniformBuffer, 0, new Uint32Array([context, hidden_size, n_embed]));
+
+  const passEncoder_first = commandEncoder.beginComputePass();
+  passEncoder_first.setPipeline(FFNpipeline);
+  passEncoder_first.setBindGroup(0, firstLayerBindGroup);
+  passEncoder_first.setBindGroup(1, createBindGroup(device, inputBufferBindGroupLayout, [inputBuffer]));
+  passEncoder_first.dispatchWorkgroups(workgroupCalc(context, workgroup_Y), workgroupCalc(hidden_size, workgroup_X));
+  passEncoder_first.end();
+
+  const passEncoder_gelu = commandEncoder.beginComputePass();
+  passEncoder_gelu.setPipeline(GELUpipeline);
+  passEncoder_gelu.setBindGroup(0, geluBindGroup);
+  passEncoder_gelu.setBindGroup(1, createBindGroup(device, inputBufferBindGroupLayout, [firstLayerResultBuffer]));
+  passEncoder_gelu.dispatchWorkgroups(workgroupCalc(context, workgroup_Y), workgroupCalc(hidden_size, workgroup_X));
+  passEncoder_gelu.end();
+
+  const passEncoder_second = commandEncoder.beginComputePass();
+  passEncoder_second.setPipeline(FFNpipeline);
+  passEncoder_second.setBindGroup(0, secondLayerBindGroup);
+  passEncoder_second.setBindGroup(1, createBindGroup(device, inputBufferBindGroupLayout, [inputBuffer]));
+  passEncoder_second.dispatchWorkgroups(workgroupCalc(context, workgroup_Y), workgroupCalc(n_embed, workgroup_X));
+  passEncoder_second.end();
+
+  return secondLayerResultBuffer;
+}

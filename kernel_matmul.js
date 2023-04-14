@@ -319,7 +319,7 @@ async function preMatMulDiscrete(device, queue, pipeline, A, B) {
   };
 }
 
-async function runMatMulDynamic(device, queue, commandEncoder, Abuffer, Bbuffer, rows, cols, shared) {
+async function inlineMatMul(device, queue, commandEncoder, Abuffer, Bbuffer, rows, cols, shared) {
   const minStorageBufferOffsetAlignment = device.limits.minStorageBufferOffsetAlignment;
   const bufferSizeCalc = (dimA, dimB = 1) => alignedSize(dimA * dimB * Float32Array.BYTES_PER_ELEMENT, minStorageBufferOffsetAlignment);
   const workgroup_X = 16; // Dictated by shader.
