@@ -37,6 +37,7 @@ const createFFNShader = () => `
   }
   `;
 
+// currently also transposes the matrix for copying
 const createCausalMaskShader = () => `
   struct Matrix {
       data: array<f32>, // runtime-sized array
@@ -63,10 +64,11 @@ const createCausalMaskShader = () => `
         return;
       }
 
-      if (col > row) {
+      let rowMask: u32 = row % dimX;
+      if (col > rowMask) {
         Result.data[row * dimX + col] = -1e9;
       } else {
-        Result.data[row * dimX + col] = Input.data[row * dimX + col];
+        Result.data[row * dimX + col] = Input.data[col * dimY + row];
       }
 
     } 
@@ -151,10 +153,52 @@ const createAttentionWeightsShader = () => `
   }
   `;
 
+const createAttentionValuesShader = () => `
+  struct Matrix {
+    data: array<f32>, // runtime-sized array
+  }
+
+  struct Dimensions {
+    dimY: u32, // Values row and col dimension, Weights row dimension (context)
+    dimX: u32, // Result col dim (n_embd)
+    numHeads: u32, // number of heads
+    vCols: u32, // col dim of V
+  };
+
+  @group(1) @binding(0) var<storage, read> Weights: Matrix;
+  @group(1) @binding(1) var<storage, read> Values: Matrix;
+
+  @group(0) @binding(0) var<uniform> DimBuffer: Dimensions;
+  @group(0) @binding(1) var<storage, read_write> Result: Matrix;
+
+  @compute @workgroup_size(16, 16)
+  fn main (@builtin(global_invocation_id) global_id: vec3<u32>) {
+    let row: u32 = global_id.x;
+    let col: u32 = global_id.y;
+    let dimY: u32 = DimBuffer.dimY;
+    let dimX: u32 = DimBuffer.dimX;
+    let vCols: u32 = DimBuffer.vCols;
+
+    if (row >= dimY || col >= dimX) {
+      return;
+    }
+
+    var head: u32 = col / dimY;
+    var col_r: u32 = col % dimY;
+    var sum: f32 = 0.0;
+    for (var i: u32 = 0; i < dimY; i = i + 1) {
+        sum = sum + Weights.data[row * dimX + i]; // * Values.data[row * dimY + i + head * vCols];
+    }
+
+    Result.data[row * dimX + col] = sum;
+  }
+  `;
+
 async function attention(rows, cols, input, n_heads, qkv_weights, qkv_bias) {
   const { device, queue } = await initializeWebGPU();
   const minStorageBufferOffsetAlignment = device.limits.minStorageBufferOffsetAlignment;
-  const bufferSizeCalc = (dimA, dimB = 1) => alignedSize(dimA * dimB * Float32Array.BYTES_PER_ELEMENT, minStorageBufferOffsetAlignment);
+  console.log("minStorageBufferOffsetAlignment", minStorageBufferOffsetAlignment);
+  const bufferSizeCalc = (dimA, dimB = 1) => alignedSize(dimA * dimB * Float32Array.BYTES_PER_ELEMENT, 1);
   const workgroup_X = 16; // Dictated by shader.
   const workgroup_Y = 16; // Dictated by shader.
   const workgroup_XYZ = 8; // Dictated by shader.
@@ -173,12 +217,10 @@ async function attention(rows, cols, input, n_heads, qkv_weights, qkv_bias) {
   const splitQKVpipeline = createPipeline(device, createSplitQKVShader(), [splitQKVBindGroupLayout, inputBufferBindGroupLayout]);
 
   // Attention weights pipeline, can be reused.
-  const attentionWeightsInputBindGroupLayout = createBindGroupLayout(device, ["read-only-storage", "read-only-storage"]);
-  const attentionWeightsBindGroupLayout = createBindGroupLayout(device, ["uniform", "storage"]);
-  const attentionWeightsPipeline = createPipeline(device, createAttentionWeightsShader(), [
-    attentionWeightsBindGroupLayout,
-    attentionWeightsInputBindGroupLayout,
-  ]);
+  const attentionInputBindGroupLayout = createBindGroupLayout(device, ["read-only-storage", "read-only-storage"]);
+  const attentionBindGroupLayout = createBindGroupLayout(device, ["uniform", "storage"]);
+  const attentionWeightsPipeline = createPipeline(device, createAttentionWeightsShader(), [attentionBindGroupLayout, attentionInputBindGroupLayout]);
+  const attentionValuesPipeline = createPipeline(device, createAttentionValuesShader(), [attentionBindGroupLayout, attentionInputBindGroupLayout]);
 
   // Causal mask pipeline, can be reused.
   const causalMaskBindGroupLayout = createBindGroupLayout(device, ["uniform", "storage"]);
@@ -211,13 +253,18 @@ async function attention(rows, cols, input, n_heads, qkv_weights, qkv_bias) {
 
   const attentionWeightsUniformBuffer = createBuffer(device, 16, GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST);
   const attentionWeightsResultBuffer = createBuffer(device, bufferSizeCalc(rows, rows * n_heads), GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC);
-  const attentionWeightsBindGroup = createBindGroup(device, attentionWeightsBindGroupLayout, [attentionWeightsUniformBuffer, attentionWeightsResultBuffer]);
+  const attentionWeightsBindGroup = createBindGroup(device, attentionBindGroupLayout, [attentionWeightsUniformBuffer, attentionWeightsResultBuffer]);
   queue.writeBuffer(attentionWeightsUniformBuffer, 0, new Uint32Array([rows, rows * n_heads, head_dim]));
 
   const causalMaskUniformBuffer = createBuffer(device, 16, GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST);
-  const causalMaskResultBuffer = createBuffer(device, bufferSizeCalc(rows, rows), GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC);
+  const causalMaskResultBuffer = createBuffer(device, bufferSizeCalc(rows, rows) * n_heads, GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC);
   const causalMaskBindGroup = createBindGroup(device, causalMaskBindGroupLayout, [causalMaskUniformBuffer, causalMaskResultBuffer]);
-  queue.writeBuffer(causalMaskUniformBuffer, 0, new Uint32Array([rows, rows]));
+  queue.writeBuffer(causalMaskUniformBuffer, 0, new Uint32Array([rows * n_heads, rows]));
+
+  const attentionValuesUniformBuffer = createBuffer(device, 16, GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST);
+  const attentionValuesResultBuffer = createBuffer(device, bufferSizeCalc(rows, cols), GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC);
+  const attentionValuesBindGroup = createBindGroup(device, attentionBindGroupLayout, [attentionValuesUniformBuffer, attentionValuesResultBuffer]);
+  queue.writeBuffer(attentionValuesUniformBuffer, 0, new Uint32Array([rows, cols, head_dim]));
 
   console.log("Starting passes");
   const commandEncoder = device.createCommandEncoder();
@@ -239,7 +286,7 @@ async function attention(rows, cols, input, n_heads, qkv_weights, qkv_bias) {
   const passEncoder_attentionWeights = commandEncoder.beginComputePass();
   passEncoder_attentionWeights.setPipeline(attentionWeightsPipeline);
   passEncoder_attentionWeights.setBindGroup(0, attentionWeightsBindGroup);
-  passEncoder_attentionWeights.setBindGroup(1, createBindGroup(device, attentionWeightsInputBindGroupLayout, [splitQResultBuffer, splitKResultBuffer]));
+  passEncoder_attentionWeights.setBindGroup(1, createBindGroup(device, attentionInputBindGroupLayout, [splitQResultBuffer, splitKResultBuffer]));
   passEncoder_attentionWeights.dispatchWorkgroups(workgroupCalc(rows, workgroup_Y), workgroupCalc(rows * n_heads, workgroup_X));
   passEncoder_attentionWeights.end();
 
@@ -247,35 +294,67 @@ async function attention(rows, cols, input, n_heads, qkv_weights, qkv_bias) {
   passEncoder_causalMask.setPipeline(causalMaskPipeline);
   passEncoder_causalMask.setBindGroup(0, causalMaskBindGroup);
   passEncoder_causalMask.setBindGroup(1, createBindGroup(device, inputBufferBindGroupLayout, [attentionWeightsResultBuffer]));
-  passEncoder_causalMask.dispatchWorkgroups(workgroupCalc(rows, workgroup_Y), workgroupCalc(rows, workgroup_X));
+  passEncoder_causalMask.dispatchWorkgroups(workgroupCalc(rows * n_heads, workgroup_Y), workgroupCalc(rows, workgroup_X));
   passEncoder_causalMask.end();
 
-  const softMaxResultBuffer = inlineSoftmax(device, queue, commandEncoder, rows, cols, causalMaskResultBuffer);
+  const softmaxOutputBuffer = createBuffer(
+    device,
+    bufferSizeCalc(rows, rows) * n_heads,
+    GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST | GPUBufferUsage.COPY_SRC
+  );
+  for (let i = 0; i < n_heads; i++) {
+    const softmaxInputBuffer = createBuffer(device, bufferSizeCalc(rows, rows), GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST | GPUBufferUsage.COPY_SRC);
+    commandEncoder.copyBufferToBuffer(causalMaskResultBuffer, i * bufferSizeCalc(rows, rows), softmaxInputBuffer, 0, bufferSizeCalc(rows, rows));
+    const softMaxResultBuffer = inlineSoftmax(device, queue, commandEncoder, rows, rows, softmaxInputBuffer);
+    commandEncoder.copyBufferToBuffer(softMaxResultBuffer, 0, softmaxOutputBuffer, i * bufferSizeCalc(rows, rows), bufferSizeCalc(rows, rows));
+  }
 
-  const output_rows = rows;
+  // const passEncoder_attentionValues = commandEncoder.beginComputePass();
+  // passEncoder_attentionValues.setPipeline(attentionValuesPipeline);
+  // passEncoder_attentionValues.setBindGroup(0, attentionValuesBindGroup);
+  // passEncoder_attentionValues.setBindGroup(1, createBindGroup(device, attentionInputBindGroupLayout, [softMaxResultBuffer, splitVResultBuffer]));
+  // passEncoder_attentionValues.dispatchWorkgroups(workgroupCalc(rows, workgroup_Y), workgroupCalc(rows * n_heads, workgroup_X));
+  // passEncoder_attentionValues.end();
+
+  const output_rows = rows * n_heads;
   const output_cols = rows;
   const outputBufferSize = bufferSizeCalc(output_rows, output_cols);
   const readBuffer = createBuffer(device, outputBufferSize, GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ);
-  const QBuffer = createBuffer(device, bufferSizeCalc(rows * cols), GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ);
-  const KBuffer = createBuffer(device, bufferSizeCalc(rows * cols), GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ);
+  const otherBuffer = createBuffer(device, bufferSizeCalc(rows, rows), GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ);
+  const thirdBuffer = createBuffer(device, bufferSizeCalc(rows, rows) * n_heads, GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ);
+  const VBuffer = createBuffer(device, bufferSizeCalc(rows, cols), GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ);
+  const QBuffer = createBuffer(device, bufferSizeCalc(rows, cols), GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ);
+  const KBuffer = createBuffer(device, bufferSizeCalc(rows, cols), GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ);
 
   const copyCommandEncoder = device.createCommandEncoder();
-  copyCommandEncoder.copyBufferToBuffer(softMaxResultBuffer, 0, readBuffer, 0, outputBufferSize);
-  copyCommandEncoder.copyBufferToBuffer(splitQResultBuffer, 0, QBuffer, 0, bufferSizeCalc(rows * cols));
-  copyCommandEncoder.copyBufferToBuffer(splitKResultBuffer, 0, KBuffer, 0, bufferSizeCalc(rows * cols));
+  copyCommandEncoder.copyBufferToBuffer(softmaxOutputBuffer, 0, readBuffer, 0, outputBufferSize);
+  // copyCommandEncoder.copyBufferToBuffer(bufferStore, 0, otherBuffer, 0, bufferSizeCalc(rows, rows));
+  copyCommandEncoder.copyBufferToBuffer(causalMaskResultBuffer, 0, thirdBuffer, 0, bufferSizeCalc(rows, rows) * n_heads);
+  copyCommandEncoder.copyBufferToBuffer(splitVResultBuffer, 0, VBuffer, 0, bufferSizeCalc(rows, cols));
+  copyCommandEncoder.copyBufferToBuffer(splitQResultBuffer, 0, QBuffer, 0, bufferSizeCalc(rows, cols));
+  copyCommandEncoder.copyBufferToBuffer(splitKResultBuffer, 0, KBuffer, 0, bufferSizeCalc(rows, cols));
 
   queue.submit([commandEncoder.finish(), copyCommandEncoder.finish()]);
 
   await readBuffer.mapAsync(GPUMapMode.READ);
+  await otherBuffer.mapAsync(GPUMapMode.READ);
+  await thirdBuffer.mapAsync(GPUMapMode.READ);
   await QBuffer.mapAsync(GPUMapMode.READ);
   await KBuffer.mapAsync(GPUMapMode.READ);
+  await VBuffer.mapAsync(GPUMapMode.READ);
   console.log("Done!");
   const result = readBuffer.getMappedRange();
+  const other = otherBuffer.getMappedRange();
+  const third = thirdBuffer.getMappedRange();
   const Q = QBuffer.getMappedRange();
   const K = KBuffer.getMappedRange();
+  const V = VBuffer.getMappedRange();
   printMatrix(output_rows, output_cols, new Float32Array(result));
-  printMatrix(rows, cols, new Float32Array(Q));
-  printMatrix(rows, cols, new Float32Array(K));
+  printMatrix(rows, rows, new Float32Array(other));
+  printMatrix(rows * n_heads, rows, new Float32Array(third));
+  // printMatrix(rows, cols, new Float32Array(Q));
+  // printMatrix(rows, cols, new Float32Array(K));
+  // printMatrix(rows, cols, new Float32Array(V));
   return result;
 }
 
@@ -289,7 +368,7 @@ async function attention(rows, cols, input, n_heads, qkv_weights, qkv_bias) {
   const qkv_weights = new Float32Array(col * 3 * col);
   for (let y = 0; y < col; y++) {
     for (let x = 0; x < col * 3; x++) {
-      qkv_weights[y * col * 3 + x] = 0.01;
+      qkv_weights[y * col * 3 + x] = x % 10;
     }
   }
   const qkv_bias = new Float32Array(col * 3).fill(0);

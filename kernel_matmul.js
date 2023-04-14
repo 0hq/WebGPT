@@ -45,7 +45,7 @@ async function createMatMulPipeline(device) {
   return pipeline;
 }
 
-function createMatMulShader(device) {
+function createMatMulShader() {
   return `
     struct Matrix {
         data: array<f32>, // runtime-sized array
@@ -57,10 +57,11 @@ function createMatMulShader(device) {
       dimS: u32, // shared dimension of A and B
     };
 
-    @group(0) @binding(0) var<storage, read> A: Matrix;
-    @group(0) @binding(1) var<storage, read> B: Matrix;
-    @group(0) @binding(2) var<storage, read_write> C: Matrix;
-    @group(0) @binding(3) var<uniform> dimBuffer: Uniforms;
+    @group(1) @binding(0) var<storage, read> A: Matrix;
+    @group(1) @binding(1) var<storage, read> B: Matrix;
+
+    @group(0) @binding(1) var<storage, read_write> C: Matrix;
+    @group(0) @binding(0) var<uniform> dimBuffer: Uniforms;
 
     @compute @workgroup_size(16, 16)
     fn main (@builtin(global_invocation_id) global_id: vec3<u32>) {
@@ -316,4 +317,30 @@ async function preMatMulDiscrete(device, queue, pipeline, A, B) {
     numWorkgroupsY,
     bufferSizeC,
   };
+}
+
+async function runMatMulDynamic(device, queue, commandEncoder, Abuffer, Bbuffer, rows, cols, shared) {
+  const minStorageBufferOffsetAlignment = device.limits.minStorageBufferOffsetAlignment;
+  const bufferSizeCalc = (dimA, dimB = 1) => alignedSize(dimA * dimB * Float32Array.BYTES_PER_ELEMENT, minStorageBufferOffsetAlignment);
+  const workgroup_X = 16; // Dictated by shader.
+  const workgroup_Y = 16; // Dictated by shader.
+
+  // Generic bind group for input buffer, can be reused.
+  const inputBufferBindGroupLayout = createBindGroupLayout(device, ["read-only-storage", "read-only-storage"]);
+
+  const matmulBindGroupLayout = createBindGroupLayout(device, ["uniform", "storage"]);
+  const matmulPipeline = createPipeline(device, createMatMulShader(), [matmulBindGroupLayout, inputBufferBindGroupLayout]);
+
+  const matmulUniformBuffer = createBuffer(device, 16, GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST);
+  const matmulResultBuffer = createBuffer(device, bufferSizeCalc(rows, cols), GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC);
+  const attentionWeightsBindGroup = createBindGroup(device, matmulBindGroupLayout, [matmulUniformBuffer, matmulResultBuffer]);
+  queue.writeBuffer(attentionWeightsUniformBuffer, 0, new Uint32Array([rows, cols, shared]));
+
+  commandEncoder.setPipeline(matmulPipeline);
+  commandEncoder.setBindGroup(0, attentionWeightsBindGroup);
+  commandEncoder.setBindGroup(1, createBindGroup(device, inputBufferBindGroupLayout, [Abuffer, Bbuffer]));
+  commandEncoder.dispatchWorkgroups(workgroupCalc(rows, workgroup_Y), workgroupCalc(cols, workgroup_X));
+  commandEncoder.end();
+
+  return matmulResultBuffer;
 }
