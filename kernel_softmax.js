@@ -251,22 +251,102 @@ async function softmax(rows, cols, input) {
   return readBuffer.getMappedRange();
 }
 
-(async () => {
-  const row = 10;
-  const col = 10;
-  const input = new Float32Array(row * col);
-  for (let i = 0; i < row * col; i++) input[i] = i;
+function inlineSoftmax(device, queue, commandEncoder, rows, cols, inputBuffer) {
+  const minStorageBufferOffsetAlignment = device.limits.minStorageBufferOffsetAlignment;
+  const bufferSizeCalc = (dimA, dimB = 1) => alignedSize(dimA * dimB * Float32Array.BYTES_PER_ELEMENT, minStorageBufferOffsetAlignment);
+  const workgroup_X = 16; // Dictated by shader.
+  const workgroup_Y = 16; // Dictated by shader.
 
-  printMatrix(row, col, input);
+  // Generic bind group for input buffer, will be reused.
+  const inputBufferBindGroupLayout = createBindGroupLayout(device, ["read-only-storage"]);
+  const operationBindGroupLayout = createBindGroupLayout(device, ["uniform", "storage"]);
+  // MAX pipeline, will be reused.
+  const maxPipeline = createPipeline(device, createNegMaxShader(), [operationBindGroupLayout, inputBufferBindGroupLayout]);
+  // ADD pipeline, will be reused.
+  const addPipeline = createPipeline(device, createAddShader(), [operationBindGroupLayout, inputBufferBindGroupLayout, inputBufferBindGroupLayout]);
+  // EXP pipeline, will be reused.
+  const expPipeline = createPipeline(device, createExpShader(), [operationBindGroupLayout, inputBufferBindGroupLayout]);
+  // SUM pipeline, will be reused.
+  const sumPipeline = createPipeline(device, createSumShader(), [operationBindGroupLayout, inputBufferBindGroupLayout]);
+  // DIV pipeline, will be reused.
+  const dividePipeline = createPipeline(device, createDivideShader(), [operationBindGroupLayout, inputBufferBindGroupLayout, inputBufferBindGroupLayout]);
 
-  const result = await softmax(row, col, input);
+  const dimUniformBuffer = createBuffer(device, 16, GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST);
+  queue.writeBuffer(dimUniformBuffer, 0, new Uint32Array([rows, cols]));
 
-  const mat = printMatrix(row, col, new Float32Array(result));
-  for (const row of mat) {
-    console.log(row.reduce((a, b) => a + b));
-    // console.log(getStandardDeviation(row));
-  }
-})();
+  const maxResultBuffer = createBuffer(device, bufferSizeCalc(rows), GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC);
+  const maxBindGroup = createBindGroup(device, operationBindGroupLayout, [dimUniformBuffer, maxResultBuffer]);
+
+  const addResultBuffer = createBuffer(device, bufferSizeCalc(rows, cols), GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC);
+  const addBindGroup = createBindGroup(device, operationBindGroupLayout, [dimUniformBuffer, addResultBuffer]);
+
+  const expResultBuffer = createBuffer(device, bufferSizeCalc(rows, cols), GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC);
+  const expBindGroup = createBindGroup(device, operationBindGroupLayout, [dimUniformBuffer, expResultBuffer]);
+
+  const sumResultBuffer = createBuffer(device, bufferSizeCalc(rows), GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC);
+  const sumBindGroup = createBindGroup(device, operationBindGroupLayout, [dimUniformBuffer, sumResultBuffer]);
+
+  const divResultBuffer = createBuffer(device, bufferSizeCalc(rows, cols), GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC);
+  const divBindGroup = createBindGroup(device, operationBindGroupLayout, [dimUniformBuffer, divResultBuffer]);
+
+  console.log("Starting passes");
+
+  const passEncoder_max = commandEncoder.beginComputePass();
+  passEncoder_max.setPipeline(maxPipeline);
+  passEncoder_max.setBindGroup(0, maxBindGroup);
+  passEncoder_max.setBindGroup(1, createBindGroup(device, inputBufferBindGroupLayout, [inputBuffer]));
+  passEncoder_max.dispatchWorkgroups(workgroupCalc(rows, workgroup_Y), workgroupCalc(cols, workgroup_X));
+  passEncoder_max.end();
+
+  const passEncoder_add = commandEncoder.beginComputePass();
+  passEncoder_add.setPipeline(addPipeline);
+  passEncoder_add.setBindGroup(0, addBindGroup);
+  passEncoder_add.setBindGroup(1, createBindGroup(device, inputBufferBindGroupLayout, [inputBuffer]));
+  passEncoder_add.setBindGroup(2, createBindGroup(device, inputBufferBindGroupLayout, [maxResultBuffer]));
+  passEncoder_add.dispatchWorkgroups(workgroupCalc(rows, workgroup_Y), workgroupCalc(cols, workgroup_X));
+  passEncoder_add.end();
+
+  const passEncoder_exp = commandEncoder.beginComputePass();
+  passEncoder_exp.setPipeline(expPipeline);
+  passEncoder_exp.setBindGroup(0, expBindGroup);
+  passEncoder_exp.setBindGroup(1, createBindGroup(device, inputBufferBindGroupLayout, [addResultBuffer]));
+  passEncoder_exp.dispatchWorkgroups(workgroupCalc(rows, workgroup_Y), workgroupCalc(cols, workgroup_X));
+  passEncoder_exp.end();
+
+  const passEncoder_sum = commandEncoder.beginComputePass();
+  passEncoder_sum.setPipeline(sumPipeline);
+  passEncoder_sum.setBindGroup(0, sumBindGroup);
+  passEncoder_sum.setBindGroup(1, createBindGroup(device, inputBufferBindGroupLayout, [expResultBuffer]));
+  passEncoder_sum.dispatchWorkgroups(workgroupCalc(rows, workgroup_Y), workgroupCalc(cols, workgroup_X));
+  passEncoder_sum.end();
+
+  const passEncoder_div = commandEncoder.beginComputePass();
+  passEncoder_div.setPipeline(dividePipeline);
+  passEncoder_div.setBindGroup(0, divBindGroup);
+  passEncoder_div.setBindGroup(1, createBindGroup(device, inputBufferBindGroupLayout, [expResultBuffer]));
+  passEncoder_div.setBindGroup(2, createBindGroup(device, inputBufferBindGroupLayout, [sumResultBuffer]));
+  passEncoder_div.dispatchWorkgroups(workgroupCalc(rows, workgroup_Y), workgroupCalc(cols, workgroup_X));
+  passEncoder_div.end();
+
+  return divResultBuffer;
+}
+
+// (async () => {
+//   const row = 10;
+//   const col = 10;
+//   const input = new Float32Array(row * col);
+//   for (let i = 0; i < row * col; i++) input[i] = i;
+
+//   printMatrix(row, col, input);
+
+//   const result = await softmax(row, col, input);
+
+//   const mat = printMatrix(row, col, new Float32Array(result));
+//   for (const row of mat) {
+//     console.log(row.reduce((a, b) => a + b));
+//     // console.log(getStandardDeviation(row));
+//   }
+// })();
 
 function printMatrix(rows, cols, array) {
   // console.log(array);

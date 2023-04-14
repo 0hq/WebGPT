@@ -37,6 +37,41 @@ const createFFNShader = () => `
   }
   `;
 
+const createCausalMaskShader = () => `
+  struct Matrix {
+      data: array<f32>, // runtime-sized array
+  }
+
+  struct Dimensions {
+    dimY: u32, // row dimension of input matrix
+    dimX: u32, // col dimension of input matrix
+  };
+
+  @group(0) @binding(0) var<uniform> DimBuffer: Dimensions;
+  @group(0) @binding(1) var<storage, read_write> Result: Matrix;
+
+  @group(1) @binding(0) var<storage, read> Input: Matrix;
+
+  @compute @workgroup_size(16, 16)
+  fn main (@builtin(global_invocation_id) global_id: vec3<u32>) {
+      let row: u32 = global_id.x;
+      let col: u32 = global_id.y;
+      let dimX: u32 = DimBuffer.dimX;
+      let dimY: u32 = DimBuffer.dimY;
+
+      if (row >= dimY || col >= dimX) {
+        return;
+      }
+
+      if (col > row) {
+        Result.data[row * dimX + col] = -1e9;
+      } else {
+        Result.data[row * dimX + col] = Input.data[row * dimX + col];
+      }
+
+    } 
+  `;
+
 const createSplitQKVShader = () => `
   struct Matrix {
     data: array<f32>, // runtime-sized array
@@ -75,64 +110,6 @@ const createSplitQKVShader = () => `
 
   }
   `;
-
-// I think I can unify these but leaving for now, as per before I don't really care about optimizing this code right now.
-//   queue.writeBuffer(splitHeadUniformBuffer, 0, new Uint32Array([rows, Math.ceil(cols / n_heads), n_heads, cols]));
-const createSplitHeadsShader = () => `
-  struct Matrix {
-    data: array<f32>, // runtime-sized array
-  }
-
-  struct Dimensions {
-    dimY: u32, // row dimension of Q, K, V
-    dimX: u32, // col dimension of Q, K, V
-    nHeads: u32, // number of heads or depth dimension of Q, K, V
-    dimInputX: u32, // col dimension of Input
-  };
-
-  @group(1) @binding(0) var<storage, read> Q_input: Matrix;
-  @group(1) @binding(1) var<storage, read> K_input: Matrix;
-  @group(1) @binding(2) var<storage, read> V_input: Matrix;
-
-  @group(0) @binding(0) var<uniform> DimBuffer: Dimensions;
-  @group(0) @binding(1) var<storage, read_write> Q: Matrix;
-  @group(0) @binding(2) var<storage, read_write> K: Matrix;
-  @group(0) @binding(3) var<storage, read_write> V: Matrix;
-
-
-  @compute @workgroup_size(4, 4, 4)
-  fn main (@builtin(global_invocation_id) global_id: vec3<u32>) {
-    let row: u32 = global_id.x;
-    let col: u32 = global_id.y;
-    let depth: u32 = global_id.z;
-    let dimX: u32 = DimBuffer.dimX;
-    let dimY: u32 = DimBuffer.dimY;
-    let nHeads: u32 = DimBuffer.nHeads;
-    let dimInputX: u32 = DimBuffer.dimInputX;
-    
-    if (row >= dimY || col >= dimX || depth >= nHeads) {
-      return;
-    }
-
-    Q.data[depth * dimX * dimY + row * dimX + col] = Q_input.data[depth * nHeads + row * dimInputX + col];
-    K.data[depth * dimX * dimY + row * dimX + col] = K_input.data[depth * nHeads + row * dimInputX + col];
-    V.data[depth * dimX * dimY + row * dimX + col] = V_input.data[depth * nHeads + row * dimInputX + col];
-  }
-  `;
-
-const output = [
-  [792, 858, 924],
-  [4248, 4602, 4956],
-  [5976, 6474, 6972],
-  [7704, 8346, 8988],
-  [9432, 10218, 11004],
-  [11160, 12090, 13020],
-  [12888, 13962, 15036],
-  [14616, 15834, 17052],
-  [16344, 17706, 19068],
-  [18072, 19578, 21084],
-  [19800, 21450, 23100],
-];
 
 const createAttentionWeightsShader = () => `
   struct Matrix {
@@ -195,10 +172,7 @@ async function attention(rows, cols, input, n_heads, qkv_weights, qkv_bias) {
   const splitQKVBindGroupLayout = createBindGroupLayout(device, ["uniform", "storage", "storage", "storage"]);
   const splitQKVpipeline = createPipeline(device, createSplitQKVShader(), [splitQKVBindGroupLayout, inputBufferBindGroupLayout]);
 
-  // Bind group for QKV input buffer, can be reused.
-  const QKVInputBufferBindGroupLayout = createBindGroupLayout(device, ["read-only-storage", "read-only-storage", "read-only-storage"]);
-
-  // Split QKV pipeline, can be reused.
+  // Attention weights pipeline, can be reused.
   const attentionWeightsInputBindGroupLayout = createBindGroupLayout(device, ["read-only-storage", "read-only-storage"]);
   const attentionWeightsBindGroupLayout = createBindGroupLayout(device, ["uniform", "storage"]);
   const attentionWeightsPipeline = createPipeline(device, createAttentionWeightsShader(), [
@@ -206,8 +180,9 @@ async function attention(rows, cols, input, n_heads, qkv_weights, qkv_bias) {
     attentionWeightsInputBindGroupLayout,
   ]);
 
-  // Split heads pipeline, can be reused.
-  const splitHeadpipeline = createPipeline(device, createSplitHeadsShader(), [splitQKVBindGroupLayout, QKVInputBufferBindGroupLayout]);
+  // Causal mask pipeline, can be reused.
+  const causalMaskBindGroupLayout = createBindGroupLayout(device, ["uniform", "storage"]);
+  const causalMaskPipeline = createPipeline(device, createCausalMaskShader(), [causalMaskBindGroupLayout, inputBufferBindGroupLayout]);
 
   console.log("Starting network");
   const inputBuffer = createBuffer(device, bufferSizeCalc(rows, cols), GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST);
@@ -234,22 +209,15 @@ async function attention(rows, cols, input, n_heads, qkv_weights, qkv_bias) {
   ]);
   queue.writeBuffer(splitQKVUniformBuffer, 0, new Uint32Array([rows, cols, qkv_col_dim]));
 
-  // const splitHeadUniformBuffer = createBuffer(device, 16, GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST);
-  // const splitQHeadResultBuffer = createBuffer(device, bufferSizeCalc(rows, cols), GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC);
-  // const splitKHeadResultBuffer = createBuffer(device, bufferSizeCalc(rows, cols), GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC);
-  // const splitVHeadResultBuffer = createBuffer(device, bufferSizeCalc(rows, cols), GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC);
-  // const splitHeadBindGroup = createBindGroup(device, splitQKVBindGroupLayout, [
-  //   splitHeadUniformBuffer,
-  //   splitQHeadResultBuffer,
-  //   splitKHeadResultBuffer,
-  //   splitVHeadResultBuffer,
-  // ]);
-  // queue.writeBuffer(splitHeadUniformBuffer, 0, new Uint32Array([rows, Math.ceil(cols / n_heads), n_heads, cols]));
-
   const attentionWeightsUniformBuffer = createBuffer(device, 16, GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST);
   const attentionWeightsResultBuffer = createBuffer(device, bufferSizeCalc(rows, rows * n_heads), GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC);
   const attentionWeightsBindGroup = createBindGroup(device, attentionWeightsBindGroupLayout, [attentionWeightsUniformBuffer, attentionWeightsResultBuffer]);
   queue.writeBuffer(attentionWeightsUniformBuffer, 0, new Uint32Array([rows, rows * n_heads, head_dim]));
+
+  const causalMaskUniformBuffer = createBuffer(device, 16, GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST);
+  const causalMaskResultBuffer = createBuffer(device, bufferSizeCalc(rows, rows), GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC);
+  const causalMaskBindGroup = createBindGroup(device, causalMaskBindGroupLayout, [causalMaskUniformBuffer, causalMaskResultBuffer]);
+  queue.writeBuffer(causalMaskUniformBuffer, 0, new Uint32Array([rows, rows]));
 
   console.log("Starting passes");
   const commandEncoder = device.createCommandEncoder();
@@ -268,17 +236,6 @@ async function attention(rows, cols, input, n_heads, qkv_weights, qkv_bias) {
   passEncoder_splitQKV.dispatchWorkgroups(workgroupCalc(rows, workgroup_Y), workgroupCalc(cols, workgroup_X));
   passEncoder_splitQKV.end();
 
-  // const passEncoder_splitHead = commandEncoder.beginComputePass();
-  // passEncoder_splitHead.setPipeline(splitHeadpipeline);
-  // passEncoder_splitHead.setBindGroup(0, splitHeadBindGroup);
-  // passEncoder_splitHead.setBindGroup(1, createBindGroup(device, QKVInputBufferBindGroupLayout, [splitQResultBuffer, splitKResultBuffer, splitVResultBuffer]));
-  // passEncoder_splitHead.dispatchWorkgroups(
-  //   workgroupCalc(rows * 2, workgroup_XYZ),
-  //   workgroupCalc(Math.ceil((cols * 2) / n_heads), workgroup_XYZ),
-  //   workgroupCalc(n_heads, workgroup_XYZ)
-  // );
-  // passEncoder_splitHead.end();
-
   const passEncoder_attentionWeights = commandEncoder.beginComputePass();
   passEncoder_attentionWeights.setPipeline(attentionWeightsPipeline);
   passEncoder_attentionWeights.setBindGroup(0, attentionWeightsBindGroup);
@@ -286,15 +243,24 @@ async function attention(rows, cols, input, n_heads, qkv_weights, qkv_bias) {
   passEncoder_attentionWeights.dispatchWorkgroups(workgroupCalc(rows, workgroup_Y), workgroupCalc(rows * n_heads, workgroup_X));
   passEncoder_attentionWeights.end();
 
+  const passEncoder_causalMask = commandEncoder.beginComputePass();
+  passEncoder_causalMask.setPipeline(causalMaskPipeline);
+  passEncoder_causalMask.setBindGroup(0, causalMaskBindGroup);
+  passEncoder_causalMask.setBindGroup(1, createBindGroup(device, inputBufferBindGroupLayout, [attentionWeightsResultBuffer]));
+  passEncoder_causalMask.dispatchWorkgroups(workgroupCalc(rows, workgroup_Y), workgroupCalc(rows, workgroup_X));
+  passEncoder_causalMask.end();
+
+  const softMaxResultBuffer = inlineSoftmax(device, queue, commandEncoder, rows, cols, causalMaskResultBuffer);
+
   const output_rows = rows;
-  const output_cols = rows * 4;
+  const output_cols = rows;
   const outputBufferSize = bufferSizeCalc(output_rows, output_cols);
   const readBuffer = createBuffer(device, outputBufferSize, GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ);
   const QBuffer = createBuffer(device, bufferSizeCalc(rows * cols), GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ);
   const KBuffer = createBuffer(device, bufferSizeCalc(rows * cols), GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ);
 
   const copyCommandEncoder = device.createCommandEncoder();
-  copyCommandEncoder.copyBufferToBuffer(attentionWeightsResultBuffer, 0, readBuffer, 0, outputBufferSize);
+  copyCommandEncoder.copyBufferToBuffer(softMaxResultBuffer, 0, readBuffer, 0, outputBufferSize);
   copyCommandEncoder.copyBufferToBuffer(splitQResultBuffer, 0, QBuffer, 0, bufferSizeCalc(rows * cols));
   copyCommandEncoder.copyBufferToBuffer(splitKResultBuffer, 0, KBuffer, 0, bufferSizeCalc(rows * cols));
 
@@ -323,7 +289,7 @@ async function attention(rows, cols, input, n_heads, qkv_weights, qkv_bias) {
   const qkv_weights = new Float32Array(col * 3 * col);
   for (let y = 0; y < col; y++) {
     for (let x = 0; x < col * 3; x++) {
-      qkv_weights[y * col * 3 + x] = x;
+      qkv_weights[y * col * 3 + x] = 0.01;
     }
   }
   const qkv_bias = new Float32Array(col * 3).fill(0);
