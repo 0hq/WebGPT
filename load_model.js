@@ -2,7 +2,6 @@ async function loadModel(filename) {
   console.log("Loading model:", filename);
   // Load the model from json file
   var model = await (await fetch(`models/${filename}.json`)).json();
-  console.log(model);
 
   const { device, queue } = await initializeWebGPU();
   const minStorageBufferOffsetAlignment = 1; // device.limits.minStorageBufferOffsetAlignment; // This was breaking things. Probably should check later.
@@ -112,11 +111,23 @@ async function loadModel(filename) {
   };
 }
 
+let itos = null;
+let stoi = null;
 let modelParams = null;
 let bufferSizeCalc = null;
 
 (async () => {
   modelParams = await loadModel("bad_shakespeare");
+  console.log("Params:", modelParams);
+
+  const tokenDict = await (await fetch("models/tokens.json")).json();
+
+  itos = tokenDict.itos;
+  stoi = tokenDict.stoi;
+
+  console.log("Tokens:", tokenDict);
+  console.log("Unique Tokens:", new Set(Object.values(tokenDict.itos)));
+
   console.log("Model finished loading.");
 })();
 
@@ -238,13 +249,13 @@ async function runGPT(
 }
 
 async function generateFromModel(prompt, max_new_tokens, temperature) {
-  if (!modelParams) {
+  if (!modelParams || !stoi || !itos) {
     console.log("Model not loaded yet");
     return;
   }
 
   console.log("Starting generation with prompt", prompt);
-  prompt = prompt.split("").map((c) => charToInt(c));
+  prompt = prompt.split("").map((c) => stoi[c]);
   console.log("Parsed prompt", prompt);
 
   const context_size = modelParams.params.context_size;
@@ -268,23 +279,8 @@ async function generateFromModel(prompt, max_new_tokens, temperature) {
   }
 
   console.log("Output ints:", prompt);
-  const text = prompt.map(intToChar).join("");
+  const text = prompt.map((i) => itos[i]).join("");
   console.log("Output:", text);
-}
-
-const uniqueTokens = new Set("} !$&',-.3:;?ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz");
-console.log("uniqueTokens", uniqueTokens);
-
-function charToInt(char) {
-  const idx = [...uniqueTokens].indexOf(char);
-  if (idx === -1) {
-    throw new Error(`Unknown character: ${char}`);
-  }
-  return idx;
-}
-
-function intToChar(idx) {
-  return [...uniqueTokens][idx];
 }
 
 function simpleSoftmax(input) {
