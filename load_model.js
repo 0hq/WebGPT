@@ -8,7 +8,7 @@ async function loadModel(filename) {
   bufferSizeCalc = (dimA, dimB = 1) => alignedSize(dimA * dimB * Float32Array.BYTES_PER_ELEMENT, minStorageBufferOffsetAlignment);
 
   const { block_size: context_size, vocab_size, n_embd, n_head: n_heads, n_layer: n_layers, bias: biasEnabled } = model.params;
-  console.log("context_size", context_size, "vocab_size", vocab_size, "n_embd", n_embd, "n_heads", n_heads, "n_layers", n_layers);
+  console.log("context_size", context_size, "vocab_size", vocab_size, "n_embd", n_embd, "n_heads", n_heads, "n_layers", n_layers, "biasEnabled", biasEnabled);
 
   const hidden_size = n_embd * 4; // Transformer block has 4 hidden layers by default, not a param.
   const attentionDotProductScale = 1 / Math.sqrt(n_embd / n_heads);
@@ -111,26 +111,6 @@ async function loadModel(filename) {
   };
 }
 
-let itos = null;
-let stoi = null;
-let modelParams = null;
-let bufferSizeCalc = null;
-
-(async () => {
-  modelParams = await loadModel("bad_shakespeare");
-  console.log("Params:", modelParams);
-
-  const tokenDict = await (await fetch("models/tokens.json")).json();
-
-  itos = tokenDict.itos;
-  stoi = tokenDict.stoi;
-
-  console.log("Tokens:", tokenDict);
-  console.log("Unique Tokens:", new Set(Object.values(tokenDict.itos)));
-
-  console.log("Model finished loading.");
-})();
-
 async function runInference(prompt) {
   if (!modelParams) {
     console.log("Model not loaded yet");
@@ -172,13 +152,7 @@ async function runInference(prompt) {
 
   // printMatrix(seq_length, vocab_size, new Float32Array(result));
 
-  // take only the last row, it is 4 am please don't judge me
-  const lastRow = new Float32Array(vocab_size);
-  const resultArray = new Float32Array(result);
-  for (let i = 0; i < vocab_size; i++) {
-    lastRow[i] = resultArray[(seq_length - 1) * vocab_size + i];
-  }
-  return lastRow;
+  return new Float32Array(result);
 }
 
 async function runGPT(
@@ -218,6 +192,9 @@ async function runGPT(
   const embeddedInputBuffer = inlineResidual(device, queue, commandEncoder, seq_length, n_embd, embdOutputBuffer, posEmbdOutputBuffer);
   let layerBuffer = embeddedInputBuffer;
 
+  // Used for validation.
+  const buffers = [];
+
   for (let i = 0; i < n_layers; i++) {
     const layer_params = layer_buffers[i];
     const blockOutputBuffer = transformerBlock(
@@ -231,6 +208,7 @@ async function runGPT(
       layerBuffer,
       ...layer_params
     );
+    buffers.push(blockOutputBuffer);
     layerBuffer = blockOutputBuffer;
   }
 
@@ -238,17 +216,63 @@ async function runGPT(
 
   const deEmbedOutputBuffer = inlineMatMul(device, queue, commandEncoder, layerNormOutputBuffer, deEmbedBuffer, seq_length, vocab_size, n_embd);
 
-  const outputBufferSize = bufferSizeCalc(seq_length, vocab_size);
-  const outputBuffer = createBuffer(device, outputBufferSize, GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ);
-  commandEncoder.copyBufferToBuffer(deEmbedOutputBuffer, 0, outputBuffer, 0, outputBufferSize);
+  // OUTPUT and VALIDATION
+
+  const outputEmbedBuffer = createOutputBuffer(device, commandEncoder, embeddedInputBuffer, seq_length, n_embd);
+  const outputBlockBuffers = [];
+  for (let i = 0; i < n_layers; i++) {
+    outputBlockBuffers.push(createOutputBuffer(device, commandEncoder, buffers[i], seq_length, n_embd));
+  }
+  const outputLayerBuffer = createOutputBuffer(device, commandEncoder, layerBuffer, seq_length, n_embd);
+  const outputLayerNormBuffer = createOutputBuffer(device, commandEncoder, layerNormOutputBuffer, seq_length, n_embd);
+  const outputBuffer = createOutputBuffer(device, commandEncoder, deEmbedOutputBuffer, seq_length, vocab_size);
+
   queue.submit([commandEncoder.finish()]);
 
+  await outputEmbedBuffer.mapAsync(GPUMapMode.READ);
+  for (let i = 0; i < n_layers; i++) {
+    await outputBlockBuffers[i].mapAsync(GPUMapMode.READ);
+  }
+  await outputLayerBuffer.mapAsync(GPUMapMode.READ);
+  await outputLayerNormBuffer.mapAsync(GPUMapMode.READ);
   await outputBuffer.mapAsync(GPUMapMode.READ);
 
-  return outputBuffer.getMappedRange();
+  // const outputEmbedBufferMat = formatAsMatrix(, seq_length, n_embd);
+  // const outputBlockBuffersMat = [];
+  // for (let i = 0; i < n_layers; i++) {
+  //   outputBlockBuffersMat.push(formatAsMatrix(new Float32Array(outputBlockBuffers[i].getMappedRange()), seq_length, n_embd));
+  // }
+  // const outputLayerBufferMat = formatAsMatrix(new Float32Array(outputLayerBuffer.getMappedRange()), seq_length, n_embd);
+  // const outputLayerNormBufferMat = formatAsMatrix(new Float32Array(outputLayerNormBuffer.getMappedRange()), seq_length, n_embd);
+
+  // You can't read twice from mapped range.
+  const output = outputBuffer.getMappedRange();
+
+  console.log("Validating output...");
+  console.log("Validating embedding...");
+  validateResult(new Float32Array(outputEmbedBuffer.getMappedRange()), validateModel[tokenIndex].tok_pos_emb);
+  console.log("Validating blocks...");
+  for (let i = 0; i < n_layers; i++) {
+    console.log(`\tValidating block ${i}...`);
+    validateResult(new Float32Array(outputBlockBuffers[i].getMappedRange()), validateModel[tokenIndex][`block${i}`]);
+  }
+  console.log("Validating layer norm...");
+  validateResult(new Float32Array(outputLayerNormBuffer.getMappedRange()), validateModel[tokenIndex].ln_f);
+  console.log("Validating logits...");
+  validateResult(new Float32Array(output), validateModel[tokenIndex].logits);
+
+  return output;
 }
 
-async function generateFromModel(prompt, max_new_tokens, temperature) {
+function createOutputBuffer(device, commandEncoder, buffer, rows, cols) {
+  const outputBufferSize = bufferSizeCalc(rows, cols);
+  const outputBuffer = createBuffer(device, outputBufferSize, GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ);
+  commandEncoder.copyBufferToBuffer(buffer, 0, outputBuffer, 0, outputBufferSize);
+  return outputBuffer;
+}
+
+let tokenIndex = 0;
+async function generateFromModel(prompt, max_new_tokens) {
   if (!modelParams || !stoi || !itos) {
     console.log("Model not loaded yet");
     return;
@@ -261,16 +285,23 @@ async function generateFromModel(prompt, max_new_tokens, temperature) {
   const context_size = modelParams.params.context_size;
   console.log("block_size", context_size);
   for (let i = 0; i < max_new_tokens; i++) {
+    tokenIndex = i;
+
     // console.log("prompt", prompt);
     const idx_cond = prompt.slice(-context_size);
     // console.log("running inference on sequence", idx_cond);
     const logits = await runInference(idx_cond);
-    // console.log("logits", logits);
+
     // pluck the logits at the final step and scale by desired temperature
-    const logits_scaled = logits; // / temperature;
+    // const logits_scaled = logits; // / temperature;
+
     // apply softmax to convert logits to (normalized) probabilities
-    const probs = simpleSoftmax(logits_scaled);
-    console.log("probs", probs);
+    const probs = simpleSoftmax(logits);
+
+    console.log("Probs", probs);
+    console.log("Max prob:", Math.max(...probs));
+    console.log("Max prob index:", probs.indexOf(Math.max(...probs)), "char:", itos[probs.indexOf(Math.max(...probs))]);
+
     // sample from the distribution
     const idx_next = sampleFromDistribution(probs);
     // append sampled index to the running sequence and continue
@@ -283,41 +314,49 @@ async function generateFromModel(prompt, max_new_tokens, temperature) {
   console.log("Output:", text);
 }
 
-function simpleSoftmax(input) {
-  const output = new Float32Array(input.length);
-  let max = input[0];
+let itos = null;
+let stoi = null;
+let modelParams = null;
+let bufferSizeCalc = null;
 
-  // Find the maximum value in the input array
-  for (let i = 1; i < input.length; i++) {
-    if (input[i] > max) {
-      max = input[i];
-    }
-  }
+let validateModel = null;
+const validateFile = "generation0.json";
 
-  // Calculate the exponentials, and keep track of the sum
-  let sumExp = 0.0;
-  for (let i = 0; i < input.length; i++) {
-    const exp = Math.exp(input[i] - max);
-    output[i] = exp;
-    sumExp += exp;
-  }
+(async () => {
+  modelParams = await loadModel("bad_shakespeare");
+  console.log("Params:", modelParams);
 
-  // Normalize the output array by dividing each value by the sum of exponentials
-  for (let i = 0; i < output.length; i++) {
-    output[i] /= sumExp;
-  }
+  const tokenDict = await (await fetch("models/tokens.json")).json();
 
-  return output;
-}
+  itos = tokenDict.itos;
+  stoi = tokenDict.stoi;
 
-function sampleFromDistribution(probs) {
-  const r = Math.random();
-  console.log("r", r);
-  let sum = 0;
-  for (let i = 0; i < probs.length; i++) {
-    sum += probs[i];
-    if (r <= sum) {
-      return i;
-    }
+  console.log("Tokens:", tokenDict);
+  console.log("Unique Tokens:", new Set(Object.values(tokenDict.itos)));
+
+  console.log("Model finished loading.");
+
+  const validateData = await (await fetch(`test/${validateFile}`)).json();
+
+  validateModel = validateData;
+
+  console.log("Validate model loaded", validateData);
+
+  generateFromModel("What is the answer to life, the universe, and everything?", 1);
+})();
+
+function validateResult(result, validate) {
+  const resultArray = formatAsMatrix(result, validate.shape[1], validate.shape[2]);
+  const validateArray = validate.data[0]; // Unpack from batch of 1
+
+  const equal = checkEqualMatrices(resultArray, validateArray);
+
+  console.log("Test passed:", equal);
+  if (!equal) {
+    // console.log("Result:", result);
+    // console.log("Validate:", validate);
+    console.log("Result mat:", resultArray);
+    console.log("Validate mat:", validateArray);
+    throw new Error("Test failed");
   }
 }
