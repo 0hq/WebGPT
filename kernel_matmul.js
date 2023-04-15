@@ -319,7 +319,7 @@ async function preMatMulDiscrete(device, queue, pipeline, A, B) {
   };
 }
 
-async function inlineMatMul(device, queue, commandEncoder, Abuffer, Bbuffer, rows, cols, shared) {
+function inlineMatMul(device, queue, commandEncoder, Abuffer, Bbuffer, rows, cols, shared) {
   const minStorageBufferOffsetAlignment = device.limits.minStorageBufferOffsetAlignment;
   const bufferSizeCalc = (dimA, dimB = 1) => alignedSize(dimA * dimB * Float32Array.BYTES_PER_ELEMENT, minStorageBufferOffsetAlignment);
   const workgroup_X = 16; // Dictated by shader.
@@ -333,14 +333,15 @@ async function inlineMatMul(device, queue, commandEncoder, Abuffer, Bbuffer, row
 
   const matmulUniformBuffer = createBuffer(device, 16, GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST);
   const matmulResultBuffer = createBuffer(device, bufferSizeCalc(rows, cols), GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC);
-  const attentionWeightsBindGroup = createBindGroup(device, matmulBindGroupLayout, [matmulUniformBuffer, matmulResultBuffer]);
-  queue.writeBuffer(attentionWeightsUniformBuffer, 0, new Uint32Array([rows, cols, shared]));
+  const matMulBindGroup = createBindGroup(device, matmulBindGroupLayout, [matmulUniformBuffer, matmulResultBuffer]);
+  queue.writeBuffer(matmulUniformBuffer, 0, new Uint32Array([rows, cols, shared]));
 
-  commandEncoder.setPipeline(matmulPipeline);
-  commandEncoder.setBindGroup(0, attentionWeightsBindGroup);
-  commandEncoder.setBindGroup(1, createBindGroup(device, inputBufferBindGroupLayout, [Abuffer, Bbuffer]));
-  commandEncoder.dispatchWorkgroups(workgroupCalc(rows, workgroup_Y), workgroupCalc(cols, workgroup_X));
-  commandEncoder.end();
+  const passEncoder = commandEncoder.beginComputePass();
+  passEncoder.setPipeline(matmulPipeline);
+  passEncoder.setBindGroup(0, matMulBindGroup);
+  passEncoder.setBindGroup(1, createBindGroup(device, inputBufferBindGroupLayout, [Abuffer, Bbuffer]));
+  passEncoder.dispatchWorkgroups(workgroupCalc(rows, workgroup_Y), workgroupCalc(cols, workgroup_X));
+  passEncoder.end();
 
   return matmulResultBuffer;
 }
