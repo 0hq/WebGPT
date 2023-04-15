@@ -56,3 +56,72 @@ async function runMLP(input, weight) {
 
   return await runMatMul(device, pipeline, input, weight);
 }
+
+/*
+
+
+  transformer.wte.weight: torch.Size([65, 128])
+transformer.wpe.weight: torch.Size([64, 128])
+transformer.h.0.ln_1.weight: torch.Size([128])
+transformer.h.0.attn.c_attn.weight: torch.Size([384, 128])
+transformer.h.0.attn.c_proj.weight: torch.Size([128, 128])
+transformer.h.0.ln_2.weight: torch.Size([128])
+transformer.h.0.mlp.c_fc.weight: torch.Size([512, 128])
+transformer.h.0.mlp.c_proj.weight: torch.Size([128, 512])
+transformer.h.1.ln_1.weight: torch.Size([128])
+transformer.h.1.attn.c_attn.weight: torch.Size([384, 128])
+transformer.h.1.attn.c_proj.weight: torch.Size([128, 128])
+transformer.h.1.ln_2.weight: torch.Size([128])
+transformer.h.1.mlp.c_fc.weight: torch.Size([512, 128])
+transformer.h.1.mlp.c_proj.weight: torch.Size([128, 512])
+transformer.h.2.ln_1.weight: torch.Size([128])
+transformer.h.2.attn.c_attn.weight: torch.Size([384, 128])
+transformer.h.2.attn.c_proj.weight: torch.Size([128, 128])
+transformer.h.2.ln_2.weight: torch.Size([128])
+transformer.h.2.mlp.c_fc.weight: torch.Size([512, 128])
+transformer.h.2.mlp.c_proj.weight: torch.Size([128, 512])
+transformer.h.3.ln_1.weight: torch.Size([128])
+transformer.h.3.attn.c_attn.weight: torch.Size([384, 128])
+transformer.h.3.attn.c_proj.weight: torch.Size([128, 128])
+transformer.h.3.ln_2.weight: torch.Size([128])
+transformer.h.3.mlp.c_fc.weight: torch.Size([512, 128])
+transformer.h.3.mlp.c_proj.weight: torch.Size([128, 512])
+transformer.ln_f.weight: torch.Size([128])
+lm_head.weight: torch.Size([65, 128])
+
+With bias:
+
+transformer.wte.weight: torch.Size([65, 64])
+transformer.wpe.weight: torch.Size([64, 64])
+
+transformer.h.0.ln_1.weight: torch.Size([64])
+transformer.h.0.ln_1.bias: torch.Size([64])
+transformer.h.0.attn.c_attn.weight: torch.Size([192, 64])
+transformer.h.0.attn.c_attn.bias: torch.Size([192])
+transformer.h.0.attn.c_proj.weight: torch.Size([64, 64])
+transformer.h.0.attn.c_proj.bias: torch.Size([64])
+transformer.h.0.ln_2.weight: torch.Size([64])
+transformer.h.0.ln_2.bias: torch.Size([64])
+transformer.h.0.mlp.c_fc.weight: torch.Size([256, 64])
+transformer.h.0.mlp.c_fc.bias: torch.Size([256])
+transformer.h.0.mlp.c_proj.weight: torch.Size([64, 256])
+transformer.h.0.mlp.c_proj.bias: torch.Size([64])
+
+transformer.h.1.ln_1.weight: torch.Size([64])
+transformer.h.1.ln_1.bias: torch.Size([64])
+transformer.h.1.attn.c_attn.weight: torch.Size([192, 64])
+transformer.h.1.attn.c_attn.bias: torch.Size([192])
+transformer.h.1.attn.c_proj.weight: torch.Size([64, 64])
+transformer.h.1.attn.c_proj.bias: torch.Size([64])
+transformer.h.1.ln_2.weight: torch.Size([64])
+transformer.h.1.ln_2.bias: torch.Size([64])
+transformer.h.1.mlp.c_fc.weight: torch.Size([256, 64])
+transformer.h.1.mlp.c_fc.bias: torch.Size([256])
+transformer.h.1.mlp.c_proj.weight: torch.Size([64, 256])
+transformer.h.1.mlp.c_proj.bias: torch.Size([64])
+
+transformer.ln_f.weight: torch.Size([64])
+transformer.ln_f.bias: torch.Size([64])
+lm_head.weight: torch.Size([65, 64])
+
+    */

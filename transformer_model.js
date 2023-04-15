@@ -1,4 +1,4 @@
-async function runGPT(
+async function runGPTOld(
   device,
   queue,
   seq_length,
@@ -92,7 +92,7 @@ async function runGPT(
   return outputBuffer.getMappedRange();
 }
 
-async function timeGPT() {
+async function timeGPTOld() {
   const { device, queue } = await initializeWebGPU();
   const context_size = 1024;
   const seq_length = 24;
@@ -188,7 +188,7 @@ async function timeGPT() {
   const attentionDotProductScale = 1 / Math.sqrt(n_embd / n_heads);
 
   const startTime = performance.now();
-  const result = await runGPT(
+  const result = await runGPTOld(
     device,
     queue,
     seq_length,
@@ -223,4 +223,4 @@ async function timeGPT() {
   printMatrix(seq_length, vocab_size, new Float32Array(result));
 }
 
-// timeGPT();
+// timeGPTOld();
