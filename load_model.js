@@ -426,8 +426,25 @@ function validateResult(result, validate) {
     // console.log("Validate:", validate);
     console.log("Result mat:", resultArray);
     console.log("Validate mat:", validateArray);
+
+    // Subtract the matrices
+    const diff = subtractMatrices(resultArray, validateArray);
+    console.log("Diff mat:", diff);
+
     throw new Error("Test failed");
   } else {
     console.log("Test passed!");
   }
+}
+
+function subtractMatrices(a, b) {
+  const result = [];
+  for (let i = 0; i < a.length; i++) {
+    result.push([]);
+    for (let j = 0; j < a[i].length; j++) {
+      result[i].push(a[i][j] - b[i][j]);
+    }
+  }
+
+  return result;
 }
