@@ -194,6 +194,36 @@ const createAttentionValuesShader = () => `
   }
   `;
 
+const createMultiplyShader = () => `
+  struct Matrix {
+      data: array<f32>, // runtime-sized array
+  }
+
+  struct Dimensions {
+    dimY: u32, // row dimension of input matrix
+    dimX: u32, // col dimension of input matrix
+    attentionScale: f32, 
+  };
+
+  @group(0) @binding(0) var<uniform> DimBuffer: Dimensions;
+  @group(0) @binding(1) var<storage, read_write> Result: Matrix;
+
+  @group(1) @binding(0) var<storage, read> Input: Matrix;
+
+  @compute @workgroup_size(16, 16)
+  fn main (@builtin(global_invocation_id) global_id: vec3<u32>) {
+      let row: u32 = global_id.x;
+      let col: u32 = global_id.y;
+      let dimX: u32 = DimBuffer.dimX;
+
+      if (row >= DimBuffer.dimY || col >= dimX) {
+        return;
+      }
+
+      Result.data[row * dimX + col] = Input.data[row * dimX + col] * DimBuffer.attentionScale;
+    } 
+  `;
+
 async function attention(rows, cols, input, n_heads, qkv_weights, qkv_bias, linear_weights, linear_bias) {
   const { device, queue } = await initializeWebGPU();
   const minStorageBufferOffsetAlignment = 1; // device.limits.minStorageBufferOffsetAlignment; // This was breaking things. Probably should check later.
@@ -442,6 +472,7 @@ function inlineAttention(
   commandEncoder,
   rows,
   cols,
+  attentionDotProductScale,
   inputBuffer,
   n_heads,
   qkvWeightsBuffer,
@@ -475,6 +506,10 @@ function inlineAttention(
   const attentionWeightsPipeline = createPipeline(device, createAttentionWeightsShader(), [attentionBindGroupLayout, attentionInputBindGroupLayout]);
   const attentionValuesPipeline = createPipeline(device, createAttentionValuesShader(), [attentionBindGroupLayout, attentionInputBindGroupLayout]);
 
+  // Multiply pipeline, can be reused.
+  const multiplyBindGroupLayout = createBindGroupLayout(device, ["uniform", "storage"]);
+  const multiplyPipeline = createPipeline(device, createMultiplyShader(), [multiplyBindGroupLayout, inputBufferBindGroupLayout]);
+
   // Causal mask pipeline, can be reused.
   const causalMaskBindGroupLayout = createBindGroupLayout(device, ["uniform", "storage"]);
   const causalMaskPipeline = createPipeline(device, createCausalMaskShader(), [causalMaskBindGroupLayout, inputBufferBindGroupLayout]);
@@ -503,6 +538,11 @@ function inlineAttention(
   queue.writeBuffer(attentionWeightsUniformBuffer, 0, new Uint32Array([rows, rows * n_heads, cols / n_heads, cols]));
 
   // TODO: Add divide the magic number before mask fill
+  const multiplyUniformBuffer = createBuffer(device, 16, GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST);
+  const multiplyResultBuffer = createBuffer(device, bufferSizeCalc(rows, rows * n_heads), GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC);
+  const multiplyBindGroup = createBindGroup(device, multiplyBindGroupLayout, [multiplyUniformBuffer, multiplyResultBuffer]);
+  queue.writeBuffer(multiplyUniformBuffer, 0, new Uint32Array([rows, rows * n_heads]));
+  queue.writeBuffer(multiplyUniformBuffer, 8, new Float32Array([attentionDotProductScale]));
 
   const causalMaskUniformBuffer = createBuffer(device, 16, GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST);
   const causalMaskResultBuffer = createBuffer(device, bufferSizeCalc(rows, rows * n_heads), GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC);
@@ -541,10 +581,17 @@ function inlineAttention(
   passEncoder_attentionWeights.dispatchWorkgroups(workgroupCalc(rows, workgroup_Y), workgroupCalc(rows * n_heads, workgroup_X));
   passEncoder_attentionWeights.end();
 
+  const passEncoder_multiply = commandEncoder.beginComputePass();
+  passEncoder_multiply.setPipeline(multiplyPipeline);
+  passEncoder_multiply.setBindGroup(0, multiplyBindGroup);
+  passEncoder_multiply.setBindGroup(1, createBindGroup(device, inputBufferBindGroupLayout, [attentionWeightsResultBuffer]));
+  passEncoder_multiply.dispatchWorkgroups(workgroupCalc(rows, workgroup_Y), workgroupCalc(rows * n_heads, workgroup_X));
+  passEncoder_multiply.end();
+
   const passEncoder_causalMask = commandEncoder.beginComputePass();
   passEncoder_causalMask.setPipeline(causalMaskPipeline);
   passEncoder_causalMask.setBindGroup(0, causalMaskBindGroup);
-  passEncoder_causalMask.setBindGroup(1, createBindGroup(device, inputBufferBindGroupLayout, [attentionWeightsResultBuffer]));
+  passEncoder_causalMask.setBindGroup(1, createBindGroup(device, inputBufferBindGroupLayout, [multiplyResultBuffer]));
   passEncoder_causalMask.dispatchWorkgroups(workgroupCalc(rows * n_heads, workgroup_Y), workgroupCalc(rows, workgroup_X));
   passEncoder_causalMask.end();
 
