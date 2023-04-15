@@ -79,7 +79,14 @@ function transformerBlock(
 
   const residualLinearOutputBuffer = inlineResidual(device, queue, commandEncoder, seq_length, n_embd, linearOutputBuffer, residualAttentionOutputBuffer);
 
-  return residualLinearOutputBuffer;
+  return {
+    layerNormAttentionOutputBuffer,
+    attentionOutputBuffer,
+    residualAttentionOutputBuffer,
+    layerNormLinearOutputBuffer,
+    linearOutputBuffer,
+    residualLinearOutputBuffer,
+  };
 }
 
 // (async () => {
