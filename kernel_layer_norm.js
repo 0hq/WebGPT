@@ -80,7 +80,7 @@ const createNormShaderInline = () => `
     } 
   `;
 
-function inlineLayerNorm(device, queue, commandEncoder, rows, cols, inputBuffer, gammaBuffer, betaBuffer) {
+function inlineLayerNorm(device, queue, commandEncoder, seq_length, n_embd, inputBuffer, gammaBuffer, betaBuffer) {
   const minStorageBufferOffsetAlignment = device.limits.minStorageBufferOffsetAlignment;
   const bufferSizeCalc = (dimA, dimB = 1) => alignedSize(dimA * dimB * Float32Array.BYTES_PER_ELEMENT, minStorageBufferOffsetAlignment);
   const workgroup_stats_Y = 16; // Dictated by shader.
@@ -98,20 +98,20 @@ function inlineLayerNorm(device, queue, commandEncoder, rows, cols, inputBuffer,
   const normPipeline = createPipeline(device, createNormShaderInline(), [normBindGroupLayout, normInputBindGroupLayout, inputBufferBindGroupLayout]);
 
   const statsUniformBuffer = createBuffer(device, 16, GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST);
-  const statsResultBuffer = createBuffer(device, bufferSizeCalc(rows, 2), GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC);
+  const statsResultBuffer = createBuffer(device, bufferSizeCalc(seq_length, 2), GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC);
   const statsBindGroup = createBindGroup(device, statsBindGroupLayout, [statsUniformBuffer, statsResultBuffer]);
-  queue.writeBuffer(statsUniformBuffer, 0, new Uint32Array([rows, cols]));
+  queue.writeBuffer(statsUniformBuffer, 0, new Uint32Array([seq_length, n_embd]));
 
   const normUniformBuffer = createBuffer(device, 16, GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST);
-  const normResultBuffer = createBuffer(device, bufferSizeCalc(rows, cols), GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC);
+  const normResultBuffer = createBuffer(device, bufferSizeCalc(seq_length, n_embd), GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC);
   const normBindGroup = createBindGroup(device, normBindGroupLayout, [normUniformBuffer, normResultBuffer]);
-  queue.writeBuffer(normUniformBuffer, 0, new Uint32Array([rows, cols]));
+  queue.writeBuffer(normUniformBuffer, 0, new Uint32Array([seq_length, n_embd]));
 
   const passEncoder_stats = commandEncoder.beginComputePass();
   passEncoder_stats.setPipeline(statsPipeline);
   passEncoder_stats.setBindGroup(0, statsBindGroup);
   passEncoder_stats.setBindGroup(1, createBindGroup(device, inputBufferBindGroupLayout, [inputBuffer]));
-  passEncoder_stats.dispatchWorkgroups(workgroupCalc(rows, workgroup_stats_Y));
+  passEncoder_stats.dispatchWorkgroups(workgroupCalc(seq_length, workgroup_stats_Y));
   passEncoder_stats.end();
 
   const passEncoder_norm = commandEncoder.beginComputePass();
@@ -119,7 +119,7 @@ function inlineLayerNorm(device, queue, commandEncoder, rows, cols, inputBuffer,
   passEncoder_norm.setBindGroup(0, normBindGroup);
   passEncoder_norm.setBindGroup(1, createBindGroup(device, normInputBindGroupLayout, [inputBuffer, gammaBuffer, betaBuffer]));
   passEncoder_norm.setBindGroup(2, createBindGroup(device, inputBufferBindGroupLayout, [statsResultBuffer]));
-  passEncoder_norm.dispatchWorkgroups(workgroupCalc(rows, workgroup_norm_Y), workgroupCalc(cols, workgroup_norm_X));
+  passEncoder_norm.dispatchWorkgroups(workgroupCalc(seq_length, workgroup_norm_Y), workgroupCalc(n_embd, workgroup_norm_X));
   passEncoder_norm.end();
 
   return normResultBuffer;

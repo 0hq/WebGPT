@@ -203,7 +203,7 @@ function validateResult(result, validate, verbose = false) {
 
     // Calculate the difference
     const diff = subtractMatrices(resultArray, validateArray);
-    // console.log("Diff mat:", diff);
+    console.log("Diff mat:", diff);
 
     // Sum the absolute values of the difference
     const sum = sumMatrix(diff);

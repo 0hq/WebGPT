@@ -31,10 +31,9 @@ const doValidation = true;
 
   console.log("Validate model loaded", validateData);
 
-  generateFromModel("What is the answer to life, the universe, and everything?", 1);
+  // generateFromModel("What is the answer to life, the universe, and everything?", 1);
 
-  // cpuTest();
-  // cpuTest2();
+  runAttentionTest();
 })();
 
 async function generateFromModel(prompt, max_new_tokens) {
@@ -81,158 +80,101 @@ async function generateFromModel(prompt, max_new_tokens) {
   console.log("Output:", text);
 }
 
-function cpuTest() {
-  const inputEmbeddings = validateModel[tokenIndex].tok_pos_emb.data[0];
-
-  const biasEnabled = modelParams.params.biasEnabled;
-
-  const prefix = `transformer.h.${0}.`;
-
-  const layerNormAttentionGamma = rawModel[`${prefix}ln_1.weight`].values.flat().map(parseFloat);
-  const layerNormAttentionBeta = biasEnabled ? rawModel[`${prefix}ln_1.bias`].values.flat().map(parseFloat) : new Array(n_embd).fill(0);
-
-  console.log(inputEmbeddings, layerNormAttentionBeta, layerNormAttentionGamma);
-
-  // Calculate stats
-
-  // inputEmbeddings dim is 57 x 128
-
-  const average = (array) => array.reduce((a, b) => a + b) / array.length;
-  const averageInputEmbeddings = inputEmbeddings.map((row) => average(row));
-
-  console.log("avg", averageInputEmbeddings);
-
-  const variance = (array) => {
-    const avg = average(array);
-    return average(array.map((a) => (a - avg) ** 2)) + 1e-5;
-  };
-  const varianceInputEmbeddings = inputEmbeddings.map((row) => variance(row));
-
-  console.log("var", varianceInputEmbeddings);
-
-  const stdevInputEmbeddings = varianceInputEmbeddings.map(Math.sqrt);
-
-  console.log("stdev", stdevInputEmbeddings);
-
-  // let mean = Stats.data[row * 2];
-  // let stdev = Stats.data[row * 2 + 1];
-  // let output = (Input.data[row * dimX + col] - mean) / stdev;
-  // let gamma = Gamma.data[row * 2];
-  // let beta = Beta.data[row * 2];
-  // let shift = gamma * output + beta;
-  // Result.data[row * dimX + col] = shift;
-
-  const output = inputEmbeddings.map((row, rowIdx) => {
-    return row.map((col, colIdx) => {
-      const mean = averageInputEmbeddings[rowIdx];
-      const stdev = stdevInputEmbeddings[rowIdx];
-      const gamma = layerNormAttentionGamma[colIdx];
-      const beta = layerNormAttentionBeta[colIdx];
-      return ((col - mean) / stdev) * gamma + beta;
-    });
-  });
-
-  console.log("output", output);
-
-  const expectedDict = validateModel[tokenIndex][`block${0}_ln1`];
-  const expected = expectedDict.data[0];
-  console.log("expected output", expected);
-}
-
-function cpuTest2() {
-  const inputEmbeddings = validateModel[0].tok_pos_emb.data[0];
-
-  const biasEnabled = modelParams.params.biasEnabled;
-  const n_embd = modelParams.params.n_embd;
-
-  const prefix = `transformer.h.${0}.`;
-
-  const layerNormAttentionGamma = rawModel[`${prefix}ln_1.weight`].values.flat().map(parseFloat);
-  const layerNormAttentionBeta = biasEnabled ? rawModel[`${prefix}ln_1.bias`].values.flat().map(parseFloat) : new Array(n_embd).fill(0);
-
-  // const layerNormAttentionGamma = new Array(n_embd).fill(1);
-  // const layerNormAttentionBeta = new Array(n_embd).fill(0);
-
-  console.log(inputEmbeddings, layerNormAttentionBeta, layerNormAttentionGamma);
-
-  const average = (array) => array.reduce((a, b) => a + b) / array.length;
-
-  // inputEmbeddings dim is 57 x 128
-  // Calculate column averages of of 1 x 128
-  const averageInputEmbeddings = inputEmbeddings[0].map((_, colIdx) => average(inputEmbeddings.map((row) => row[colIdx])));
-
-  // console.log("avg", averageInputEmbeddings);
-
-  // Calculate column variances of of 1 x 128
-  const variance = (array) => {
-    const avg = average(array);
-    return average(array.map((a) => (a - avg) ** 2)) + 1e-5;
-  };
-  const varianceInputEmbeddings = inputEmbeddings[0].map((_, colIdx) => variance(inputEmbeddings.map((row) => row[colIdx])));
-
-  // console.log("var", varianceInputEmbeddings);
-
-  // Calculate column stdevs of of 1 x 128
-  const stdevInputEmbeddings = varianceInputEmbeddings.map(Math.sqrt);
-
-  // console.log("stdev", stdevInputEmbeddings);
-
-  // Calculate output of 57 x 128
-  const output = inputEmbeddings.map((row, rowIdx) => {
-    return row.map((col, colIdx) => {
-      const mean = averageInputEmbeddings[colIdx];
-      const stdev = stdevInputEmbeddings[colIdx];
-      const gamma = layerNormAttentionGamma[colIdx];
-      const beta = layerNormAttentionBeta[colIdx];
-      return ((col - mean) / stdev) * gamma + beta;
-    });
-  });
-  console.log("output", output);
-
-  // Verify that every column is gaussian
-  // verifyLayerNorm(output);
-
-  const averageOutput = output[0].map((_, colIdx) => average(output.map((row) => row[colIdx])));
-  console.log(averageOutput);
-
-  const stdevOutput = output[0].map((_, colIdx) => variance(output.map((row) => row[colIdx]))).map(Math.sqrt);
-  console.log(stdevOutput);
-
-  const expectedDict = validateModel[tokenIndex][`block${0}_ln1`];
-  const expected = expectedDict.data[0];
-  console.log("expected output", expected);
-
-  const averageExpectedOutput = expected[0].map((_, colIdx) => average(expected.map((row) => row[colIdx])));
-  console.log(averageExpectedOutput);
-
-  const stdevExpectedOutput = expected[0].map((_, colIdx) => variance(expected.map((row) => row[colIdx]))).map(Math.sqrt);
-  console.log(stdevExpectedOutput);
-
-  const averageExpectedOutputRow = expected.map((row) => average(row));
-  console.log(averageExpectedOutputRow);
-
-  const stdevExpectedOutputRow = expected.map((row) => variance(row)).map(Math.sqrt);
-  console.log(stdevExpectedOutputRow);
-}
-
-function verifyLayerNorm(output, epsilon = 1e-2) {
-  const columnMean = (array, colIdx) => array.reduce((a, b) => a + b[colIdx], 0) / array.length;
-
-  const columnStdev = (array, colIdx) => {
-    const mean = columnMean(array, colIdx);
-    const variance = array.reduce((a, b) => a + (b[colIdx] - mean) ** 2, 0) / array.length;
-    return Math.sqrt(variance + 1e-5);
-  };
-
-  const numColumns = output[0].length;
-  for (let colIdx = 0; colIdx < numColumns; colIdx++) {
-    const mean = columnMean(output, colIdx);
-    const stdev = columnStdev(output, colIdx);
-    if (Math.abs(mean) > epsilon || Math.abs(stdev - 1) > epsilon) {
-      console.log(`Column ${colIdx} does not meet the criteria: mean = ${mean}, stdev = ${stdev}`);
-      return false;
-    }
+async function runAttentionTest() {
+  if (!modelParams) {
+    console.log("Model not loaded yet");
+    return;
   }
-  console.log("All columns meet the criteria");
-  return true;
+
+  const { device, queue, params, embdBuffer, posEmbdBuffer, layer_buffers, normGammaBuffer, normBetaBuffer, deEmbedBuffer } = modelParams;
+  const { attentionDotProductScale, biasEnabled, n_embd, n_heads, n_layers, vocab_size, hidden_size, context_size } = params;
+  const commandEncoder = device.createCommandEncoder();
+
+  const seq_length = 57;
+
+  const layerNormAttention = validateModel[tokenIndex][`block0_ln1`].data[0];
+  const layerNormAttentionOutput = [];
+  for (let i = 0; i < seq_length; i++) {
+    layerNormAttentionOutput.push(...layerNormAttention[i]);
+  }
+
+  console.log(layerNormAttentionOutput);
+
+  const layerNormAttentionOutputBuffer = createBuffer(device, bufferSizeCalc(seq_length, n_embd), GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST);
+  queue.writeBuffer(layerNormAttentionOutputBuffer, 0, new Float32Array(layerNormAttentionOutput));
+
+  const startTime = performance.now();
+
+  const layer_buffer = layer_buffers[0];
+  // normAttentionGammaBuffer,
+  // normAttentionBetaBuffer,
+  // qkvWeightsBuffer,
+  // qkvBiasBuffer,
+  // linearWeightsBuffer,
+  // linearBiasBuffer,
+  // normLinearGammaBuffer,
+  // normLinearBetaBuffer,
+  // firstLayerWeightsBuffer,
+  // firstLayerBiasBuffer,
+  // secondLayerWeightsBuffer,
+  // secondLayerBiasBuffer
+  const {
+    qkvResultBuffer,
+    splitQResultBuffer,
+    splitKResultBuffer,
+    splitVResultBuffer,
+    attentionWeightsResultBuffer,
+    multiplyResultBuffer,
+    causalMaskResultBuffer,
+    attentionValuesResultBuffer,
+    linearResultBuffer,
+  } = devInlineAttention(
+    device,
+    queue,
+    commandEncoder,
+    seq_length,
+    n_embd,
+    attentionDotProductScale,
+    layerNormAttentionOutputBuffer,
+    n_heads,
+    layer_buffer[2],
+    layer_buffer[3],
+    layer_buffer[4],
+    layer_buffer[5]
+  );
+
+  const outputQKV = createOutputBuffer(device, commandEncoder, qkvResultBuffer, seq_length, 3 * n_embd);
+  const outputWeights = createOutputBuffer(device, commandEncoder, attentionWeightsResultBuffer, seq_length, seq_length * n_heads);
+  const outputAdjust = createOutputBuffer(device, commandEncoder, multiplyResultBuffer, seq_length, seq_length * n_heads);
+  const outputMask = createOutputBuffer(device, commandEncoder, causalMaskResultBuffer, seq_length, seq_length * n_heads);
+  const outputValues = createOutputBuffer(device, commandEncoder, attentionValuesResultBuffer, seq_length, n_embd);
+
+  const outputAttentionBuffer = createOutputBuffer(device, commandEncoder, linearResultBuffer, seq_length, n_embd);
+
+  queue.submit([commandEncoder.finish()]);
+
+  await outputAttentionBuffer.mapAsync(GPUMapMode.READ);
+  await outputQKV.mapAsync(GPUMapMode.READ);
+  await outputWeights.mapAsync(GPUMapMode.READ);
+  await outputAdjust.mapAsync(GPUMapMode.READ);
+  await outputMask.mapAsync(GPUMapMode.READ);
+  await outputValues.mapAsync(GPUMapMode.READ);
+
+  console.log("qkv", formatAsMatrix(new Float32Array(outputQKV.getMappedRange()), seq_length, 3 * n_embd));
+  console.log("weights", formatAsMatrix(new Float32Array(outputWeights.getMappedRange()), seq_length, seq_length * n_heads));
+  console.log("adjust", formatAsMatrix(new Float32Array(outputAdjust.getMappedRange()), seq_length, seq_length * n_heads));
+  console.log("mask", formatAsMatrix(new Float32Array(outputMask.getMappedRange()), seq_length * n_heads, seq_length));
+  console.log("values", formatAsMatrix(new Float32Array(outputValues.getMappedRange()), seq_length, n_embd));
+
+  validateResult(new Float32Array(outputAttentionBuffer.getMappedRange()), validateModel[tokenIndex][`block0_attn`]);
+
+  const endTime = performance.now();
+  console.log(`Time: ${endTime - startTime} ms`);
+
+  console.log("Result:", result);
+
+  const resultMatrix = formatAsMatrix(new Float32Array(result), seq_length, vocab_size);
+  console.log("Result matrix:");
+
+  return resultMatrix[0];
 }
