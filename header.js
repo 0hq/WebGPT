@@ -71,3 +71,10 @@ function createBuffer(device, size, usage) {
     usage: usage,
   });
 }
+
+function createOutputBuffer(device, commandEncoder, buffer, rows, cols) {
+  const outputBufferSize = bufferSizeCalc(rows, cols);
+  const outputBuffer = createBuffer(device, outputBufferSize, GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ);
+  commandEncoder.copyBufferToBuffer(buffer, 0, outputBuffer, 0, outputBufferSize);
+  return outputBuffer;
+}

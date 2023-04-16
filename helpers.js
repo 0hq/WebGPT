@@ -63,6 +63,23 @@ function checkEqualMatrices(a, b) {
   return true;
 }
 
+function checkAlmostEqualMatrices(a, b) {
+  if (a.length !== b.length) {
+    return false;
+  }
+  for (let i = 0; i < a.length; i++) {
+    if (a[i].length !== b[i].length) {
+      return false;
+    }
+    for (let j = 0; j < a[i].length; j++) {
+      if (a[i][j] - b[i][j] > 0.001) {
+        return false;
+      }
+    }
+  }
+  return true;
+}
+
 function simpleSoftmax(input) {
   const output = new Float32Array(input.length);
   let max = input[0];
@@ -99,4 +116,16 @@ function sampleFromDistribution(probs) {
       return i;
     }
   }
+}
+
+function subtractMatrices(a, b) {
+  const result = [];
+  for (let i = 0; i < a.length; i++) {
+    result.push([]);
+    for (let j = 0; j < a[i].length; j++) {
+      result[i].push(a[i][j] - b[i][j]);
+    }
+  }
+
+  return result;
 }

@@ -1,4 +1,51 @@
-async function runGPTOld(
+async function runInference(prompt) {
+  if (!modelParams) {
+    console.log("Model not loaded yet");
+    return;
+  }
+
+  const { device, queue, params, embdBuffer, posEmbdBuffer, layer_buffers, normGammaBuffer, normBetaBuffer, deEmbedBuffer } = modelParams;
+  const { attentionDotProductScale, biasEnabled, n_embd, n_heads, n_layers, vocab_size, hidden_size, context_size } = params;
+
+  const seq_length = prompt.length;
+  const inputMatrix = new Float32Array(seq_length * vocab_size);
+  for (let i = 0; i < seq_length; i++) {
+    inputMatrix[i * vocab_size + prompt[i]] = 1;
+  }
+  // printMatrix(seq_length, vocab_size, new Float32Array(inputMatrix));
+  const inputBuffer = createBuffer(device, bufferSizeCalc(seq_length, vocab_size), GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST);
+  queue.writeBuffer(inputBuffer, 0, inputMatrix);
+
+  const startTime = performance.now();
+  const result = await runGPT(
+    device,
+    queue,
+    seq_length,
+    vocab_size,
+    n_embd,
+    n_heads,
+    n_layers,
+    attentionDotProductScale,
+    inputBuffer,
+    embdBuffer,
+    posEmbdBuffer,
+    layer_buffers,
+    normGammaBuffer,
+    normBetaBuffer,
+    deEmbedBuffer
+  );
+  const endTime = performance.now();
+  console.log(`Time: ${endTime - startTime} ms`);
+
+  console.log("Result:", result);
+
+  const resultMatrix = formatAsMatrix(new Float32Array(result), seq_length, vocab_size);
+  console.log("Result matrix:");
+
+  return resultMatrix[0];
+}
+
+async function runGPT(
   device,
   queue,
   seq_length,
@@ -7,33 +54,20 @@ async function runGPTOld(
   n_heads,
   n_layers,
   attentionDotProductScale,
-  bufferSizeCalc,
   inputBuffer,
   embdBuffer,
   posEmbdBuffer,
-  normAttentionGammaBuffer,
-  normAttentionBetaBuffer,
-  qkvWeightsBuffer,
-  qkvBiasBuffer,
-  linearWeightsBuffer,
-  linearBiasBuffer,
-  normLinearGammaBuffer,
-  normLinearBetaBuffer,
-  firstLayerWeightsBuffer,
-  firstLayerBiasBuffer,
-  secondLayerWeightsBuffer,
-  secondLayerBiasBuffer,
+  layer_buffers,
   normGammaBuffer,
   normBetaBuffer,
   deEmbedBuffer
 ) {
+  console.log("Running GPT-2 inference");
+  console.log("seq_length:", seq_length);
+
   const commandEncoder = device.createCommandEncoder();
-  let layerBuffer = inputBuffer;
 
-  // COMPUTE
-
-  const embdOutputBuffer = inlineMatMul(device, queue, commandEncoder, layerBuffer, embdBuffer, seq_length, n_embd, vocab_size);
-
+  const embdOutputBuffer = inlineMatMul(device, queue, commandEncoder, inputBuffer, embdBuffer, seq_length, n_embd, vocab_size);
   // Crop the position embeddings to the correct size.
   const posEmbdOutputBuffer = createBuffer(
     device,
@@ -47,180 +81,150 @@ async function runGPTOld(
     0, // Destination offset (starting from the beginning of the cropped buffer)
     bufferSizeCalc(seq_length, n_embd) // Number of bytes to copy
   );
-
   // Residual connection is just elementwise addition, can be used for combining embedding and position embedding.
   const embeddedInputBuffer = inlineResidual(device, queue, commandEncoder, seq_length, n_embd, embdOutputBuffer, posEmbdOutputBuffer);
-  layerBuffer = embeddedInputBuffer;
+  let layerBuffer = embeddedInputBuffer;
+
+  // Used for validation.
+  const buffers = [];
 
   for (let i = 0; i < n_layers; i++) {
-    const blockOutputBuffer = transformerBlock(
-      device,
-      queue,
-      commandEncoder,
-      seq_length,
-      n_embd,
-      n_heads,
-      attentionDotProductScale,
-      layerBuffer,
-      normAttentionGammaBuffer,
-      normAttentionBetaBuffer,
-      qkvWeightsBuffer,
-      qkvBiasBuffer,
-      linearWeightsBuffer,
-      linearBiasBuffer,
-      normLinearGammaBuffer,
-      normLinearBetaBuffer,
-      firstLayerWeightsBuffer,
-      firstLayerBiasBuffer,
-      secondLayerWeightsBuffer,
-      secondLayerBiasBuffer
-    );
-    layerBuffer = blockOutputBuffer;
+    const layer_params = layer_buffers[i];
+    const {
+      layerNormAttentionOutputBuffer,
+      attentionOutputBuffer,
+      residualAttentionOutputBuffer,
+      layerNormLinearOutputBuffer,
+      linearOutputBuffer,
+      residualLinearOutputBuffer,
+    } = transformerBlock(device, queue, commandEncoder, seq_length, n_embd, n_heads, attentionDotProductScale, layerBuffer, ...layer_params);
+    buffers.push({
+      layerNormAttentionOutputBuffer,
+      attentionOutputBuffer,
+      residualAttentionOutputBuffer,
+      layerNormLinearOutputBuffer,
+      linearOutputBuffer,
+      residualLinearOutputBuffer,
+    });
+    layerBuffer = residualLinearOutputBuffer;
   }
 
   const layerNormOutputBuffer = inlineLayerNorm(device, queue, commandEncoder, seq_length, n_embd, layerBuffer, normGammaBuffer, normBetaBuffer);
 
   const deEmbedOutputBuffer = inlineMatMul(device, queue, commandEncoder, layerNormOutputBuffer, deEmbedBuffer, seq_length, vocab_size, n_embd);
 
-  const outputBufferSize = bufferSizeCalc(seq_length, vocab_size);
-  const outputBuffer = createBuffer(device, outputBufferSize, GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ);
-  commandEncoder.copyBufferToBuffer(deEmbedOutputBuffer, 0, outputBuffer, 0, outputBufferSize);
+  // OUTPUT and VALIDATION
+
+  const outputEmbedBuffer = createOutputBuffer(device, commandEncoder, embeddedInputBuffer, seq_length, n_embd);
+  const outputNormGammaBuffer = createOutputBuffer(device, commandEncoder, layer_buffers[0][0], 1, n_embd);
+
+  const outputBlockBuffers = [];
+  for (let i = 0; i < n_layers; i++) {
+    const block = buffers[i];
+    const outputLayerNormAttentionBuffer = createOutputBuffer(device, commandEncoder, block.layerNormAttentionOutputBuffer, seq_length, n_embd);
+    const outputAttentionBuffer = createOutputBuffer(device, commandEncoder, block.attentionOutputBuffer, seq_length, n_embd);
+    const outputResidualAttentionBuffer = createOutputBuffer(device, commandEncoder, block.residualAttentionOutputBuffer, seq_length, n_embd);
+    const outputLayerNormLinearBuffer = createOutputBuffer(device, commandEncoder, block.layerNormLinearOutputBuffer, seq_length, n_embd);
+    const outputLinearBuffer = createOutputBuffer(device, commandEncoder, block.linearOutputBuffer, seq_length, n_embd);
+    const outputResidualLinearBuffer = createOutputBuffer(device, commandEncoder, block.residualLinearOutputBuffer, seq_length, n_embd);
+    outputBlockBuffers.push([
+      outputLayerNormAttentionBuffer,
+      outputAttentionBuffer,
+      outputResidualAttentionBuffer,
+      outputLayerNormLinearBuffer,
+      outputLinearBuffer,
+      outputResidualLinearBuffer,
+    ]);
+  }
+  const outputLayerBuffer = createOutputBuffer(device, commandEncoder, layerBuffer, seq_length, n_embd);
+  const outputLayerNormBuffer = createOutputBuffer(device, commandEncoder, layerNormOutputBuffer, seq_length, n_embd);
+  const outputBuffer = createOutputBuffer(device, commandEncoder, deEmbedOutputBuffer, seq_length, vocab_size);
+
   queue.submit([commandEncoder.finish()]);
 
+  await outputEmbedBuffer.mapAsync(GPUMapMode.READ);
+  await outputNormGammaBuffer.mapAsync(GPUMapMode.READ);
+
+  for (let i = 0; i < n_layers; i++) {
+    const block = outputBlockBuffers[i];
+    for (let j = 0; j < block.length; j++) {
+      await block[j].mapAsync(GPUMapMode.READ);
+    }
+  }
+  await outputLayerBuffer.mapAsync(GPUMapMode.READ);
+  await outputLayerNormBuffer.mapAsync(GPUMapMode.READ);
   await outputBuffer.mapAsync(GPUMapMode.READ);
 
-  return outputBuffer.getMappedRange();
+  // You can't read twice from mapped range.
+  const output = outputBuffer.getMappedRange();
+
+  if (doValidation) {
+    console.log("Validating output...");
+    console.log("Validating embedding...");
+    validateResult(new Float32Array(outputEmbedBuffer.getMappedRange()), validateModel[tokenIndex].tok_pos_emb, true);
+    // console.log("norm gamma", new Float32Array(outputNormGammaBuffer.getMappedRange()));
+    console.log("Validating blocks...");
+    for (let i = 0; i < n_layers; i++) {
+      console.log(`\tValidating block ${i}...`);
+      const block = outputBlockBuffers[i];
+      console.log("\t\tValidating first layer norm...");
+      validateResult(new Float32Array(outputBlockBuffers[i][0].getMappedRange()), validateModel[tokenIndex][`block${i}_ln1`]);
+      console.log("\t\tValidating attention...");
+      validateResult(new Float32Array(outputBlockBuffers[i][1].getMappedRange()), validateModel[tokenIndex][`block${i}_attn`]);
+      console.log("\t\tValidating residual attention...");
+      validateResult(new Float32Array(outputBlockBuffers[i][2].getMappedRange()), validateModel[tokenIndex][`block${i}_r1`]);
+      console.log("\t\tValidating second layer norm...");
+      validateResult(new Float32Array(outputBlockBuffers[i][3].getMappedRange()), validateModel[tokenIndex][`block${i}_ln2`]);
+      console.log("\t\tValidating mlp...");
+      validateResult(new Float32Array(outputBlockBuffers[i][4].getMappedRange()), validateModel[tokenIndex][`block${i}_mlp`]);
+      console.log("\t\tValidating residual mlp...");
+      validateResult(new Float32Array(outputBlockBuffers[i][5].getMappedRange()), validateModel[tokenIndex][`block${i}_r2`]);
+    }
+    console.log("Validating layer norm...");
+    validateResult(new Float32Array(outputLayerNormBuffer.getMappedRange()), validateModel[tokenIndex].ln_f);
+    console.log("Validating logits...");
+    validateResult(new Float32Array(output), validateModel[tokenIndex].logits);
+  }
+
+  return output;
 }
 
-async function timeGPTOld() {
-  const { device, queue } = await initializeWebGPU();
-  const context_size = 1024;
-  const seq_length = 24;
-  const vocab_size = 50304;
-  const n_embd = 768 / 2;
-  const n_heads = 4;
-  const n_layers = 12;
-  const inputMatrix = new Float32Array(seq_length * vocab_size).fill(1);
-  const hidden_size = n_embd * 4; // Transformer block has 4 hidden layers by default, not a param.
-  const minStorageBufferOffsetAlignment = 1; // device.limits.minStorageBufferOffsetAlignment; // This was breaking things. Probably should check later.
-  const bufferSizeCalc = (dimA, dimB = 1) => alignedSize(dimA * dimB * Float32Array.BYTES_PER_ELEMENT, minStorageBufferOffsetAlignment);
+function validateResult(result, validate, verbose = false) {
+  const resultArray = formatAsMatrix(result, validate.shape[1], validate.shape[2]);
+  const validateArray = validate.data[0]; // Unpack from batch of 1
 
-  const inputBuffer = createBuffer(device, bufferSizeCalc(seq_length, vocab_size), GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST);
-  queue.writeBuffer(inputBuffer, 0, inputMatrix);
+  const equal = checkAlmostEqualMatrices(resultArray, validateArray);
 
-  const embeddings = new Float32Array(vocab_size * n_embd).fill(-1);
-  const embdBuffer = createBuffer(device, bufferSizeCalc(vocab_size, n_embd), GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST);
-  queue.writeBuffer(embdBuffer, 0, embeddings);
+  if (!equal) {
+    // console.log("Result:", result);
+    // console.log("Validate:", validate);
+    console.log("Result mat:", resultArray);
+    console.log("Validate mat:", validateArray);
 
-  const posEmbeddings = new Float32Array(context_size * n_embd).fill(-1);
-  const posEmbdBuffer = createBuffer(device, bufferSizeCalc(context_size, n_embd), GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST | GPUBufferUsage.COPY_SRC);
-  queue.writeBuffer(posEmbdBuffer, 0, posEmbeddings);
+    // Calculate the difference
+    const diff = subtractMatrices(resultArray, validateArray);
+    // console.log("Diff mat:", diff);
 
-  // Transformer Block Weights
-  const layerNormAttentionGamma = new Array(n_embd).fill(1);
-  const layerNormAttentionBeta = new Array(n_embd).fill(1);
-  const qkv_bias = new Float32Array(n_embd * 3);
-  const qkv_weights = new Float32Array(n_embd * 3 * n_embd);
-  for (let y = 0; y < n_embd; y++) {
-    for (let x = 0; x < n_embd * 3; x++) {
-      qkv_bias[x] = 0.1;
-      qkv_weights[y * n_embd * 3 + x] = 0.1;
+    // Sum the absolute values of the difference
+    const sum = sumMatrix(diff);
+    console.log("Sum:", sum);
+
+    throw new Error("Test failed");
+  } else {
+    console.log("Test passed!");
+    if (verbose) {
+      console.log("Result mat:", resultArray);
+      // console.log("Validate mat:", validateArray);
     }
   }
-  const linear_bias = new Float32Array(n_embd).fill(0);
-  const linear_weights = new Float32Array(n_embd * n_embd);
-  for (let y = 0; y < n_embd; y++) {
-    for (let x = 0; x < n_embd; x++) {
-      if (x === y) linear_weights[y * n_embd + x] = 0.1;
-      else linear_weights[y * n_embd + x] = 0;
-    }
-  }
-  const layerNormLinearGamma = new Float32Array(n_embd).fill(1);
-  const layerNormLinearBeta = new Float32Array(n_embd).fill(0);
-  const firstLayerWeights = new Float32Array(hidden_size * n_embd).fill(1);
-  const firstLayerBias = new Float32Array(hidden_size).fill(1);
-  const secondLayerWeights = new Float32Array(hidden_size * n_embd).fill(1);
-  const secondLayerBias = new Float32Array(hidden_size).fill(1);
-
-  const normAttentionGammaBuffer = createBuffer(device, bufferSizeCalc(n_embd), GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST);
-  const normAttentionBetaBuffer = createBuffer(device, bufferSizeCalc(n_embd), GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST);
-  queue.writeBuffer(normAttentionGammaBuffer, 0, new Float32Array(layerNormAttentionGamma));
-  queue.writeBuffer(normAttentionBetaBuffer, 0, new Float32Array(layerNormAttentionBeta));
-
-  const qkvWeightsBuffer = createBuffer(device, bufferSizeCalc(n_embd, 3 * n_embd), GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST);
-  const qkvBiasBuffer = createBuffer(device, bufferSizeCalc(3 * n_embd), GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST);
-
-  queue.writeBuffer(qkvWeightsBuffer, 0, qkv_weights);
-  queue.writeBuffer(qkvBiasBuffer, 0, qkv_bias);
-
-  const linearWeightsBuffer = createBuffer(device, bufferSizeCalc(n_embd, n_embd), GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST);
-  const linearBiasBuffer = createBuffer(device, bufferSizeCalc(n_embd), GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST);
-
-  queue.writeBuffer(linearWeightsBuffer, 0, linear_weights);
-  queue.writeBuffer(linearBiasBuffer, 0, linear_bias);
-
-  const normLinearGammaBuffer = createBuffer(device, bufferSizeCalc(n_embd), GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST);
-  const normLinearBetaBuffer = createBuffer(device, bufferSizeCalc(n_embd), GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST);
-  queue.writeBuffer(normLinearGammaBuffer, 0, layerNormLinearGamma);
-  queue.writeBuffer(normLinearBetaBuffer, 0, layerNormLinearBeta);
-
-  const firstLayerWeightsBuffer = createBuffer(device, bufferSizeCalc(n_embd, hidden_size), GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST);
-  const firstLayerBiasBuffer = createBuffer(device, bufferSizeCalc(hidden_size), GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST);
-  queue.writeBuffer(firstLayerWeightsBuffer, 0, firstLayerWeights);
-  queue.writeBuffer(firstLayerBiasBuffer, 0, firstLayerBias);
-
-  const secondLayerWeightsBuffer = createBuffer(device, bufferSizeCalc(hidden_size, n_embd), GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST);
-  const secondLayerBiasBuffer = createBuffer(device, bufferSizeCalc(hidden_size), GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST);
-  queue.writeBuffer(secondLayerWeightsBuffer, 0, secondLayerWeights);
-  queue.writeBuffer(secondLayerBiasBuffer, 0, secondLayerBias);
-
-  const layerNormGamma = new Float32Array(seq_length).fill(1);
-  const layerNormBeta = new Float32Array(seq_length).fill(0);
-  const normGammaBuffer = createBuffer(device, bufferSizeCalc(seq_length), GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST);
-  const normBetaBuffer = createBuffer(device, bufferSizeCalc(seq_length), GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST);
-  queue.writeBuffer(normGammaBuffer, 0, layerNormGamma);
-  queue.writeBuffer(normBetaBuffer, 0, layerNormBeta);
-
-  const deEmbeddings = new Float32Array(n_embd * vocab_size).fill(-1);
-  const deEmbedBuffer = createBuffer(device, bufferSizeCalc(n_embd, vocab_size), GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST);
-  queue.writeBuffer(deEmbedBuffer, 0, deEmbeddings);
-
-  const attentionDotProductScale = 1 / Math.sqrt(n_embd / n_heads);
-
-  const startTime = performance.now();
-  const result = await runGPTOld(
-    device,
-    queue,
-    seq_length,
-    vocab_size,
-    n_embd,
-    n_heads,
-    n_layers,
-    attentionDotProductScale,
-    bufferSizeCalc,
-    inputBuffer,
-    embdBuffer,
-    posEmbdBuffer,
-    normAttentionGammaBuffer,
-    normAttentionBetaBuffer,
-    qkvWeightsBuffer,
-    qkvBiasBuffer,
-    linearWeightsBuffer,
-    linearBiasBuffer,
-    normLinearGammaBuffer,
-    normLinearBetaBuffer,
-    firstLayerWeightsBuffer,
-    firstLayerBiasBuffer,
-    secondLayerWeightsBuffer,
-    secondLayerBiasBuffer,
-    normGammaBuffer,
-    normBetaBuffer,
-    deEmbedBuffer
-  );
-  const endTime = performance.now();
-  console.log(`Time: ${endTime - startTime} ms`);
-
-  printMatrix(seq_length, vocab_size, new Float32Array(result));
 }
 
-// timeGPTOld();
+function sumMatrix(matrix) {
+  let sum = 0;
+  for (let i = 0; i < matrix.length; i++) {
+    for (let j = 0; j < matrix[i].length; j++) {
+      sum += Math.abs(matrix[i][j]);
+    }
+  }
+  return sum;
+}
