@@ -52,7 +52,7 @@ async function loadModel(filename) {
     const linear_bias = biasEnabled ? model[`${prefix}attn.c_proj.bias`].values.flat().map(parseFloat) : new Array(n_embd).fill(0);
     const linearWeightsBuffer = createBuffer(device, bufferSizeCalc(n_embd, n_embd), GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST);
     const linearBiasBuffer = createBuffer(device, bufferSizeCalc(n_embd), GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST);
-    queue.writeBuffer(linearWeightsBuffer, 0, new Float32Array(linear_weights));
+    queue.writeBuffer(linearWeightsBuffer, 0, new Float32Array(transposeArray(linear_weights, n_embd, n_embd)));
     queue.writeBuffer(linearBiasBuffer, 0, new Float32Array(linear_bias));
     buffers.push(linearWeightsBuffer, linearBiasBuffer);
 

@@ -171,16 +171,15 @@ async function runAttentionTest() {
   // console.log("cpu test weights", cpuTestWeights);
   // const cpuTestOutput = matrixAdd1dRow(cpuTestWeights, qkv_bias, seq_length, n_embd * 3);
   // console.log(cpuTestOutput);
-  // console.log("q", formatAsMatrix(new Float32Array(outputQ.getMappedRange()), seq_length, n_embd));
-  // console.log("k", formatAsMatrix(new Float32Array(outputK.getMappedRange()), seq_length, n_embd));
-  // console.log("v", formatAsMatrix(new Float32Array(outputV.getMappedRange()), seq_length, n_embd));
-  console.log("weights", formatAsMatrix(new Float32Array(outputWeights.getMappedRange()), seq_length, seq_length * n_heads));
+  console.log("q", formatAsMatrix(new Float32Array(outputQ.getMappedRange()), seq_length, n_embd));
+  console.log("k", formatAsMatrix(new Float32Array(outputK.getMappedRange()), seq_length, n_embd));
+  console.log("v", formatAsMatrix(new Float32Array(outputV.getMappedRange()), seq_length, n_embd));
+  // console.log("weights", formatAsMatrix(new Float32Array(outputWeights.getMappedRange()), seq_length, seq_length * n_heads));
   console.log("adjust", formatAsMatrix(new Float32Array(outputAdjust.getMappedRange()), seq_length, seq_length * n_heads));
   console.log("mask", formatAsMatrix(new Float32Array(outputMask.getMappedRange()), seq_length * n_heads, seq_length));
   console.log("values", formatAsMatrix(new Float32Array(outputValues.getMappedRange()), seq_length, n_embd));
 
   validateResult(new Float32Array(outputQKV.getMappedRange()), validateModel[tokenIndex][`block0_attn_catt`]);
-
   validateResult(new Float32Array(outputAttentionBuffer.getMappedRange()), validateModel[tokenIndex][`block0_attn`]);
 
   // throw new Error("stop");
