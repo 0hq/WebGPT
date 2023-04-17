@@ -31,9 +31,9 @@ const doValidation = true;
 
   console.log("Validate model loaded", validateData);
 
-  // generateFromModel("What is the answer to life, the universe, and everything?", 1);
+  generateFromModel("What is the answer to life, the universe, and everything?", 1);
 
-  runAttentionTest();
+  // runAttentionTest();
 })();
 
 async function generateFromModel(prompt, max_new_tokens) {
@@ -107,17 +107,32 @@ async function runAttentionTest() {
 
   const layer_buffer = layer_buffers[0];
 
-  const {
-    qkvResultBuffer,
-    splitQResultBuffer,
-    splitKResultBuffer,
-    splitVResultBuffer,
-    attentionWeightsResultBuffer,
-    multiplyResultBuffer,
-    causalMaskResultBuffer,
-    attentionValuesResultBuffer,
-    linearResultBuffer,
-  } = devInlineAttention(
+  // const {
+  //   qkvResultBuffer,
+  //   splitQResultBuffer,
+  //   splitKResultBuffer,
+  //   splitVResultBuffer,
+  //   attentionWeightsResultBuffer,
+  //   multiplyResultBuffer,
+  //   causalMaskResultBuffer,
+  //   attentionValuesResultBuffer,
+  //   linearResultBuffer,
+  // } = devInlineAttention(
+  //   device,
+  //   queue,
+  //   commandEncoder,
+  //   seq_length,
+  //   n_embd,
+  //   attentionDotProductScale,
+  //   layerNormAttentionOutputBuffer,
+  //   n_heads,
+  //   layer_buffer[2], // qkvWeightsBuffer,
+  //   layer_buffer[3], // qkvBiasBuffer,
+  //   layer_buffer[4], // linearWeightsBuffer,
+  //   layer_buffer[5] // linearBiasBuffer
+  // );
+
+  const attentionResultBuffer = inlineAttention(
     device,
     queue,
     commandEncoder,
@@ -132,33 +147,33 @@ async function runAttentionTest() {
     layer_buffer[5] // linearBiasBuffer
   );
 
-  const outputQKVWeights = createOutputBuffer(device, commandEncoder, layer_buffer[2], n_embd, 3 * n_embd);
-  const outputQKVBias = createOutputBuffer(device, commandEncoder, layer_buffer[3], 1, 3 * n_embd);
-  const outputQKV = createOutputBuffer(device, commandEncoder, qkvResultBuffer, seq_length, 3 * n_embd);
-  const outputQ = createOutputBuffer(device, commandEncoder, splitQResultBuffer, seq_length, n_embd);
-  const outputK = createOutputBuffer(device, commandEncoder, splitKResultBuffer, seq_length, n_embd);
-  const outputV = createOutputBuffer(device, commandEncoder, splitVResultBuffer, seq_length, n_embd);
+  // const outputQKVWeights = createOutputBuffer(device, commandEncoder, layer_buffer[2], n_embd, 3 * n_embd);
+  // const outputQKVBias = createOutputBuffer(device, commandEncoder, layer_buffer[3], 1, 3 * n_embd);
+  // const outputQKV = createOutputBuffer(device, commandEncoder, qkvResultBuffer, seq_length, 3 * n_embd);
+  // const outputQ = createOutputBuffer(device, commandEncoder, splitQResultBuffer, seq_length, n_embd);
+  // const outputK = createOutputBuffer(device, commandEncoder, splitKResultBuffer, seq_length, n_embd);
+  // const outputV = createOutputBuffer(device, commandEncoder, splitVResultBuffer, seq_length, n_embd);
 
-  const outputWeights = createOutputBuffer(device, commandEncoder, attentionWeightsResultBuffer, seq_length, seq_length * n_heads);
-  const outputAdjust = createOutputBuffer(device, commandEncoder, multiplyResultBuffer, seq_length, seq_length * n_heads);
-  const outputMask = createOutputBuffer(device, commandEncoder, causalMaskResultBuffer, seq_length, seq_length * n_heads);
-  const outputValues = createOutputBuffer(device, commandEncoder, attentionValuesResultBuffer, seq_length, n_embd);
+  // const outputWeights = createOutputBuffer(device, commandEncoder, attentionWeightsResultBuffer, seq_length, seq_length * n_heads);
+  // const outputAdjust = createOutputBuffer(device, commandEncoder, multiplyResultBuffer, seq_length, seq_length * n_heads);
+  // const outputMask = createOutputBuffer(device, commandEncoder, causalMaskResultBuffer, seq_length, seq_length * n_heads);
+  // const outputValues = createOutputBuffer(device, commandEncoder, attentionValuesResultBuffer, seq_length, n_embd);
 
-  const outputAttentionBuffer = createOutputBuffer(device, commandEncoder, linearResultBuffer, seq_length, n_embd);
+  const outputAttentionBuffer = createOutputBuffer(device, commandEncoder, attentionResultBuffer, seq_length, n_embd);
 
   queue.submit([commandEncoder.finish()]);
 
   await outputAttentionBuffer.mapAsync(GPUMapMode.READ);
-  await outputQKV.mapAsync(GPUMapMode.READ);
-  await outputQKVWeights.mapAsync(GPUMapMode.READ);
-  await outputQKVBias.mapAsync(GPUMapMode.READ);
-  await outputQ.mapAsync(GPUMapMode.READ);
-  await outputK.mapAsync(GPUMapMode.READ);
-  await outputV.mapAsync(GPUMapMode.READ);
-  await outputWeights.mapAsync(GPUMapMode.READ);
-  await outputAdjust.mapAsync(GPUMapMode.READ);
-  await outputMask.mapAsync(GPUMapMode.READ);
-  await outputValues.mapAsync(GPUMapMode.READ);
+  // await outputQKV.mapAsync(GPUMapMode.READ);
+  // await outputQKVWeights.mapAsync(GPUMapMode.READ);
+  // await outputQKVBias.mapAsync(GPUMapMode.READ);
+  // await outputQ.mapAsync(GPUMapMode.READ);
+  // await outputK.mapAsync(GPUMapMode.READ);
+  // await outputV.mapAsync(GPUMapMode.READ);
+  // await outputWeights.mapAsync(GPUMapMode.READ);
+  // await outputAdjust.mapAsync(GPUMapMode.READ);
+  // await outputMask.mapAsync(GPUMapMode.READ);
+  // await outputValues.mapAsync(GPUMapMode.READ);
 
   // const qkv_weights = new Float32Array(outputQKVWeights.getMappedRange());
   // const qkv_bias = new Float32Array(outputQKVBias.getMappedRange());
@@ -171,15 +186,15 @@ async function runAttentionTest() {
   // console.log("cpu test weights", cpuTestWeights);
   // const cpuTestOutput = matrixAdd1dRow(cpuTestWeights, qkv_bias, seq_length, n_embd * 3);
   // console.log(cpuTestOutput);
-  console.log("q", formatAsMatrix(new Float32Array(outputQ.getMappedRange()), seq_length, n_embd));
-  console.log("k", formatAsMatrix(new Float32Array(outputK.getMappedRange()), seq_length, n_embd));
-  console.log("v", formatAsMatrix(new Float32Array(outputV.getMappedRange()), seq_length, n_embd));
-  // console.log("weights", formatAsMatrix(new Float32Array(outputWeights.getMappedRange()), seq_length, seq_length * n_heads));
-  console.log("adjust", formatAsMatrix(new Float32Array(outputAdjust.getMappedRange()), seq_length, seq_length * n_heads));
-  console.log("mask", formatAsMatrix(new Float32Array(outputMask.getMappedRange()), seq_length * n_heads, seq_length));
-  console.log("values", formatAsMatrix(new Float32Array(outputValues.getMappedRange()), seq_length, n_embd));
+  // console.log("q", formatAsMatrix(new Float32Array(outputQ.getMappedRange()), seq_length, n_embd));
+  // console.log("k", formatAsMatrix(new Float32Array(outputK.getMappedRange()), seq_length, n_embd));
+  // console.log("v", formatAsMatrix(new Float32Array(outputV.getMappedRange()), seq_length, n_embd));
+  // // console.log("weights", formatAsMatrix(new Float32Array(outputWeights.getMappedRange()), seq_length, seq_length * n_heads));
+  // console.log("adjust", formatAsMatrix(new Float32Array(outputAdjust.getMappedRange()), seq_length, seq_length * n_heads));
+  // console.log("mask", formatAsMatrix(new Float32Array(outputMask.getMappedRange()), seq_length * n_heads, seq_length));
+  // console.log("values", formatAsMatrix(new Float32Array(outputValues.getMappedRange()), seq_length, n_embd));
 
-  validateResult(new Float32Array(outputQKV.getMappedRange()), validateModel[tokenIndex][`block0_attn_catt`]);
+  // validateResult(new Float32Array(outputQKV.getMappedRange()), validateModel[tokenIndex][`block0_attn_catt`]);
   validateResult(new Float32Array(outputAttentionBuffer.getMappedRange()), validateModel[tokenIndex][`block0_attn`]);
 
   // throw new Error("stop");

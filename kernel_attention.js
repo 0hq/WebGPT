@@ -228,8 +228,8 @@ function inlineAttention(
   device,
   queue,
   commandEncoder,
-  rows,
-  cols,
+  seq_length,
+  n_embd,
   attentionDotProductScale,
   inputBuffer,
   n_heads,
@@ -243,7 +243,7 @@ function inlineAttention(
   const workgroup_X = 16; // Dictated by shader.
   const workgroup_Y = 16; // Dictated by shader.
 
-  if (cols % n_heads != 0) {
+  if (n_embd % n_heads != 0) {
     throw new Error("cols must be divisible by n_heads");
   }
 
@@ -273,109 +273,124 @@ function inlineAttention(
   const causalMaskPipeline = createPipeline(device, createCausalMaskShader(), [causalMaskBindGroupLayout, inputBufferBindGroupLayout]);
 
   const qkvUniformBuffer = createBuffer(device, 16, GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST);
-
-  const qkvResultBuffer = createBuffer(device, bufferSizeCalc(rows, 3 * cols), GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC);
+  const qkvResultBuffer = createBuffer(device, bufferSizeCalc(seq_length, 3 * n_embd), GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC);
   const qkvBindGroup = createBindGroup(device, ffnBindGroupLayout, [qkvUniformBuffer, qkvBiasBuffer, qkvWeightsBuffer, qkvResultBuffer]);
-  queue.writeBuffer(qkvUniformBuffer, 0, new Uint32Array([rows, 3 * cols, cols]));
+  queue.writeBuffer(qkvUniformBuffer, 0, new Uint32Array([seq_length, 3 * n_embd, n_embd]));
 
   const splitQKVUniformBuffer = createBuffer(device, 16, GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST);
-  const splitQResultBuffer = createBuffer(device, bufferSizeCalc(rows, cols), GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC);
-  const splitKResultBuffer = createBuffer(device, bufferSizeCalc(rows, cols), GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC);
-  const splitVResultBuffer = createBuffer(device, bufferSizeCalc(rows, cols), GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC);
+  const splitQResultBuffer = createBuffer(device, bufferSizeCalc(seq_length, n_embd), GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC);
+  const splitKResultBuffer = createBuffer(device, bufferSizeCalc(seq_length, n_embd), GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC);
+  const splitVResultBuffer = createBuffer(device, bufferSizeCalc(seq_length, n_embd), GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC);
   const splitQKVBindGroup = createBindGroup(device, splitQKVBindGroupLayout, [
     splitQKVUniformBuffer,
     splitQResultBuffer,
     splitKResultBuffer,
     splitVResultBuffer,
   ]);
-  queue.writeBuffer(splitQKVUniformBuffer, 0, new Uint32Array([rows, cols]));
+  queue.writeBuffer(splitQKVUniformBuffer, 0, new Uint32Array([seq_length, n_embd]));
 
   const attentionWeightsUniformBuffer = createBuffer(device, 16, GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST);
-  const attentionWeightsResultBuffer = createBuffer(device, bufferSizeCalc(rows, rows * n_heads), GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC);
+  const attentionWeightsResultBuffer = createBuffer(device, bufferSizeCalc(seq_length, seq_length * n_heads), GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC);
   const attentionWeightsBindGroup = createBindGroup(device, attentionBindGroupLayout, [attentionWeightsUniformBuffer, attentionWeightsResultBuffer]);
-  queue.writeBuffer(attentionWeightsUniformBuffer, 0, new Uint32Array([rows, rows * n_heads, cols / n_heads, cols]));
+  queue.writeBuffer(attentionWeightsUniformBuffer, 0, new Uint32Array([seq_length, seq_length * n_heads, n_embd / n_heads, n_embd]));
 
   const multiplyUniformBuffer = createBuffer(device, 16, GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST);
-  const multiplyResultBuffer = createBuffer(device, bufferSizeCalc(rows, rows * n_heads), GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC);
+  const multiplyResultBuffer = createBuffer(device, bufferSizeCalc(seq_length, seq_length * n_heads), GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC);
   const multiplyBindGroup = createBindGroup(device, multiplyBindGroupLayout, [multiplyUniformBuffer, multiplyResultBuffer]);
-  queue.writeBuffer(multiplyUniformBuffer, 0, new Uint32Array([rows, rows * n_heads]));
+  queue.writeBuffer(multiplyUniformBuffer, 0, new Uint32Array([seq_length, seq_length * n_heads]));
   queue.writeBuffer(multiplyUniformBuffer, 8, new Float32Array([attentionDotProductScale]));
 
   const causalMaskUniformBuffer = createBuffer(device, 16, GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST);
-  const causalMaskResultBuffer = createBuffer(device, bufferSizeCalc(rows, rows * n_heads), GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC);
+  const causalMaskResultBuffer = createBuffer(device, bufferSizeCalc(seq_length, seq_length * n_heads), GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC);
   const causalMaskBindGroup = createBindGroup(device, causalMaskBindGroupLayout, [causalMaskUniformBuffer, causalMaskResultBuffer]);
-  queue.writeBuffer(causalMaskUniformBuffer, 0, new Uint32Array([rows * n_heads, rows])); // Transposes! This is needed for softmax.
+  queue.writeBuffer(causalMaskUniformBuffer, 0, new Uint32Array([seq_length * n_heads, seq_length])); // Transposes! This is needed for softmax.
 
   const attentionValuesUniformBuffer = createBuffer(device, 16, GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST);
-  const attentionValuesResultBuffer = createBuffer(device, bufferSizeCalc(rows, cols), GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC);
+  const attentionValuesResultBuffer = createBuffer(device, bufferSizeCalc(seq_length, n_embd), GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC);
   const attentionValuesBindGroup = createBindGroup(device, attentionBindGroupLayout, [attentionValuesUniformBuffer, attentionValuesResultBuffer]);
-  queue.writeBuffer(attentionValuesUniformBuffer, 0, new Uint32Array([rows, cols, n_heads, cols / n_heads]));
+  queue.writeBuffer(attentionValuesUniformBuffer, 0, new Uint32Array([seq_length, n_embd, n_heads, n_embd / n_heads]));
 
   const linearUniformBuffer = createBuffer(device, 16, GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST);
 
-  const linearResultBuffer = createBuffer(device, bufferSizeCalc(rows, cols), GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC);
+  const linearResultBuffer = createBuffer(device, bufferSizeCalc(seq_length, n_embd), GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC);
   const linearBindGroup = createBindGroup(device, ffnBindGroupLayout, [linearUniformBuffer, linearBiasBuffer, linearWeightsBuffer, linearResultBuffer]);
-  queue.writeBuffer(linearUniformBuffer, 0, new Uint32Array([rows, cols, cols]));
+  queue.writeBuffer(linearUniformBuffer, 0, new Uint32Array([seq_length, n_embd, n_embd]));
 
   const passEncoder_qkv = commandEncoder.beginComputePass();
   passEncoder_qkv.setPipeline(FFNpipeline);
   passEncoder_qkv.setBindGroup(0, qkvBindGroup);
   passEncoder_qkv.setBindGroup(1, createBindGroup(device, inputBufferBindGroupLayout, [inputBuffer]));
-  passEncoder_qkv.dispatchWorkgroups(workgroupCalc(rows, workgroup_Y), workgroupCalc(3 * cols, workgroup_X));
+  passEncoder_qkv.dispatchWorkgroups(workgroupCalc(seq_length, workgroup_Y), workgroupCalc(3 * n_embd, workgroup_X));
   passEncoder_qkv.end();
 
   const passEncoder_splitQKV = commandEncoder.beginComputePass();
   passEncoder_splitQKV.setPipeline(splitQKVpipeline);
   passEncoder_splitQKV.setBindGroup(0, splitQKVBindGroup);
   passEncoder_splitQKV.setBindGroup(1, createBindGroup(device, inputBufferBindGroupLayout, [qkvResultBuffer]));
-  passEncoder_splitQKV.dispatchWorkgroups(workgroupCalc(rows, workgroup_Y), workgroupCalc(cols, workgroup_X));
+  passEncoder_splitQKV.dispatchWorkgroups(workgroupCalc(seq_length, workgroup_Y), workgroupCalc(n_embd, workgroup_X));
   passEncoder_splitQKV.end();
 
   const passEncoder_attentionWeights = commandEncoder.beginComputePass();
   passEncoder_attentionWeights.setPipeline(attentionWeightsPipeline);
   passEncoder_attentionWeights.setBindGroup(0, attentionWeightsBindGroup);
   passEncoder_attentionWeights.setBindGroup(1, createBindGroup(device, attentionInputBindGroupLayout, [splitQResultBuffer, splitKResultBuffer]));
-  passEncoder_attentionWeights.dispatchWorkgroups(workgroupCalc(rows, workgroup_Y), workgroupCalc(rows * n_heads, workgroup_X));
+  passEncoder_attentionWeights.dispatchWorkgroups(workgroupCalc(seq_length, workgroup_Y), workgroupCalc(seq_length * n_heads, workgroup_X));
   passEncoder_attentionWeights.end();
 
   const passEncoder_multiply = commandEncoder.beginComputePass();
   passEncoder_multiply.setPipeline(multiplyPipeline);
   passEncoder_multiply.setBindGroup(0, multiplyBindGroup);
   passEncoder_multiply.setBindGroup(1, createBindGroup(device, inputBufferBindGroupLayout, [attentionWeightsResultBuffer]));
-  passEncoder_multiply.dispatchWorkgroups(workgroupCalc(rows, workgroup_Y), workgroupCalc(rows * n_heads, workgroup_X));
+  passEncoder_multiply.dispatchWorkgroups(workgroupCalc(seq_length, workgroup_Y), workgroupCalc(seq_length * n_heads, workgroup_X));
   passEncoder_multiply.end();
 
   const passEncoder_causalMask = commandEncoder.beginComputePass();
   passEncoder_causalMask.setPipeline(causalMaskPipeline);
   passEncoder_causalMask.setBindGroup(0, causalMaskBindGroup);
   passEncoder_causalMask.setBindGroup(1, createBindGroup(device, inputBufferBindGroupLayout, [multiplyResultBuffer]));
-  passEncoder_causalMask.dispatchWorkgroups(workgroupCalc(rows * n_heads, workgroup_Y), workgroupCalc(rows, workgroup_X));
+  passEncoder_causalMask.dispatchWorkgroups(workgroupCalc(seq_length * n_heads, workgroup_Y), workgroupCalc(seq_length, workgroup_X));
   passEncoder_causalMask.end();
 
   const softmaxOutputBuffer = createBuffer(
     device,
-    bufferSizeCalc(rows, rows * n_heads),
+    bufferSizeCalc(seq_length, seq_length * n_heads),
     GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST | GPUBufferUsage.COPY_SRC
   );
   for (let i = 0; i < n_heads; i++) {
-    const softmaxInputBuffer = createBuffer(device, bufferSizeCalc(rows, rows), GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST | GPUBufferUsage.COPY_SRC);
-    commandEncoder.copyBufferToBuffer(causalMaskResultBuffer, i * bufferSizeCalc(rows, rows), softmaxInputBuffer, 0, bufferSizeCalc(rows, rows));
-    const softMaxResultBuffer = inlineSoftmax(device, queue, commandEncoder, rows, rows, softmaxInputBuffer);
-    commandEncoder.copyBufferToBuffer(softMaxResultBuffer, 0, softmaxOutputBuffer, i * bufferSizeCalc(rows, rows), bufferSizeCalc(rows, rows));
+    const softmaxInputBuffer = createBuffer(
+      device,
+      bufferSizeCalc(seq_length, seq_length),
+      GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST | GPUBufferUsage.COPY_SRC
+    );
+    commandEncoder.copyBufferToBuffer(
+      causalMaskResultBuffer,
+      i * bufferSizeCalc(seq_length, seq_length),
+      softmaxInputBuffer,
+      0,
+      bufferSizeCalc(seq_length, seq_length)
+    );
+    const softMaxResultBuffer = inlineSoftmax(device, queue, commandEncoder, seq_length, seq_length, softmaxInputBuffer);
+    commandEncoder.copyBufferToBuffer(
+      softMaxResultBuffer,
+      0,
+      softmaxOutputBuffer,
+      i * bufferSizeCalc(seq_length, seq_length),
+      bufferSizeCalc(seq_length, seq_length)
+    );
   }
 
   const passEncoder_attentionValues = commandEncoder.beginComputePass();
   passEncoder_attentionValues.setPipeline(attentionValuesPipeline);
   passEncoder_attentionValues.setBindGroup(0, attentionValuesBindGroup);
   passEncoder_attentionValues.setBindGroup(1, createBindGroup(device, attentionInputBindGroupLayout, [softmaxOutputBuffer, splitVResultBuffer]));
-  passEncoder_attentionValues.dispatchWorkgroups(workgroupCalc(rows, workgroup_Y), workgroupCalc(cols, workgroup_X));
+  passEncoder_attentionValues.dispatchWorkgroups(workgroupCalc(seq_length, workgroup_Y), workgroupCalc(n_embd, workgroup_X));
   passEncoder_attentionValues.end();
 
   const passEncoder_linear = commandEncoder.beginComputePass();
   passEncoder_linear.setPipeline(FFNpipeline);
   passEncoder_linear.setBindGroup(0, linearBindGroup);
   passEncoder_linear.setBindGroup(1, createBindGroup(device, inputBufferBindGroupLayout, [attentionValuesResultBuffer]));
-  passEncoder_linear.dispatchWorkgroups(workgroupCalc(rows, workgroup_Y), workgroupCalc(cols, workgroup_X));
+  passEncoder_linear.dispatchWorkgroups(workgroupCalc(seq_length, workgroup_Y), workgroupCalc(n_embd, workgroup_X));
   passEncoder_linear.end();
 
   return linearResultBuffer;
