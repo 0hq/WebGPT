@@ -30,20 +30,21 @@ async function loadModel(filename) {
 
     const layerNormAttentionGamma = model[`${prefix}ln_1.weight`].values.flat().map(parseFloat);
     const layerNormAttentionBeta = biasEnabled ? model[`${prefix}ln_1.bias`].values.flat().map(parseFloat) : new Array(n_embd).fill(0);
-    // const layerNormAttentionGamma = new Array(n_embd).fill(1);
-    // const layerNormAttentionBeta = new Array(n_embd).fill(0);
-    const normAttentionGammaBuffer = createBuffer(device, bufferSizeCalc(n_embd), GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST | GPUBufferUsage.COPY_SRC);
+    const normAttentionGammaBuffer = createBuffer(device, bufferSizeCalc(n_embd), GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST);
     const normAttentionBetaBuffer = createBuffer(device, bufferSizeCalc(n_embd), GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST);
-    i == 0 ? console.log("layerNormAttentionGamma", layerNormAttentionGamma, new Float32Array(layerNormAttentionGamma)) : null;
     queue.writeBuffer(normAttentionGammaBuffer, 0, new Float32Array(layerNormAttentionGamma));
     queue.writeBuffer(normAttentionBetaBuffer, 0, new Float32Array(layerNormAttentionBeta));
     buffers.push(normAttentionGammaBuffer, normAttentionBetaBuffer);
 
     const qkv_weights = model[`${prefix}attn.c_attn.weight`].values.flat().map(parseFloat);
     const qkv_bias = biasEnabled ? model[`${prefix}attn.c_attn.bias`].values.flat().map(parseFloat) : new Array(3 * n_embd).fill(0);
-    const qkvWeightsBuffer = createBuffer(device, bufferSizeCalc(n_embd, 3 * n_embd), GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST);
-    const qkvBiasBuffer = createBuffer(device, bufferSizeCalc(3 * n_embd), GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST);
-    queue.writeBuffer(qkvWeightsBuffer, 0, new Float32Array(qkv_weights));
+    const qkvWeightsBuffer = createBuffer(
+      device,
+      bufferSizeCalc(n_embd, 3 * n_embd),
+      GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST | GPUBufferUsage.COPY_SRC
+    );
+    const qkvBiasBuffer = createBuffer(device, bufferSizeCalc(3 * n_embd), GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST | GPUBufferUsage.COPY_SRC);
+    queue.writeBuffer(qkvWeightsBuffer, 0, new Float32Array(transposeArray(qkv_weights, 3 * n_embd, n_embd)));
     queue.writeBuffer(qkvBiasBuffer, 0, new Float32Array(qkv_bias));
     buffers.push(qkvWeightsBuffer, qkvBiasBuffer);
 
@@ -149,4 +150,18 @@ async function loadValidateModel(validateFile) {
   }
 
   return steps;
+}
+
+function transposeArray(array, input_rows, input_cols) {
+  if (array.length !== input_rows * input_cols) {
+    throw new Error("Transpose dims failed");
+  }
+
+  const transpose = [];
+  for (let col = 0; col < input_cols; col++) {
+    for (let row = 0; row < input_rows; row++) {
+      transpose.push(array[row * input_cols + col]);
+    }
+  }
+  return transpose;
 }
