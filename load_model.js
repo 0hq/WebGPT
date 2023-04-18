@@ -4,6 +4,8 @@ async function loadModel(filename) {
   var model = await (await fetch(`models/${filename}.json`)).json();
   rawModel = model;
 
+  console.log("Model loaded:", model);
+
   const { device, queue } = await initializeWebGPU();
   const minStorageBufferOffsetAlignment = 1; // device.limits.minStorageBufferOffsetAlignment; // This was breaking things. Probably should check later.
   bufferSizeCalc = (dimA, dimB = 1) => alignedSize(dimA * dimB * Float32Array.BYTES_PER_ELEMENT, minStorageBufferOffsetAlignment);
@@ -68,7 +70,7 @@ async function loadModel(filename) {
     const firstLayerBias = biasEnabled ? model[`${prefix}mlp.c_fc.bias`].values.flat().map(parseFloat) : new Array(hidden_size).fill(0);
     const firstLayerWeightsBuffer = createBuffer(device, bufferSizeCalc(n_embd, hidden_size), GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST);
     const firstLayerBiasBuffer = createBuffer(device, bufferSizeCalc(hidden_size), GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST);
-    queue.writeBuffer(firstLayerWeightsBuffer, 0, new Float32Array(firstLayerWeights));
+    queue.writeBuffer(firstLayerWeightsBuffer, 0, new Float32Array(transposeArray(firstLayerWeights, hidden_size, n_embd)));
     queue.writeBuffer(firstLayerBiasBuffer, 0, new Float32Array(firstLayerBias));
     buffers.push(firstLayerWeightsBuffer, firstLayerBiasBuffer);
 
@@ -76,7 +78,7 @@ async function loadModel(filename) {
     const secondLayerBias = biasEnabled ? model[`${prefix}mlp.c_proj.bias`].values.flat().map(parseFloat) : new Array(n_embd).fill(0);
     const secondLayerWeightsBuffer = createBuffer(device, bufferSizeCalc(hidden_size, n_embd), GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST);
     const secondLayerBiasBuffer = createBuffer(device, bufferSizeCalc(hidden_size), GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST);
-    queue.writeBuffer(secondLayerWeightsBuffer, 0, new Float32Array(secondLayerWeights));
+    queue.writeBuffer(secondLayerWeightsBuffer, 0, new Float32Array(transposeArray(secondLayerWeights, n_embd, hidden_size)));
     queue.writeBuffer(secondLayerBiasBuffer, 0, new Float32Array(secondLayerBias));
     buffers.push(secondLayerWeightsBuffer, secondLayerBiasBuffer);
 
@@ -92,7 +94,9 @@ async function loadModel(filename) {
 
   const deEmbeddings = model["lm_head.weight"].values.flat().map(parseFloat);
   const deEmbedBuffer = createBuffer(device, bufferSizeCalc(n_embd, vocab_size), GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST);
-  queue.writeBuffer(deEmbedBuffer, 0, new Float32Array(deEmbeddings));
+  queue.writeBuffer(deEmbedBuffer, 0, new Float32Array(transposeArray(deEmbeddings, vocab_size, n_embd)));
+
+  // console.log(new Float32Array(transposeArray(deEmbeddings, vocab_size, n_embd)));
 
   return {
     device,

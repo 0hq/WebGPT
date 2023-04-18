@@ -116,7 +116,6 @@ async function runGPT(
   // OUTPUT and VALIDATION
 
   const outputEmbedBuffer = createOutputBuffer(device, commandEncoder, embeddedInputBuffer, seq_length, n_embd);
-  const outputNormGammaBuffer = createOutputBuffer(device, commandEncoder, layer_buffers[0][0], 1, n_embd);
 
   const outputBlockBuffers = [];
   for (let i = 0; i < n_layers; i++) {
@@ -143,7 +142,7 @@ async function runGPT(
   queue.submit([commandEncoder.finish()]);
 
   await outputEmbedBuffer.mapAsync(GPUMapMode.READ);
-  await outputNormGammaBuffer.mapAsync(GPUMapMode.READ);
+  // await outputNormGammaBuffer.mapAsync(GPUMapMode.READ);
 
   for (let i = 0; i < n_layers; i++) {
     const block = outputBlockBuffers[i];
@@ -166,6 +165,7 @@ async function runGPT(
     console.log("Validating blocks...");
     for (let i = 0; i < n_layers; i++) {
       console.log(`\tValidating block ${i}...`);
+      console.log("Objects:", validateModel[tokenIndex]);
       const block = outputBlockBuffers[i];
       console.log("\t\tValidating first layer norm...");
       validateResult(new Float32Array(outputBlockBuffers[i][0].getMappedRange()), validateModel[tokenIndex][`block${i}_ln1`]);
@@ -181,15 +181,16 @@ async function runGPT(
       validateResult(new Float32Array(outputBlockBuffers[i][5].getMappedRange()), validateModel[tokenIndex][`block${i}_r2`]);
     }
     console.log("Validating layer norm...");
-    validateResult(new Float32Array(outputLayerNormBuffer.getMappedRange()), validateModel[tokenIndex].ln_f);
+    validateResult(new Float32Array(outputLayerNormBuffer.getMappedRange()), validateModel[tokenIndex].ln_f, true);
     console.log("Validating logits...");
-    validateResult(new Float32Array(output), validateModel[tokenIndex].logits);
+    validateResult(new Float32Array(output).slice((seq_length - 1) * vocab_size), validateModel[tokenIndex].logits);
   }
 
   return output;
 }
 
 function validateResult(result, validate, verbose = false) {
+  console.log(result);
   const resultArray = formatAsMatrix(result, validate.shape[1], validate.shape[2]);
   const validateArray = validate.data[0]; // Unpack from batch of 1
 
