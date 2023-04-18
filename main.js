@@ -1,4 +1,4 @@
-let tokenIndex = 0;
+let validateIndex = 0;
 
 let rawModel = null;
 
@@ -8,8 +8,8 @@ let modelParams = null;
 let bufferSizeCalc = null;
 
 let validateModel = null;
-const validateFile = "generation.json";
-const doValidation = true;
+const validateFile = "generation copy.json";
+const doValidation = false;
 
 (async () => {
   modelParams = await loadModel("state_dict");
@@ -25,18 +25,20 @@ const doValidation = true;
 
   console.log("Model finished loading.");
 
-  const validateData = await loadValidateModel(validateFile);
+  if (doValidation) {
+    const validateData = await loadValidateModel(validateFile);
 
-  validateModel = validateData;
+    validateModel = validateData;
 
-  console.log("Validate model loaded", validateData);
+    console.log("Validate model loaded", validateData);
+  }
 
-  generateFromModel("What is the answer to life, the universe, and everything?", 1);
+  generateFromModel("BRUTUS:", 200, 1);
 
-  // runAttentionTest();
+  // validateAgainstModel();
 })();
 
-async function generateFromModel(prompt, max_new_tokens) {
+async function generateFromModel(prompt, max_new_tokens, top_k = 1) {
   if (!modelParams || !stoi || !itos) {
     console.log("Model not loaded yet");
     return;
@@ -49,197 +51,123 @@ async function generateFromModel(prompt, max_new_tokens) {
   const context_size = modelParams.params.context_size;
   console.log("block_size", context_size);
   for (let i = 0; i < max_new_tokens; i++) {
-    tokenIndex = i;
+    validateIndex = i;
 
-    // console.log("prompt", prompt);
     const idx_cond = prompt.slice(-context_size);
-    // console.log("running inference on sequence", idx_cond);
+    // console.log("idx_cond", idx_cond);
     const logits = await runInference(idx_cond);
 
-    console.log("Logits", logits);
+    // console.log("Logits", logits);
 
-    // pluck the logits at the final step and scale by desired temperature
-    // const logits_scaled = logits; // / temperature;
+    const probs = cpuSoftmax(logits, 1.0);
 
-    // apply softmax to convert logits to (normalized) probabilities
-    const probs = simpleSoftmax(logits);
+    // console.log("Probs", probs);
 
-    console.log("Probs", probs);
-    console.log("Max prob:", Math.max(...probs));
-    console.log("Max prob index:", probs.indexOf(Math.max(...probs)), "char:", itos[probs.indexOf(Math.max(...probs))]);
-
-    // sample from the distribution
-    const idx_next = sampleFromDistribution(probs);
-    // append sampled index to the running sequence and continue
-    // console.log("generated", idx_next);
+    const idx_next = sampleFromDistribution(probs, top_k);
+    console.log("Next token", idx_next);
     prompt = prompt.concat(idx_next);
   }
 
-  console.log("Output ints:", prompt);
+  // console.log("Output ints:", prompt);
   const text = prompt.map((i) => itos[i]).join("");
-  console.log("Output:", text);
+  console.log(`Output:\n\n${text}`);
 }
 
-async function runAttentionTest() {
-  if (!modelParams) {
+async function validateAgainstModel() {
+  if (!modelParams || !stoi || !itos) {
     console.log("Model not loaded yet");
     return;
   }
 
-  const { device, queue, params, embdBuffer, posEmbdBuffer, layer_buffers, normGammaBuffer, normBetaBuffer, deEmbedBuffer } = modelParams;
-  const { attentionDotProductScale, biasEnabled, n_embd, n_heads, n_layers, vocab_size, hidden_size, context_size } = params;
-  const commandEncoder = device.createCommandEncoder();
+  const context_size = modelParams.params.context_size;
 
-  const seq_length = 57;
+  console.log(`Starting validation against ${validateFile}`);
+  console.log("Validate model loaded", validateModel);
+  console.log("Model params", modelParams);
+  console.log("Context size", context_size);
 
-  const layerNormAttention = validateModel[tokenIndex][`block0_ln1`].data[0];
-  const layerNormAttentionOutput = [];
-  for (let i = 0; i < seq_length; i++) {
-    layerNormAttentionOutput.push(...layerNormAttention[i]);
-  }
+  for (let i = 0; i < validateModel.length; i++) {
+    const step = validateModel[i];
 
-  console.log("input", layerNormAttention);
+    validateIndex = i;
 
-  const layerNormAttentionOutputBuffer = createBuffer(device, bufferSizeCalc(seq_length, n_embd), GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST);
-  queue.writeBuffer(layerNormAttentionOutputBuffer, 0, new Float32Array(layerNormAttentionOutput));
+    const idx_cond = step.idx.data[0].slice(-context_size);
+    console.log("idx_cond", idx_cond);
+    const logits = await runInference(idx_cond);
 
-  const startTime = performance.now();
+    // console.log("Logits", logits);
+    // console.log("Expected logits", step.logits);
 
-  const layer_buffer = layer_buffers[0];
+    const probs = cpuSoftmax(logits, 1.0);
 
-  // const {
-  //   qkvResultBuffer,
-  //   splitQResultBuffer,
-  //   splitKResultBuffer,
-  //   splitVResultBuffer,
-  //   attentionWeightsResultBuffer,
-  //   multiplyResultBuffer,
-  //   causalMaskResultBuffer,
-  //   attentionValuesResultBuffer,
-  //   linearResultBuffer,
-  // } = devInlineAttention(
-  //   device,
-  //   queue,
-  //   commandEncoder,
-  //   seq_length,
-  //   n_embd,
-  //   attentionDotProductScale,
-  //   layerNormAttentionOutputBuffer,
-  //   n_heads,
-  //   layer_buffer[2], // qkvWeightsBuffer,
-  //   layer_buffer[3], // qkvBiasBuffer,
-  //   layer_buffer[4], // linearWeightsBuffer,
-  //   layer_buffer[5] // linearBiasBuffer
-  // );
+    // console.log("Probs", probs);
+    // console.log("Expected probs", step.probs);
 
-  const attentionResultBuffer = inlineAttention(
-    device,
-    queue,
-    commandEncoder,
-    seq_length,
-    n_embd,
-    attentionDotProductScale,
-    layerNormAttentionOutputBuffer,
-    n_heads,
-    layer_buffer[2], // qkvWeightsBuffer,
-    layer_buffer[3], // qkvBiasBuffer,
-    layer_buffer[4], // linearWeightsBuffer,
-    layer_buffer[5] // linearBiasBuffer
-  );
-
-  // const outputQKVWeights = createOutputBuffer(device, commandEncoder, layer_buffer[2], n_embd, 3 * n_embd);
-  // const outputQKVBias = createOutputBuffer(device, commandEncoder, layer_buffer[3], 1, 3 * n_embd);
-  // const outputQKV = createOutputBuffer(device, commandEncoder, qkvResultBuffer, seq_length, 3 * n_embd);
-  // const outputQ = createOutputBuffer(device, commandEncoder, splitQResultBuffer, seq_length, n_embd);
-  // const outputK = createOutputBuffer(device, commandEncoder, splitKResultBuffer, seq_length, n_embd);
-  // const outputV = createOutputBuffer(device, commandEncoder, splitVResultBuffer, seq_length, n_embd);
-
-  // const outputWeights = createOutputBuffer(device, commandEncoder, attentionWeightsResultBuffer, seq_length, seq_length * n_heads);
-  // const outputAdjust = createOutputBuffer(device, commandEncoder, multiplyResultBuffer, seq_length, seq_length * n_heads);
-  // const outputMask = createOutputBuffer(device, commandEncoder, causalMaskResultBuffer, seq_length, seq_length * n_heads);
-  // const outputValues = createOutputBuffer(device, commandEncoder, attentionValuesResultBuffer, seq_length, n_embd);
-
-  const outputAttentionBuffer = createOutputBuffer(device, commandEncoder, attentionResultBuffer, seq_length, n_embd);
-
-  queue.submit([commandEncoder.finish()]);
-
-  await outputAttentionBuffer.mapAsync(GPUMapMode.READ);
-  // await outputQKV.mapAsync(GPUMapMode.READ);
-  // await outputQKVWeights.mapAsync(GPUMapMode.READ);
-  // await outputQKVBias.mapAsync(GPUMapMode.READ);
-  // await outputQ.mapAsync(GPUMapMode.READ);
-  // await outputK.mapAsync(GPUMapMode.READ);
-  // await outputV.mapAsync(GPUMapMode.READ);
-  // await outputWeights.mapAsync(GPUMapMode.READ);
-  // await outputAdjust.mapAsync(GPUMapMode.READ);
-  // await outputMask.mapAsync(GPUMapMode.READ);
-  // await outputValues.mapAsync(GPUMapMode.READ);
-
-  // const qkv_weights = new Float32Array(outputQKVWeights.getMappedRange());
-  // const qkv_bias = new Float32Array(outputQKVBias.getMappedRange());
-  // console.log("qkv", formatAsMatrix(new Float32Array(outputQKV.getMappedRange()), seq_length, 3 * n_embd));
-  // console.log("qkv_goal", validateModel[tokenIndex][`block0_attn_catt`].data[0]);
-  // console.log("qkv weights", formatAsMatrix(qkv_weights, n_embd, 3 * n_embd));
-  // console.log("qkv bias", formatAsMatrix(qkv_bias, 1, 3 * n_embd));
-
-  // const cpuTestWeights = matrixMult(layerNormAttention, formatAsMatrix(qkv_weights, n_embd, 3 * n_embd), seq_length, 3 * n_embd, n_embd);
-  // console.log("cpu test weights", cpuTestWeights);
-  // const cpuTestOutput = matrixAdd1dRow(cpuTestWeights, qkv_bias, seq_length, n_embd * 3);
-  // console.log(cpuTestOutput);
-  // console.log("q", formatAsMatrix(new Float32Array(outputQ.getMappedRange()), seq_length, n_embd));
-  // console.log("k", formatAsMatrix(new Float32Array(outputK.getMappedRange()), seq_length, n_embd));
-  // console.log("v", formatAsMatrix(new Float32Array(outputV.getMappedRange()), seq_length, n_embd));
-  // // console.log("weights", formatAsMatrix(new Float32Array(outputWeights.getMappedRange()), seq_length, seq_length * n_heads));
-  // console.log("adjust", formatAsMatrix(new Float32Array(outputAdjust.getMappedRange()), seq_length, seq_length * n_heads));
-  // console.log("mask", formatAsMatrix(new Float32Array(outputMask.getMappedRange()), seq_length * n_heads, seq_length));
-  // console.log("values", formatAsMatrix(new Float32Array(outputValues.getMappedRange()), seq_length, n_embd));
-
-  // validateResult(new Float32Array(outputQKV.getMappedRange()), validateModel[tokenIndex][`block0_attn_catt`]);
-  validateResult(new Float32Array(outputAttentionBuffer.getMappedRange()), validateModel[tokenIndex][`block0_attn`]);
-
-  // throw new Error("stop");
-
-  const endTime = performance.now();
-  console.log(`Time: ${endTime - startTime} ms`);
-
-  console.log("Result:", result);
-
-  const resultMatrix = formatAsMatrix(new Float32Array(result), seq_length, vocab_size);
-  console.log("Result matrix:");
-
-  return resultMatrix[0];
-}
-
-function matrixMult(matA, matB, rows, cols, shared) {
-  if (matA.length !== rows || matB[0].length !== cols || matA[0].length !== matB.length || matB.length !== shared) {
-    console.log("matA", matA, "matB", matB, rows, cols, shared);
-    throw Error("Unmatching dims for mat mul on cpu");
-  }
-  const output = [];
-  for (let row = 0; row < rows; row++) {
-    output.push([]);
-    for (let col = 0; col < cols; col++) {
-      let sum = 0;
-      for (let i = 0; i < shared; i++) {
-        sum += matA[row][i] * matB[i][col];
-      }
-      output[row].push(sum);
+    const idx_next = sampleFromDistribution(probs, 1);
+    console.log("Next token", idx_next);
+    console.log("Expected token", sampleFromDistribution(step.probs.data[0], 1));
+    if (idx_next !== sampleFromDistribution(step.probs.data[0], 1)) {
+      throw new Error("Validation failed");
     }
   }
-  return output;
 }
 
-function matrixAdd1dRow(matA, one_d, rows, cols) {
-  if (matA.length !== rows || matA[0].length !== cols || one_d.length !== cols) {
-    console.log("matA", matA, "one_d", one_d, rows, cols);
-    throw Error("Unmatching dims for mat add 1d row on cpu");
-  }
-  const output = [];
-  for (let row = 0; row < rows; row++) {
-    output.push([]);
-    for (let col = 0; col < cols; col++) {
-      output[row].push(matA[row][col] + one_d[col]);
-    }
-  }
-  return output;
-}
+// {
+//   "0": 35,
+//   "1": 46,
+//   "2": 39,
+//   "3": 58,
+//   "4": 1,
+//   "5": 47,
+//   "6": 57,
+//   "7": 1,
+//   "8": 58,
+//   "9": 46,
+//   "10": 43,
+//   "11": 1,
+//   "12": 39,
+//   "13": 52,
+//   "14": 57,
+//   "15": 61,
+//   "16": 43,
+//   "17": 56,
+//   "18": 1,
+//   "19": 58,
+//   "20": 53,
+//   "21": 1,
+//   "22": 50,
+//   "23": 47,
+//   "24": 44,
+//   "25": 43,
+//   "26": 6,
+//   "27": 1,
+//   "28": 58,
+//   "29": 46,
+//   "30": 43,
+//   "31": 1,
+//   "32": 59,
+//   "33": 52,
+//   "34": 47,
+//   "35": 60,
+//   "36": 43,
+//   "37": 56,
+//   "38": 57,
+//   "39": 43,
+//   "40": 6,
+//   "41": 1,
+//   "42": 39,
+//   "43": 52,
+//   "44": 42,
+//   "45": 1,
+//   "46": 43,
+//   "47": 60,
+//   "48": 43,
+//   "49": 56,
+//   "50": 63,
+//   "51": 58,
+//   "52": 46,
+//   "53": 47,
+//   "54": 52,
+//   "55": 45,
+//   "56": 12
+// }

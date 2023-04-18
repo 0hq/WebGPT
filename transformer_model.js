@@ -13,6 +13,7 @@ async function runInference(prompt) {
     inputMatrix[i * vocab_size + prompt[i]] = 1;
   }
   // printMatrix(seq_length, vocab_size, new Float32Array(inputMatrix));
+  // console.log(seq_length, prompt, inputMatrix, vocab_size);
   const inputBuffer = createBuffer(device, bufferSizeCalc(seq_length, vocab_size), GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST);
   queue.writeBuffer(inputBuffer, 0, inputMatrix);
 
@@ -37,12 +38,14 @@ async function runInference(prompt) {
   const endTime = performance.now();
   console.log(`Time: ${endTime - startTime} ms`);
 
-  console.log("Result:", result);
+  const logits = new Float32Array(result).slice((seq_length - 1) * vocab_size);
 
-  const resultMatrix = formatAsMatrix(new Float32Array(result), seq_length, vocab_size);
-  console.log("Result matrix:");
+  // console.log("Result:", logits);
 
-  return resultMatrix[0];
+  // const resultMatrix = formatAsMatrix(new Float32Array(result), seq_length, vocab_size);
+  // console.log("Result matrix:");
+
+  return logits;
 }
 
 async function runGPT(
@@ -159,38 +162,37 @@ async function runGPT(
 
   if (doValidation) {
     console.log("Validating output...");
+    console.log("Expected output block:", validateModel[validateIndex]);
     console.log("Validating embedding...");
-    validateResult(new Float32Array(outputEmbedBuffer.getMappedRange()), validateModel[tokenIndex].tok_pos_emb, true);
+    validateResult(new Float32Array(outputEmbedBuffer.getMappedRange()), validateModel[validateIndex].tok_pos_emb);
     // console.log("norm gamma", new Float32Array(outputNormGammaBuffer.getMappedRange()));
     console.log("Validating blocks...");
     for (let i = 0; i < n_layers; i++) {
       console.log(`\tValidating block ${i}...`);
-      console.log("Objects:", validateModel[tokenIndex]);
       const block = outputBlockBuffers[i];
       console.log("\t\tValidating first layer norm...");
-      validateResult(new Float32Array(outputBlockBuffers[i][0].getMappedRange()), validateModel[tokenIndex][`block${i}_ln1`]);
+      validateResult(new Float32Array(outputBlockBuffers[i][0].getMappedRange()), validateModel[validateIndex][`block${i}_ln1`]);
       console.log("\t\tValidating attention...");
-      validateResult(new Float32Array(outputBlockBuffers[i][1].getMappedRange()), validateModel[tokenIndex][`block${i}_attn`]);
+      validateResult(new Float32Array(outputBlockBuffers[i][1].getMappedRange()), validateModel[validateIndex][`block${i}_attn`]);
       console.log("\t\tValidating residual attention...");
-      validateResult(new Float32Array(outputBlockBuffers[i][2].getMappedRange()), validateModel[tokenIndex][`block${i}_r1`]);
+      validateResult(new Float32Array(outputBlockBuffers[i][2].getMappedRange()), validateModel[validateIndex][`block${i}_r1`]);
       console.log("\t\tValidating second layer norm...");
-      validateResult(new Float32Array(outputBlockBuffers[i][3].getMappedRange()), validateModel[tokenIndex][`block${i}_ln2`]);
+      validateResult(new Float32Array(outputBlockBuffers[i][3].getMappedRange()), validateModel[validateIndex][`block${i}_ln2`]);
       console.log("\t\tValidating mlp...");
-      validateResult(new Float32Array(outputBlockBuffers[i][4].getMappedRange()), validateModel[tokenIndex][`block${i}_mlp`]);
+      validateResult(new Float32Array(outputBlockBuffers[i][4].getMappedRange()), validateModel[validateIndex][`block${i}_mlp`]);
       console.log("\t\tValidating residual mlp...");
-      validateResult(new Float32Array(outputBlockBuffers[i][5].getMappedRange()), validateModel[tokenIndex][`block${i}_r2`]);
+      validateResult(new Float32Array(outputBlockBuffers[i][5].getMappedRange()), validateModel[validateIndex][`block${i}_r2`]);
     }
     console.log("Validating layer norm...");
-    validateResult(new Float32Array(outputLayerNormBuffer.getMappedRange()), validateModel[tokenIndex].ln_f, true);
+    validateResult(new Float32Array(outputLayerNormBuffer.getMappedRange()), validateModel[validateIndex].ln_f);
     console.log("Validating logits...");
-    validateResult(new Float32Array(output).slice((seq_length - 1) * vocab_size), validateModel[tokenIndex].logits);
+    validateResult(new Float32Array(output).slice((seq_length - 1) * vocab_size), validateModel[validateIndex].logits);
   }
 
   return output;
 }
 
 function validateResult(result, validate, verbose = false) {
-  console.log(result);
   const resultArray = formatAsMatrix(result, validate.shape[1], validate.shape[2]);
   const validateArray = validate.data[0]; // Unpack from batch of 1
 
@@ -212,7 +214,7 @@ function validateResult(result, validate, verbose = false) {
 
     throw new Error("Test failed");
   } else {
-    console.log("Test passed!");
+    // console.log("Test passed!");
     if (verbose) {
       console.log("Result mat:", resultArray);
       // console.log("Validate mat:", validateArray);

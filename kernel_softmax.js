@@ -177,7 +177,6 @@ async function softmax(rows, cols, input) {
   // DIV pipeline, will be reused.
   const dividePipeline = createPipeline(device, createDivideShader(), [operationBindGroupLayout, inputBufferBindGroupLayout, inputBufferBindGroupLayout]);
 
-  console.log("Starting network");
   const inputBuffer = createBuffer(device, bufferSizeCalc(rows, cols), GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST);
   queue.writeBuffer(inputBuffer, 0, input);
 
@@ -199,7 +198,6 @@ async function softmax(rows, cols, input) {
   const divResultBuffer = createBuffer(device, bufferSizeCalc(rows, cols), GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC);
   const divBindGroup = createBindGroup(device, operationBindGroupLayout, [dimUniformBuffer, divResultBuffer]);
 
-  console.log("Starting passes");
   const commandEncoder = device.createCommandEncoder();
 
   const passEncoder_max = commandEncoder.beginComputePass();
@@ -288,8 +286,6 @@ function inlineSoftmax(device, queue, commandEncoder, rows, cols, inputBuffer) {
 
   const divResultBuffer = createBuffer(device, bufferSizeCalc(rows, cols), GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC);
   const divBindGroup = createBindGroup(device, operationBindGroupLayout, [dimUniformBuffer, divResultBuffer]);
-
-  console.log("Starting passes");
 
   const passEncoder_max = commandEncoder.beginComputePass();
   passEncoder_max.setPipeline(maxPipeline);

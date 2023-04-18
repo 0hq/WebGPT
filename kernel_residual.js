@@ -102,15 +102,6 @@ async function layerResidual(rows, cols, layerOutput, residual) {
 //   // }
 // })();
 
-function printMatrix(rows, cols, array) {
-  const matrix = [];
-  for (let i = 0; i < rows; i++) {
-    matrix.push(Array.from(array.slice(i * cols, (i + 1) * cols)));
-  }
-  console.log(matrix);
-  return matrix;
-}
-
 function getStandardDeviation(array) {
   const n = array.length;
   const mean = array.reduce((a, b) => a + b) / n;

@@ -80,7 +80,7 @@ function checkAlmostEqualMatrices(a, b) {
   return true;
 }
 
-function simpleSoftmax(input) {
+function simpleSoftmax(input, temperature = 1.0) {
   const output = new Float32Array(input.length);
   let max = input[0];
 
@@ -94,7 +94,7 @@ function simpleSoftmax(input) {
   // Calculate the exponentials, and keep track of the sum
   let sumExp = 0.0;
   for (let i = 0; i < input.length; i++) {
-    const exp = Math.exp(input[i] - max);
+    const exp = Math.exp(input[i] - max) / temperature;
     output[i] = exp;
     sumExp += exp;
   }
@@ -107,7 +107,7 @@ function simpleSoftmax(input) {
   return output;
 }
 
-function sampleFromDistribution(probs) {
+function sampleFromDistributionOld(probs) {
   const r = Math.random();
   let sum = 0;
   for (let i = 0; i < probs.length; i++) {
@@ -128,4 +128,72 @@ function subtractMatrices(a, b) {
   }
 
   return result;
+}
+
+function matrixMult(matA, matB, rows, cols, shared) {
+  if (matA.length !== rows || matB[0].length !== cols || matA[0].length !== matB.length || matB.length !== shared) {
+    console.log("matA", matA, "matB", matB, rows, cols, shared);
+    throw Error("Unmatching dims for mat mul on cpu");
+  }
+  const output = [];
+  for (let row = 0; row < rows; row++) {
+    output.push([]);
+    for (let col = 0; col < cols; col++) {
+      let sum = 0;
+      for (let i = 0; i < shared; i++) {
+        sum += matA[row][i] * matB[i][col];
+      }
+      output[row].push(sum);
+    }
+  }
+  return output;
+}
+
+function matrixAdd1dRow(matA, one_d, rows, cols) {
+  if (matA.length !== rows || matA[0].length !== cols || one_d.length !== cols) {
+    console.log("matA", matA, "one_d", one_d, rows, cols);
+    throw Error("Unmatching dims for mat add 1d row on cpu");
+  }
+  const output = [];
+  for (let row = 0; row < rows; row++) {
+    output.push([]);
+    for (let col = 0; col < cols; col++) {
+      output[row].push(matA[row][col] + one_d[col]);
+    }
+  }
+  return output;
+}
+
+function sampleFromDistribution(probs, top_k) {
+  const sortedIndices = Array.from(probs)
+    .map((value, index) => ({ value, index }))
+    .sort((a, b) => b.value - a.value)
+    .map(({ index }) => index);
+
+  const topKIndices = sortedIndices.slice(0, top_k);
+  const topKProbs = topKIndices.map((index) => probs[index]);
+
+  const sumTopKProbs = topKProbs.reduce((a, b) => a + b, 0);
+  const normalizedTopKProbs = topKProbs.map((prob) => prob / sumTopKProbs);
+
+  // console.log("Top K Indices", topKIndices);
+  // console.log("Top K Probs", topKProbs);
+  // console.log("Normalized Top K Probs", normalizedTopKProbs);
+
+  const rand = Math.random();
+  let cumulativeProb = 0;
+  for (let i = 0; i < top_k; i++) {
+    cumulativeProb += normalizedTopKProbs[i];
+    if (rand < cumulativeProb) {
+      return topKIndices[i];
+    }
+  }
+  return topKIndices[top_k - 1]; // Return the last index in top_k if the loop doesn't return any index
+}
+
+function cpuSoftmax(logits, temperature = 1.0) {
+  const maxLogit = Math.max(...logits);
+  const expLogits = logits.map((logit) => Math.exp((logit - maxLogit) / temperature));
+  const sumExpLogits = expLogits.reduce((a, b) => a + b, 0);
+  return expLogits.map((expLogit) => expLogit / sumExpLogits);
 }
