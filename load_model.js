@@ -18,14 +18,10 @@ async function loadGPTModel(folder) {
   const hidden_size = n_embd * 4; // Transformer block has 4 hidden layers by default, not a param.
   const attentionDotProductScale = 1 / Math.sqrt(n_embd / n_heads);
 
-  // const embeddings = new Array(vocab_size * n_embd).fill(0);
-  // const embdBuffer = createBuffer(device, bufferSizeCalc(vocab_size, n_embd), GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST);
-  // queue.writeBuffer(embdBuffer, 0, new Float32Array(embeddings));
-
   const posEmbeddingsJSON = await fetch(`models/${folder}/transformer.wpe.weight_gpt.json`);
-  console.log("posEmbeddingsJSON", posEmbeddingsJSON);
+  // console.log("posEmbeddingsJSON", posEmbeddingsJSON);
   const posEmbeddingsJSON2 = await posEmbeddingsJSON.json();
-  console.log("posEmbeddingsJSON2", posEmbeddingsJSON2);
+  // console.log("posEmbeddingsJSON2", posEmbeddingsJSON2);
   const posEmbeddings = posEmbeddingsJSON2.values.flat().map(parseFloat);
   const posEmbdBuffer = createBuffer(device, bufferSizeCalc(context_size, n_embd), GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST | GPUBufferUsage.COPY_SRC);
   queue.writeBuffer(posEmbdBuffer, 0, new Float32Array(posEmbeddings));
@@ -42,8 +38,8 @@ async function loadGPTModel(folder) {
     const layerNormAttentionGamma = layerNormAttentionGammaJSON.values.flat().map(parseFloat);
     const layerNormAttentionBetaJSON = await (await fetch(`models/${folder}/${prefix}ln_1.bias_gpt.json`)).json();
     const layerNormAttentionBeta = biasEnabled ? layerNormAttentionBetaJSON.values.flat().map(parseFloat) : new Array(n_embd).fill(0);
-    console.log(layerNormAttentionBetaJSON);
-    console.log(layerNormAttentionGammaJSON);
+    // console.log(layerNormAttentionBetaJSON);
+    // console.log(layerNormAttentionGammaJSON);
     const normAttentionGammaBuffer = createBuffer(device, bufferSizeCalc(n_embd), GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST);
     const normAttentionBetaBuffer = createBuffer(device, bufferSizeCalc(n_embd), GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST);
     queue.writeBuffer(normAttentionGammaBuffer, 0, new Float32Array(layerNormAttentionGamma));
@@ -57,8 +53,8 @@ async function loadGPTModel(folder) {
     const qkv_weights = qkv_weightsJSON.values.flat().map(parseFloat);
     const qkv_biasJSON = await (await fetch(`models/${folder}/${prefix}attn.c_attn.bias_gpt.json`)).json();
     const qkv_bias = biasEnabled ? qkv_biasJSON.values.flat().map(parseFloat) : new Array(3 * n_embd).fill(0);
-    console.log("qkv_bias", qkv_biasJSON);
-    console.log("qkv_weights", qkv_weightsJSON);
+    // console.log("qkv_bias", qkv_biasJSON);
+    // console.log("qkv_weights", qkv_weightsJSON);
     const qkvWeightsBuffer = createBuffer(
       device,
       bufferSizeCalc(n_embd, 3 * n_embd),
@@ -76,8 +72,8 @@ async function loadGPTModel(folder) {
     const linear_weights = linear_weightsJSON.values.flat().map(parseFloat);
     const linear_biasJSON = await (await fetch(`models/${folder}/${prefix}attn.c_proj.bias_gpt.json`)).json();
     const linear_bias = biasEnabled ? linear_biasJSON.values.flat().map(parseFloat) : new Array(n_embd).fill(0);
-    console.log("linear_bias", linear_biasJSON);
-    console.log("linear_weights", linear_weightsJSON);
+    // console.log("linear_bias", linear_biasJSON);
+    // console.log("linear_weights", linear_weightsJSON);
     const linearWeightsBuffer = createBuffer(device, bufferSizeCalc(n_embd, n_embd), GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST);
     const linearBiasBuffer = createBuffer(device, bufferSizeCalc(n_embd), GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST);
     queue.writeBuffer(linearWeightsBuffer, 0, new Float32Array(transposeArray(linear_weights, n_embd, n_embd)));
@@ -91,8 +87,8 @@ async function loadGPTModel(folder) {
     const layerNormLinearGamma = layerNormLinearGammaJSON.values.flat().map(parseFloat);
     const layerNormLinearBetaJSON = await (await fetch(`models/${folder}/${prefix}ln_2.bias_gpt.json`)).json();
     const layerNormLinearBeta = biasEnabled ? layerNormLinearBetaJSON.values.flat().map(parseFloat) : new Array(n_embd).fill(0);
-    console.log("beta layer norm", layerNormLinearBetaJSON);
-    console.log("gamma layer norm", layerNormLinearGammaJSON);
+    // console.log("beta layer norm", layerNormLinearBetaJSON);
+    // console.log("gamma layer norm", layerNormLinearGammaJSON);
 
     const normLinearGammaBuffer = createBuffer(device, bufferSizeCalc(n_embd), GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST);
     const normLinearBetaBuffer = createBuffer(device, bufferSizeCalc(n_embd), GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST);
@@ -107,8 +103,8 @@ async function loadGPTModel(folder) {
     const firstLayerWeights = firstLayerWeightsJSON.values.flat().map(parseFloat);
     const firstLayerBiasJSON = await (await fetch(`models/${folder}/${prefix}mlp.c_fc.bias_gpt.json`)).json();
     const firstLayerBias = biasEnabled ? firstLayerBiasJSON.values.flat().map(parseFloat) : new Array(hidden_size).fill(0);
-    console.log("first layer bias", firstLayerBiasJSON);
-    console.log("first layer weights", firstLayerWeightsJSON);
+    // console.log("first layer bias", firstLayerBiasJSON);
+    // console.log("first layer weights", firstLayerWeightsJSON);
     const firstLayerWeightsBuffer = createBuffer(device, bufferSizeCalc(n_embd, hidden_size), GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST);
     const firstLayerBiasBuffer = createBuffer(device, bufferSizeCalc(hidden_size), GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST);
     queue.writeBuffer(firstLayerWeightsBuffer, 0, new Float32Array(transposeArray(firstLayerWeights, hidden_size, n_embd)));
@@ -122,8 +118,8 @@ async function loadGPTModel(folder) {
     const secondLayerWeights = secondLayerWeightsJSON.values.flat().map(parseFloat);
     const secondLayerBiasJSON = await (await fetch(`models/${folder}/${prefix}mlp.c_proj.bias_gpt.json`)).json();
     const secondLayerBias = biasEnabled ? secondLayerBiasJSON.values.flat().map(parseFloat) : new Array(n_embd).fill(0);
-    console.log("second layer bias", secondLayerBiasJSON);
-    console.log("second layer weights", secondLayerWeightsJSON);
+    // console.log("second layer bias", secondLayerBiasJSON);
+    // console.log("second layer weights", secondLayerWeightsJSON);
     const secondLayerWeightsBuffer = createBuffer(device, bufferSizeCalc(hidden_size, n_embd), GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST);
     const secondLayerBiasBuffer = createBuffer(device, bufferSizeCalc(hidden_size), GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST);
     queue.writeBuffer(secondLayerWeightsBuffer, 0, new Float32Array(transposeArray(secondLayerWeights, n_embd, hidden_size)));
@@ -140,22 +136,13 @@ async function loadGPTModel(folder) {
   const layerNormGamma = layerNormGammaJSON.values.flat().map(parseFloat);
   const layerNormBetaJSON = await (await fetch(`models/${folder}/transformer.ln_f.bias_gpt.json`)).json();
   const layerNormBeta = biasEnabled ? layerNormBetaJSON.values.flat().map(parseFloat) : new Array(n_embd).fill(0);
-  console.log("beta layer norm", layerNormBetaJSON);
-  console.log("gamma layer norm", layerNormGammaJSON);
+  // console.log("beta layer norm", layerNormBetaJSON);
+  // console.log("gamma layer norm", layerNormGammaJSON);
 
   const normGammaBuffer = createBuffer(device, bufferSizeCalc(n_embd), GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST);
   const normBetaBuffer = createBuffer(device, bufferSizeCalc(n_embd), GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST);
   queue.writeBuffer(normGammaBuffer, 0, new Float32Array(layerNormGamma));
   queue.writeBuffer(normBetaBuffer, 0, new Float32Array(layerNormBeta));
-
-  // const deEmbeddings = model["lm_head.weight"].values.flat().map(parseFloat);
-
-  // const deEmbeddingsJSON = await (await fetch(`models/${folder}/lm_head.weight_gpt.json`)).json();
-  // const deEmbeddings = new Array(vocab_size * n_embd).fill(0);
-  // const deEmbedBuffer = createBuffer(device, bufferSizeCalc(n_embd, vocab_size), GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST);
-  // queue.writeBuffer(deEmbedBuffer, 0, new Float32Array(transposeArray(deEmbeddings, vocab_size, n_embd)));
-
-  // console.log(new Float32Array(transposeArray(deEmbeddings, vocab_size, n_embd)));
 
   return {
     device,
@@ -170,12 +157,12 @@ async function loadGPTModel(folder) {
       hidden_size,
       context_size,
     },
-    embdBuffer,
+    embdBuffer: null,
     posEmbdBuffer,
     layer_buffers,
     normGammaBuffer,
     normBetaBuffer,
-    deEmbedBuffer,
+    deEmbedBuffer: null,
   };
 }
 

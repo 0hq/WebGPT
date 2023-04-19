@@ -11,10 +11,42 @@ const doValidation = false;
 
 let tokenizer = null;
 
+async function loadBinaryFile(url) {
+  const response = await fetch(url);
+  const buffer = await response.arrayBuffer();
+  return new Float32Array(buffer);
+}
+
+function flattenEmbeddings(embeddings) {
+  const totalLength = embeddings.reduce((acc, arr) => acc + arr.length, 0);
+  const flattened = new Float32Array(totalLength);
+
+  let offset = 0;
+  for (const arr of embeddings) {
+    flattened.set(arr, offset);
+    offset += arr.length;
+  }
+
+  return flattened;
+}
+
+let embeddingWeights = null;
+
+// models/gpt2/transformer.wte.weight_gpt.json
 (async () => {
   tokenizer = await loadGPT2Tokenizer();
 
-  modelParams = await loadFakeGPT2();
+  embeddingWeights = await loadBinaryFile("models/gpt2/transformer.wte.weight_gpt.bin");
+
+  // const weights = await loadBinaryFile("models/gpt2/transformer.wte.weight_gpt.bin");
+  // const prompt = "The quick brown fox jumps over the lazy dog";
+  // const encoded = encode(prompt);
+
+  // Use encodings to index into weights
+
+  // console.log("Flattened", flattened);
+
+  modelParams = await loadGPTModel("gpt2");
   console.log("Params:", modelParams);
 
   generateFromModel("The quick brown fox jumps over the lazy dog", 10, 1);
@@ -37,7 +69,8 @@ async function generateFromModel(prompt, max_new_tokens, top_k = 1) {
 
     const idx_cond = history.slice(-context_size);
     const result = await runInference(idx_cond);
-    const logits = result.slice((idx_cond.length - 1) * modelParams.params.vocab_size);
+    // const logits = result.slice((idx_cond.length - 1) * modelParams.params.vocab_size);
+    const logits = result;
     const probs = cpuSoftmax(logits, 1.0);
     const idx_next = sampleFromDistribution(probs, top_k);
 
@@ -61,8 +94,13 @@ async function runInference(idx) {
   const { attentionDotProductScale, biasEnabled, n_embd, n_heads, n_layers, vocab_size, hidden_size, context_size } = params;
   const seq_length = idx.length;
 
+  const embeddings = idx.map((token) => embeddingWeights.slice(token * 768, (token + 1) * 768));
+  const flattened = flattenEmbeddings(embeddings);
+  const embdOutputBuffer = createBuffer(device, bufferSizeCalc(seq_length, n_embd), GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST);
+  queue.writeBuffer(embdOutputBuffer, 0, flattened);
+
   const startTime = performance.now();
-  const result = await runGPT(
+  const result = await runGPTCheat(
     device,
     queue,
     seq_length,
@@ -71,8 +109,7 @@ async function runInference(idx) {
     n_heads,
     n_layers,
     attentionDotProductScale,
-    idx,
-    embdBuffer,
+    embdOutputBuffer,
     posEmbdBuffer,
     layer_buffers,
     normGammaBuffer,
