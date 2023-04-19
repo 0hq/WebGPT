@@ -1,55 +1,22 @@
-let validateIndex = 0;
-
-let itos = null;
-let stoi = null;
 let modelParams = null;
 let bufferSizeCalc = null;
 
+let validateIndex = 0;
 let validateModel = null;
 const validateFile = "generation copy.json";
 const doValidation = false;
 
 let tokenizer = null;
 
-async function loadBinaryFile(url) {
-  const response = await fetch(url);
-  const buffer = await response.arrayBuffer();
-  return new Float32Array(buffer);
-}
-
-function flattenEmbeddings(embeddings) {
-  const totalLength = embeddings.reduce((acc, arr) => acc + arr.length, 0);
-  const flattened = new Float32Array(totalLength);
-
-  let offset = 0;
-  for (const arr of embeddings) {
-    flattened.set(arr, offset);
-    offset += arr.length;
-  }
-
-  return flattened;
-}
-
 let embeddingWeights = null;
 
-// models/gpt2/transformer.wte.weight_gpt.json
 (async () => {
-  tokenizer = await loadGPT2Tokenizer();
+  tokenizer = await loadSimpleTokenizer();
 
-  embeddingWeights = await loadBinaryFile("models/gpt2/transformer.wte.weight_gpt.bin");
-
-  // const weights = await loadBinaryFile("models/gpt2/transformer.wte.weight_gpt.bin");
-  // const prompt = "The quick brown fox jumps over the lazy dog";
-  // const encoded = encode(prompt);
-
-  // Use encodings to index into weights
-
-  // console.log("Flattened", flattened);
-
-  modelParams = await loadGPTModel("gpt2");
+  modelParams = await loadGPTModel("shakespeare_gpt");
   console.log("Params:", modelParams);
 
-  generateFromModel("The quick brown fox jumps over the lazy dog", 10, 1);
+  generateFromModel("What is the answer to life, the universe, and everything?", 1, 1);
 })();
 
 async function generateFromModel(prompt, max_new_tokens, top_k = 1) {
@@ -59,7 +26,7 @@ async function generateFromModel(prompt, max_new_tokens, top_k = 1) {
   }
 
   console.log("Starting generation with prompt", prompt);
-  let history = encode(prompt);
+  let history = tokenizer.encode(prompt);
   console.log("Tokenized prompt", history);
 
   const context_size = modelParams.params.context_size;
@@ -77,12 +44,12 @@ async function generateFromModel(prompt, max_new_tokens, top_k = 1) {
     console.log("Next token", idx_next);
     history = history.concat(idx_next);
 
-    console.log(`Output:\n${decode(history)}`);
+    console.log(`Output:\n${tokenizer.decode(history)}`);
   }
 }
 
 async function runInference(idx) {
-  if (!modelParams) {
+  if (!modelParams || !embeddingWeights) {
     console.log("Model not loaded yet");
     return;
   }
@@ -90,11 +57,12 @@ async function runInference(idx) {
   console.log("\nRunning model inference.");
   console.log("Starting with", idx.length, "tokens.");
 
-  const { device, queue, params, embdBuffer, posEmbdBuffer, layer_buffers, normGammaBuffer, normBetaBuffer, deEmbedBuffer } = modelParams;
-  const { attentionDotProductScale, biasEnabled, n_embd, n_heads, n_layers, vocab_size, hidden_size, context_size } = params;
+  const { device, queue, params, posEmbdBuffer, layer_buffers, normGammaBuffer, normBetaBuffer } = modelParams;
+  const { attentionDotProductScale, n_embd, n_heads, n_layers, vocab_size } = params;
   const seq_length = idx.length;
 
-  const embeddings = idx.map((token) => embeddingWeights.slice(token * 768, (token + 1) * 768));
+  console.log("Embedding inputs...");
+  const embeddings = idx.map((token) => embeddingWeights.slice(token * n_embd, (token + 1) * n_embd));
   const flattened = flattenEmbeddings(embeddings);
   const embdOutputBuffer = createBuffer(device, bufferSizeCalc(seq_length, n_embd), GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST);
   queue.writeBuffer(embdOutputBuffer, 0, flattened);
@@ -113,8 +81,7 @@ async function runInference(idx) {
     posEmbdBuffer,
     layer_buffers,
     normGammaBuffer,
-    normBetaBuffer,
-    deEmbedBuffer
+    normBetaBuffer
   );
   const endTime = performance.now();
   console.log(`Time: ${endTime - startTime} ms`);

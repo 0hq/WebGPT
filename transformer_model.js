@@ -15,6 +15,7 @@ async function runGPT(
 ) {
   const commandEncoder = device.createCommandEncoder();
 
+  console.log("Mixing embeddings...");
   // Crop the position embeddings to the correct size.
   const posEmbdOutputBuffer = createBuffer(
     device,
@@ -36,6 +37,7 @@ async function runGPT(
   const buffers = [];
 
   for (let i = 0; i < n_layers; i++) {
+    console.log(`Processing block ${i}...`);
     const layer_params = layer_buffers[i];
     const {
       layerNormAttentionOutputBuffer,
@@ -56,6 +58,7 @@ async function runGPT(
     layerBuffer = residualLinearOutputBuffer;
   }
 
+  console.log("Normalizing output...");
   const layerNormOutputBuffer = inlineLayerNorm(device, queue, commandEncoder, seq_length, n_embd, layerBuffer, normGammaBuffer, normBetaBuffer);
 
   const outputBuffer = createOutputBuffer(device, commandEncoder, layerNormOutputBuffer, seq_length, n_embd);
@@ -71,6 +74,8 @@ async function runGPT(
 }
 
 function deEmbedCPU(embeddings, seq_length, n_embd, vocab_size) {
+  console.log("De-embedding output... (CPU)");
+
   const predictionEmbeddings = new Float32Array(embeddings).slice((seq_length - 1) * n_embd);
 
   const vocabToEmbeddings = transposeArray(embeddingWeights, vocab_size, n_embd);

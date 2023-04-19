@@ -14,8 +14,12 @@ async function loadGPTModel(folder) {
 
   console.log("context_size", context_size, "vocab_size", vocab_size, "n_embd", n_embd, "n_heads", n_heads, "n_layers", n_layers, "biasEnabled", biasEnabled);
 
+  console.log("Loading embeddings...");
+  embeddingWeights = await loadBinaryFile("models/" + folder + "/transformer.wte.weight_gpt.bin");
+  console.log(embeddingWeights);
+
   console.log("Loading positional embeddings...");
-  const posEmbeddings = await loadBinaryFile("models/gpt2/transformer.wpe.weight_gpt.bin");
+  const posEmbeddings = await loadBinaryFile("models/" + folder + "/transformer.wpe.weight_gpt.bin");
   const posEmbdBuffer = createBuffer(device, bufferSizeCalc(context_size, n_embd), GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST | GPUBufferUsage.COPY_SRC);
   queue.writeBuffer(posEmbdBuffer, 0, posEmbeddings);
 
@@ -107,12 +111,10 @@ async function loadGPTModel(folder) {
       hidden_size,
       context_size,
     },
-    embdBuffer: null,
     posEmbdBuffer,
     layer_buffers,
     normGammaBuffer,
     normBetaBuffer,
-    deEmbedBuffer: null,
   };
 }
 

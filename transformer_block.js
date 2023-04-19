@@ -24,6 +24,8 @@ function transformerBlock(
   const bufferSizeCalc = (dimA, dimB = 1) => alignedSize(dimA * dimB * Float32Array.BYTES_PER_ELEMENT, minStorageBufferOffsetAlignment);
   const hidden_size = n_embd * 4; // Transformer block has 4 hidden layers by default, not a param.
 
+  console.log("\tNormalizing block input...");
+
   const layerNormAttentionOutputBuffer = inlineLayerNorm(
     device,
     queue,
@@ -34,6 +36,8 @@ function transformerBlock(
     normAttentionGammaBuffer,
     normAttentionBetaBuffer
   );
+
+  console.log("\tRunning attention block...");
 
   const attentionOutputBuffer = inlineAttention(
     device,
@@ -50,7 +54,11 @@ function transformerBlock(
     linearBiasBuffer
   );
 
+  console.log("\tResidual connections from attention and input...");
+
   const residualAttentionOutputBuffer = inlineResidual(device, queue, commandEncoder, seq_length, n_embd, attentionOutputBuffer, inputBuffer);
+
+  console.log("\tNormalizing attention output...");
 
   const layerNormLinearOutputBuffer = inlineLayerNorm(
     device,
@@ -62,6 +70,8 @@ function transformerBlock(
     normLinearGammaBuffer,
     normLinearBetaBuffer
   );
+
+  console.log("\tRunning MLP...");
 
   const linearOutputBuffer = inlineFFN(
     device,
@@ -76,6 +86,8 @@ function transformerBlock(
     secondLayerWeightsBuffer,
     secondLayerBiasBuffer
   );
+
+  console.log("\tResidual connections from MLP and attention...");
 
   const residualLinearOutputBuffer = inlineResidual(device, queue, commandEncoder, seq_length, n_embd, linearOutputBuffer, residualAttentionOutputBuffer);
 

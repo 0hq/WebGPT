@@ -34,6 +34,8 @@ async function loadGPT2Tokenizer() {
   const cache = new Map();
 
   return {
+    encode: encodeGPT,
+    decode: decodeGPT,
     encoder,
     decoder,
     bpe_ranks,
@@ -48,9 +50,28 @@ async function loadSimpleTokenizer() {
 
   const tokenDict = await (await fetch("models/tokens.json")).json();
   return {
-    encoder: (str) => str.map((x) => tokenDict.stoi[x]),
-    decoder: (arr) => arr.map((x) => tokenDict.itos[x]),
+    encode: (str) => str.split("").map((x) => tokenDict.stoi[x]),
+    decode: (arr) => arr.map((x) => tokenDict.itos[x]).join(""),
   };
+}
+
+async function loadBinaryFile(url) {
+  const response = await fetch(url);
+  const buffer = await response.arrayBuffer();
+  return new Float32Array(buffer);
+}
+
+function flattenEmbeddings(embeddings) {
+  const totalLength = embeddings.reduce((acc, arr) => acc + arr.length, 0);
+  const flattened = new Float32Array(totalLength);
+
+  let offset = 0;
+  for (const arr of embeddings) {
+    flattened.set(arr, offset);
+    offset += arr.length;
+  }
+
+  return flattened;
 }
 
 // ------------------ Helper functions ------------------
@@ -188,7 +209,7 @@ function bpe(token) {
   return word;
 }
 
-function encode(text) {
+function encodeGPT(text) {
   if (tokenizer.byte_encoder === undefined) {
     throw new Error("Not loaded.");
   }
@@ -209,7 +230,7 @@ function encode(text) {
   return bpe_tokens;
 }
 
-function decode(tokens) {
+function decodeGPT(tokens) {
   if (tokenizer.byte_decoder === undefined || tokenizer.decoder === undefined) {
     throw new Error("Not loaded.");
   }
