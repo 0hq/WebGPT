@@ -1,3 +1,60 @@
+const pat = /'s|'t|'re|'ve|'m|'ll|'d| ?\p{L}+| ?\p{N}+| ?[^\s\p{L}\p{N}]+|\s+(?!\S)|\s+/gu;
+const textEncoder = new TextEncoder("utf-8");
+const textDecoder = new TextDecoder("utf-8");
+
+// ------------------ Tokenizer ------------------
+
+async function loadGPT2Tokenizer() {
+  console.log("Loading GPT2 tokenizer...");
+
+  const bpe_file = await (await fetch("models/vocab.bpe")).text();
+  const encoder = await (await fetch("models/gpt_string_to_int.json")).json();
+
+  const decoder = {};
+  Object.keys(encoder).map((x) => {
+    decoder[encoder[x]] = x;
+  });
+
+  const lines = bpe_file.split("\n");
+
+  // bpe_merges = [tuple(merge_str.split()) for merge_str in bpe_data.split("\n")[1:-1]]
+  const bpe_merges = lines.slice(1, lines.length - 1).map((x) => {
+    return x.split(/(\s+)/).filter(function (e) {
+      return e.trim().length > 0;
+    });
+  });
+
+  const byte_encoder = bytes_to_unicode();
+  const byte_decoder = {};
+  Object.keys(byte_encoder).map((x) => {
+    byte_decoder[byte_encoder[x]] = x;
+  });
+
+  const bpe_ranks = dictZip(bpe_merges, range(0, bpe_merges.length));
+  const cache = new Map();
+
+  return {
+    encoder,
+    decoder,
+    bpe_ranks,
+    byte_encoder,
+    byte_decoder,
+    cache,
+  };
+}
+
+async function loadSimpleTokenizer() {
+  console.log("Loading simple tokenizer...");
+
+  const tokenDict = await (await fetch("models/tokens.json")).json();
+  return {
+    encoder: (str) => str.map((x) => tokenDict.stoi[x]),
+    decoder: (arr) => arr.map((x) => tokenDict.itos[x]),
+  };
+}
+
+// ------------------ Helper functions ------------------
+
 const range = (x, y) => {
   const res = Array.from(Array(y).keys()).slice(x);
   return res;
@@ -61,8 +118,8 @@ function get_pairs(word) {
 }
 
 function bpe(token) {
-  if (tokenizerData.cache.has(token)) {
-    return tokenizerData.cache.get(token);
+  if (tokenizer.cache.has(token)) {
+    return tokenizer.cache.get(token);
   }
   ``;
 
@@ -77,7 +134,7 @@ function bpe(token) {
   while (true) {
     const minPairs = {};
     Array.from(pairs).map((pair) => {
-      const rank = tokenizerData.bpe_ranks[pair];
+      const rank = tokenizer.bpe_ranks[pair];
       minPairs[isNaN(rank) ? 10e10 : rank] = pair;
     });
 
@@ -90,7 +147,7 @@ function bpe(token) {
         )
       ];
 
-    if (!(bigram in tokenizerData.bpe_ranks)) {
+    if (!(bigram in tokenizer.bpe_ranks)) {
       break;
     }
 
@@ -126,13 +183,13 @@ function bpe(token) {
   }
 
   word = word.join(" ");
-  tokenizerData.cache.set(token, word);
+  tokenizer.cache.set(token, word);
 
   return word;
 }
 
 function encode(text) {
-  if (tokenizerData.byte_encoder === undefined) {
+  if (tokenizer.byte_encoder === undefined) {
     throw new Error("Not loaded.");
   }
   let bpe_tokens = [];
@@ -140,23 +197,23 @@ function encode(text) {
   for (let token of matches) {
     token = encodeStr(token)
       .map((x) => {
-        return tokenizerData.byte_encoder[x];
+        return tokenizer.byte_encoder[x];
       })
       .join("");
 
     const new_tokens = bpe(token)
       .split(" ")
-      .map((x) => tokenizerData.encoder[x]);
+      .map((x) => tokenizer.encoder[x]);
     bpe_tokens = bpe_tokens.concat(new_tokens);
   }
   return bpe_tokens;
 }
 
 function decode(tokens) {
-  if (tokenizerData.byte_decoder === undefined || tokenizerData.decoder === undefined) {
+  if (tokenizer.byte_decoder === undefined || tokenizer.decoder === undefined) {
     throw new Error("Not loaded.");
   }
-  let text = tokens.map((x) => tokenizerData.decoder[x]).join("");
-  text = decodeStr(text.split("").map((x) => tokenizerData.byte_decoder[x]));
+  let text = tokens.map((x) => tokenizer.decoder[x]).join("");
+  text = decodeStr(text.split("").map((x) => tokenizer.byte_decoder[x]));
   return text;
 }

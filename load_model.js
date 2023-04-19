@@ -180,7 +180,7 @@ async function loadGPTModel(folder) {
 }
 
 async function loadFakeGPT2() {
-  console.log("Loading model...");
+  console.log("FakeGPT: Loading model as all zeros...");
 
   const { device, queue } = await initializeWebGPU();
   const minStorageBufferOffsetAlignment = 1; // device.limits.minStorageBufferOffsetAlignment; // This was breaking things. Probably should check later.
@@ -195,11 +195,13 @@ async function loadFakeGPT2() {
   const hidden_size = n_embd * 4; // Transformer block has 4 hidden layers by default, not a param.
   const attentionDotProductScale = 1 / Math.sqrt(n_embd / n_heads);
 
-  const embeddings = new Array(vocab_size * n_embd).fill(0);
-  const embdBuffer = createBuffer(device, bufferSizeCalc(vocab_size, n_embd), GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST);
+  console.log("Loading embeddings...");
+  const embeddings = new Array(vocab_size * (n_embd - 400)).fill(0.1);
+  console.warn("WARNING: Using fake embeddings offset by 400.");
+  const embdBuffer = createBuffer(device, bufferSizeCalc(vocab_size, n_embd - 400), GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST);
   queue.writeBuffer(embdBuffer, 0, new Float32Array(embeddings));
 
-  const posEmbeddings = new Array(context_size * n_embd).fill(0);
+  const posEmbeddings = new Array(context_size * n_embd).fill(0.1);
   const posEmbdBuffer = createBuffer(device, bufferSizeCalc(context_size, n_embd), GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST | GPUBufferUsage.COPY_SRC);
   queue.writeBuffer(posEmbdBuffer, 0, new Float32Array(posEmbeddings));
 
@@ -208,18 +210,18 @@ async function loadFakeGPT2() {
   for (let i = 0; i < n_layers; i++) {
     const buffers = [];
 
-    console.log("Loading layer", i);
+    console.log("Loading layer...", i);
 
-    const layerNormAttentionGamma = new Array(n_embd).fill(0);
-    const layerNormAttentionBeta = new Array(n_embd).fill(0);
+    const layerNormAttentionGamma = new Array(n_embd).fill(0.1);
+    const layerNormAttentionBeta = new Array(n_embd).fill(0.1);
     const normAttentionGammaBuffer = createBuffer(device, bufferSizeCalc(n_embd), GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST);
     const normAttentionBetaBuffer = createBuffer(device, bufferSizeCalc(n_embd), GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST);
     queue.writeBuffer(normAttentionGammaBuffer, 0, new Float32Array(layerNormAttentionGamma));
     queue.writeBuffer(normAttentionBetaBuffer, 0, new Float32Array(layerNormAttentionBeta));
     buffers.push(normAttentionGammaBuffer, normAttentionBetaBuffer);
 
-    const qkv_weights = new Array(n_embd * 3 * n_embd).fill(0);
-    const qkv_bias = new Array(3 * n_embd).fill(0);
+    const qkv_weights = new Array(n_embd * 3 * n_embd).fill(0.1);
+    const qkv_bias = new Array(3 * n_embd).fill(0.1);
     const qkvWeightsBuffer = createBuffer(
       device,
       bufferSizeCalc(n_embd, 3 * n_embd),
@@ -230,32 +232,32 @@ async function loadFakeGPT2() {
     queue.writeBuffer(qkvBiasBuffer, 0, new Float32Array(qkv_bias));
     buffers.push(qkvWeightsBuffer, qkvBiasBuffer);
 
-    const linear_weights = new Array(n_embd * n_embd).fill(0);
-    const linear_bias = new Array(n_embd).fill(0);
+    const linear_weights = new Array(n_embd * n_embd).fill(0.1);
+    const linear_bias = new Array(n_embd).fill(0.1);
     const linearWeightsBuffer = createBuffer(device, bufferSizeCalc(n_embd, n_embd), GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST);
     const linearBiasBuffer = createBuffer(device, bufferSizeCalc(n_embd), GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST);
     queue.writeBuffer(linearWeightsBuffer, 0, new Float32Array(transposeArray(linear_weights, n_embd, n_embd)));
     queue.writeBuffer(linearBiasBuffer, 0, new Float32Array(linear_bias));
     buffers.push(linearWeightsBuffer, linearBiasBuffer);
 
-    const layerNormLinearGamma = new Array(n_embd).fill(0);
-    const layerNormLinearBeta = new Array(n_embd).fill(0);
+    const layerNormLinearGamma = new Array(n_embd).fill(0.1);
+    const layerNormLinearBeta = new Array(n_embd).fill(0.1);
     const normLinearGammaBuffer = createBuffer(device, bufferSizeCalc(n_embd), GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST);
     const normLinearBetaBuffer = createBuffer(device, bufferSizeCalc(n_embd), GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST);
     queue.writeBuffer(normLinearGammaBuffer, 0, new Float32Array(layerNormLinearGamma));
     queue.writeBuffer(normLinearBetaBuffer, 0, new Float32Array(layerNormLinearBeta));
     buffers.push(normLinearGammaBuffer, normLinearBetaBuffer);
 
-    const firstLayerWeights = new Array(hidden_size * n_embd).fill(0);
-    const firstLayerBias = new Array(hidden_size).fill(0);
+    const firstLayerWeights = new Array(hidden_size * n_embd).fill(0.1);
+    const firstLayerBias = new Array(hidden_size).fill(0.1);
     const firstLayerWeightsBuffer = createBuffer(device, bufferSizeCalc(n_embd, hidden_size), GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST);
     const firstLayerBiasBuffer = createBuffer(device, bufferSizeCalc(hidden_size), GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST);
     queue.writeBuffer(firstLayerWeightsBuffer, 0, new Float32Array(transposeArray(firstLayerWeights, hidden_size, n_embd)));
     queue.writeBuffer(firstLayerBiasBuffer, 0, new Float32Array(firstLayerBias));
     buffers.push(firstLayerWeightsBuffer, firstLayerBiasBuffer);
 
-    const secondLayerWeights = new Array(n_embd * hidden_size).fill(0);
-    const secondLayerBias = new Array(n_embd).fill(0);
+    const secondLayerWeights = new Array(n_embd * hidden_size).fill(0.1);
+    const secondLayerBias = new Array(n_embd).fill(0.1);
     const secondLayerWeightsBuffer = createBuffer(device, bufferSizeCalc(hidden_size, n_embd), GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST);
     const secondLayerBiasBuffer = createBuffer(device, bufferSizeCalc(hidden_size), GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST);
     queue.writeBuffer(secondLayerWeightsBuffer, 0, new Float32Array(transposeArray(secondLayerWeights, n_embd, hidden_size)));
@@ -265,18 +267,21 @@ async function loadFakeGPT2() {
     layer_buffers.push(buffers);
   }
 
-  const layerNormGamma = new Array(n_embd).fill(0);
-  const layerNormBeta = new Array(n_embd).fill(0);
+  const layerNormGamma = new Array(n_embd).fill(0.1);
+  const layerNormBeta = new Array(n_embd).fill(0.1);
 
   const normGammaBuffer = createBuffer(device, bufferSizeCalc(n_embd), GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST);
   const normBetaBuffer = createBuffer(device, bufferSizeCalc(n_embd), GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST);
   queue.writeBuffer(normGammaBuffer, 0, new Float32Array(layerNormGamma));
   queue.writeBuffer(normBetaBuffer, 0, new Float32Array(layerNormBeta));
 
-  const deEmbeddings = new Array(vocab_size * n_embd).fill(0);
-  const deEmbedBuffer = createBuffer(device, bufferSizeCalc(n_embd, vocab_size), GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST);
+  console.log("Loading de-embeddings...");
+  const deEmbeddings = new Array(vocab_size * (n_embd - 400)).fill(0.1);
+  console.warn("WARNING: Using fake embeddings offset by 400.");
+  const deEmbedBuffer = createBuffer(device, bufferSizeCalc(n_embd - 400, vocab_size), GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST);
   queue.writeBuffer(deEmbedBuffer, 0, new Float32Array(transposeArray(deEmbeddings, vocab_size, n_embd)));
 
+  console.log("Model loaded.");
   return {
     device,
     queue,
@@ -385,7 +390,9 @@ async function loadValidateModel(validateFile) {
 
 function transposeArray(array, input_rows, input_cols) {
   if (array.length !== input_rows * input_cols) {
-    throw new Error("Transpose dims failed");
+    console.error("Transpose dims failed, not transposing!");
+    return array;
+    // throw new Error("Transpose dims failed");
   }
 
   const transpose = [];

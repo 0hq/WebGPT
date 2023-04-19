@@ -1,55 +1,3 @@
-async function runInference(idx) {
-  if (!modelParams) {
-    console.log("Model not loaded yet");
-    return;
-  }
-
-  console.log("Running model inference");
-
-  const { device, queue, params, embdBuffer, posEmbdBuffer, layer_buffers, normGammaBuffer, normBetaBuffer, deEmbedBuffer } = modelParams;
-  const { attentionDotProductScale, biasEnabled, n_embd, n_heads, n_layers, vocab_size, hidden_size, context_size } = params;
-
-  const seq_length = idx.length;
-  const inputMatrix = new Float32Array(seq_length * vocab_size);
-  for (let i = 0; i < seq_length; i++) {
-    inputMatrix[i * vocab_size + idx[i]] = 1;
-  }
-  // printMatrix(seq_length, vocab_size, new Float32Array(inputMatrix));
-  // console.log(seq_length, prompt, inputMatrix, vocab_size);
-  const inputBuffer = createBuffer(device, bufferSizeCalc(seq_length, vocab_size), GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST);
-  queue.writeBuffer(inputBuffer, 0, inputMatrix);
-
-  const startTime = performance.now();
-  const result = await runGPT(
-    device,
-    queue,
-    seq_length,
-    vocab_size,
-    n_embd,
-    n_heads,
-    n_layers,
-    attentionDotProductScale,
-    inputBuffer,
-    embdBuffer,
-    posEmbdBuffer,
-    layer_buffers,
-    normGammaBuffer,
-    normBetaBuffer,
-    deEmbedBuffer
-  );
-  const endTime = performance.now();
-  console.log(`Time: ${endTime - startTime} ms`);
-
-  const logits = new Float32Array(result).slice((seq_length - 1) * vocab_size);
-
-  // console.log("Result:", logits);
-
-  // const resultMatrix = formatAsMatrix(new Float32Array(result), seq_length, vocab_size);
-  // console.log("Result matrix:");
-
-  return logits;
-}
-
 async function runGPT(
   device,
   queue,
@@ -59,7 +7,7 @@ async function runGPT(
   n_heads,
   n_layers,
   attentionDotProductScale,
-  inputBuffer,
+  idx,
   embdBuffer,
   posEmbdBuffer,
   layer_buffers,
@@ -67,7 +15,12 @@ async function runGPT(
   normBetaBuffer,
   deEmbedBuffer
 ) {
-  console.log("seq_length:", seq_length);
+  const inputMatrix = new Float32Array(seq_length * vocab_size);
+  for (let i = 0; i < seq_length; i++) {
+    inputMatrix[i * vocab_size + idx[i]] = 1;
+  }
+  const inputBuffer = createBuffer(device, bufferSizeCalc(seq_length, vocab_size), GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST);
+  queue.writeBuffer(inputBuffer, 0, inputMatrix);
 
   const commandEncoder = device.createCommandEncoder();
 
