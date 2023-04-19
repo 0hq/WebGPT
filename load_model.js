@@ -16,7 +16,6 @@ async function loadGPTModel(folder) {
 
   console.log("Loading embeddings...");
   embeddingWeights = await loadBinaryFile("models/" + folder + "/transformer.wte.weight_gpt.bin");
-  console.log(embeddingWeights);
 
   console.log("Loading positional embeddings...");
   const posEmbeddings = await loadBinaryFile("models/" + folder + "/transformer.wpe.weight_gpt.bin");
@@ -258,6 +257,8 @@ function reshapeRecursively(flatArray, shape) {
 }
 
 async function loadValidateModel(validateFile) {
+  console.log("Loading validation model...");
+
   const validateData = await (await fetch(`test/${validateFile}`)).json();
 
   const steps = [];
