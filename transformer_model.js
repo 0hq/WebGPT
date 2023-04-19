@@ -1,16 +1,18 @@
-async function runInference(prompt) {
+async function runInference(idx) {
   if (!modelParams) {
     console.log("Model not loaded yet");
     return;
   }
 
+  console.log("Running model inference");
+
   const { device, queue, params, embdBuffer, posEmbdBuffer, layer_buffers, normGammaBuffer, normBetaBuffer, deEmbedBuffer } = modelParams;
   const { attentionDotProductScale, biasEnabled, n_embd, n_heads, n_layers, vocab_size, hidden_size, context_size } = params;
 
-  const seq_length = prompt.length;
+  const seq_length = idx.length;
   const inputMatrix = new Float32Array(seq_length * vocab_size);
   for (let i = 0; i < seq_length; i++) {
-    inputMatrix[i * vocab_size + prompt[i]] = 1;
+    inputMatrix[i * vocab_size + idx[i]] = 1;
   }
   // printMatrix(seq_length, vocab_size, new Float32Array(inputMatrix));
   // console.log(seq_length, prompt, inputMatrix, vocab_size);
@@ -65,7 +67,6 @@ async function runGPT(
   normBetaBuffer,
   deEmbedBuffer
 ) {
-  console.log("Running GPT-2 inference");
   console.log("seq_length:", seq_length);
 
   const commandEncoder = device.createCommandEncoder();

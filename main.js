@@ -1,7 +1,5 @@
 let validateIndex = 0;
 
-let rawModel = null;
-
 let itos = null;
 let stoi = null;
 let modelParams = null;
@@ -11,30 +9,68 @@ let validateModel = null;
 const validateFile = "generation copy.json";
 const doValidation = false;
 
+const pat = /'s|'t|'re|'ve|'m|'ll|'d| ?\p{L}+| ?\p{N}+| ?[^\s\p{L}\p{N}]+|\s+(?!\S)|\s+/gu;
+const textEncoder = new TextEncoder("utf-8");
+const textDecoder = new TextDecoder("utf-8");
+let tokenizerData = {
+  encoder: null,
+  decoder: null,
+  bpe_ranks: null,
+  byte_encoder: null,
+  byte_decoder: null,
+  cache: null,
+};
+
 (async () => {
-  modelParams = await loadModel("state_dict");
-  console.log("Params:", modelParams);
+  await loadTokenizer();
 
-  const tokenDict = await (await fetch("models/tokens.json")).json();
+  // modelParams = await loadGPTModel("gpt2");
+  // console.log("Params:", modelParams);
+})();
 
-  itos = tokenDict.itos;
-  stoi = tokenDict.stoi;
+async function loadTokenizer() {
+  const bpe_file = await (await fetch("models/vocab.bpe")).text();
+  tokenizerData.encoder = await (await fetch("models/gpt_string_to_int.json")).json();
 
-  console.log("Tokens:", tokenDict);
-  console.log("Unique Tokens:", new Set(Object.values(tokenDict.itos)));
+  tokenizerData.decoder = {};
+  Object.keys(tokenizerData.encoder).map((x) => {
+    tokenizerData.decoder[tokenizerData.encoder[x]] = x;
+  });
 
-  console.log("Model finished loading.");
+  const lines = bpe_file.split("\n");
 
-  if (doValidation) {
-    const validateData = await loadValidateModel(validateFile);
+  // bpe_merges = [tuple(merge_str.split()) for merge_str in bpe_data.split("\n")[1:-1]]
+  const bpe_merges = lines.slice(1, lines.length - 1).map((x) => {
+    return x.split(/(\s+)/).filter(function (e) {
+      return e.trim().length > 0;
+    });
+  });
 
-    validateModel = validateData;
+  tokenizerData.byte_encoder = bytes_to_unicode();
+  tokenizerData.byte_decoder = {};
+  Object.keys(tokenizerData.byte_encoder).map((x) => {
+    tokenizerData.byte_decoder[tokenizerData.byte_encoder[x]] = x;
+  });
 
-    console.log("Validate model loaded", validateData);
-  }
+  tokenizerData.bpe_ranks = dictZip(bpe_merges, range(0, bpe_merges.length));
+  tokenizerData.cache = new Map();
+}
 
-  generateFromModel("BRUTUS:", 200, 1);
-
+(async () => {
+  // modelParams = await loadFakeGPT2("state_dict");
+  // console.log("Params:", modelParams);
+  // const tokenDict = await (await fetch("models/tokens.json")).json();
+  // itos = tokenDict.itos;
+  // stoi = tokenDict.stoi;
+  // console.log("Tokens:", tokenDict);
+  // console.log("Unique Tokens:", new Set(Object.values(tokenDict.itos)));
+  // console.log("Model finished loading.");
+  // if (doValidation) {
+  //   const validateData = await loadValidateModel(validateFile);
+  //   validateModel = validateData;
+  //   console.log("Validate model loaded", validateData);
+  // }
+  // generateFromModel("WILL:", 1, 1);
   // validateAgainstModel();
 })();
 
@@ -66,11 +102,13 @@ async function generateFromModel(prompt, max_new_tokens, top_k = 1) {
     const idx_next = sampleFromDistribution(probs, top_k);
     console.log("Next token", idx_next);
     prompt = prompt.concat(idx_next);
+
+    console.log(`Output:\n\n${prompt.map((i) => itos[i]).join("")}`);
   }
 
   // console.log("Output ints:", prompt);
-  const text = prompt.map((i) => itos[i]).join("");
-  console.log(`Output:\n\n${text}`);
+  // const text = prompt.map((i) => itos[i]).join("");
+  // console.log(`Output:\n\n${text}`);
 }
 
 async function validateAgainstModel() {
@@ -111,63 +149,3 @@ async function validateAgainstModel() {
     }
   }
 }
-
-// {
-//   "0": 35,
-//   "1": 46,
-//   "2": 39,
-//   "3": 58,
-//   "4": 1,
-//   "5": 47,
-//   "6": 57,
-//   "7": 1,
-//   "8": 58,
-//   "9": 46,
-//   "10": 43,
-//   "11": 1,
-//   "12": 39,
-//   "13": 52,
-//   "14": 57,
-//   "15": 61,
-//   "16": 43,
-//   "17": 56,
-//   "18": 1,
-//   "19": 58,
-//   "20": 53,
-//   "21": 1,
-//   "22": 50,
-//   "23": 47,
-//   "24": 44,
-//   "25": 43,
-//   "26": 6,
-//   "27": 1,
-//   "28": 58,
-//   "29": 46,
-//   "30": 43,
-//   "31": 1,
-//   "32": 59,
-//   "33": 52,
-//   "34": 47,
-//   "35": 60,
-//   "36": 43,
-//   "37": 56,
-//   "38": 57,
-//   "39": 43,
-//   "40": 6,
-//   "41": 1,
-//   "42": 39,
-//   "43": 52,
-//   "44": 42,
-//   "45": 1,
-//   "46": 43,
-//   "47": 60,
-//   "48": 43,
-//   "49": 56,
-//   "50": 63,
-//   "51": 58,
-//   "52": 46,
-//   "53": 47,
-//   "54": 52,
-//   "55": 45,
-//   "56": 12
-// }
