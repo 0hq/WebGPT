@@ -100,7 +100,7 @@ async function runInference(idx) {
   queue.writeBuffer(embdOutputBuffer, 0, flattened);
 
   const startTime = performance.now();
-  const result = await runGPTCheat(
+  const result = await runGPT(
     device,
     queue,
     seq_length,

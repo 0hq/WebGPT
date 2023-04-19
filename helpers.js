@@ -197,3 +197,13 @@ function cpuSoftmax(logits, temperature = 1.0) {
   const sumExpLogits = expLogits.reduce((a, b) => a + b, 0);
   return expLogits.map((expLogit) => expLogit / sumExpLogits);
 }
+
+function sumMatrix(matrix) {
+  let sum = 0;
+  for (let i = 0; i < matrix.length; i++) {
+    for (let j = 0; j < matrix[i].length; j++) {
+      sum += Math.abs(matrix[i][j]);
+    }
+  }
+  return sum;
+}
