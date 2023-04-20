@@ -16,11 +16,10 @@ I've included two different models: a toy GPT-Shakespeare model (which is severl
 
 ## Acknowledgements
 
-When I started this project I had no idea how transformers worked or how to implement them, so Andrej Karpathy's series on neural networks and building GPT from scratch were invaluable: [Andrej's Youtube](https://www.youtube.com/@AndrejKarpathy).
-I've used some code as well from the nanoGPT repository: [nanoGPT](https://github.com/karpathy/nanoGPT).
+When I started this project I had no idea how transformers worked or how to implement them, so Andrej Karpathy's series on neural networks and building GPT from scratch were invaluable: [Andrej's Youtube](https://www.youtube.com/@AndrejKarpathy). I've also used some code as well from the nanoGPT repository: [nanoGPT](https://github.com/karpathy/nanoGPT).
 
-I've also used code from LatitudeGames' implmentation of OpenAI's GPT-3 tokenizer in Javascript: [GPT-3-Encoder](https://github.com/latitudegames/GPT-3-Encoder).
+I copied from LatitudeGames' implementation of OpenAI's GPT-3 tokenizer in Javascript: [GPT-3-Encoder](https://github.com/latitudegames/GPT-3-Encoder).
 
 ## Note: I'm looking for work!
 
-I'm currently on a sabbatical and working on switching into working in the AI field. I'm specifically looking for opportunites at larger research labs in a variety of jobs, with the goal of breaking into the space and finding an area in which to specialize. If you're interested, check out personal website: [Personal Website](https:/depue.design/)
+I'm currently working on switching into working in the AI field. I'm specifically looking for opportunites at larger research labs in a variety of jobs, with the goal of breaking into the space and finding an area in which to specialize. If you're interested, check out personal website: [Personal Website](https:/depue.design/)

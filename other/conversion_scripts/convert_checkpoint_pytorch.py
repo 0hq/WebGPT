@@ -29,7 +29,7 @@ def export_pytorch_checkpoint_to_bin_files(ckpt_path, folder_name):
 
 
 if __name__ == "__main__":
-    ckpt_path = 'conversion_scripts/sample_shakespeare_ckpt.pt'
+    ckpt_path = 'other/conversion_scripts/ckpt.pt'
     folder_name = 'model_weights/'
 
     export_pytorch_checkpoint_to_bin_files(ckpt_path, folder_name)

@@ -10,8 +10,8 @@ async function demo() {
     The main entry point is generate() -> runGPT() -> various kernels.
     If you're interested in learning more about how WebGPU works, I'll likely be releasing a Youtube video/blog post on how the whole system works. Let me know if you're looking for that @ https://twitter.com/willdepue.
   */
-  modelParams = await loadModel("gpt2");
-  tokenizer = await loadGPT2Tokenizer();
+  modelParams = await loadModel("better_shakespeare");
+  tokenizer = await loadSimpleTokenizer();
   const textStream = generate("What is the answer to life, the universe, and everything?", 30);
   for await (const text of textStream) {
     console.log("Generated token:", text);
