@@ -1,2 +1,3 @@
 models/
 other/validation/test/
+*.bin
