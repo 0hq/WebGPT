@@ -60,3 +60,11 @@ async function testMatrixMultiplication(device, pipeline) {
     }
   }
 }
+
+function formatAsMatrix(floatArray, dimA, dimB) {
+  const resultMatrix = [];
+  for (let i = 0; i < dimA; i++) {
+    resultMatrix.push(floatArray.slice(i * dimB, (i + 1) * dimB));
+  }
+  return resultMatrix;
+}

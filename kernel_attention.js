@@ -1,6 +1,6 @@
 const createFFNShader = () => `
   struct Matrix {
-    data: array<f32>, // runtime-sized array
+    data: array<f32>, 
   }
 
   struct Dimensions {
@@ -40,7 +40,7 @@ const createFFNShader = () => `
 // currently also transposes the matrix for copying
 const createCausalMaskShader = () => `
   struct Matrix {
-      data: array<f32>, // runtime-sized array
+      data: array<f32>, 
   }
 
   struct Dimensions {
@@ -77,7 +77,7 @@ const createCausalMaskShader = () => `
 
 const createSplitQKVShader = () => `
   struct Matrix {
-    data: array<f32>, // runtime-sized array
+    data: array<f32>, 
   }
 
   struct Dimensions {
@@ -113,7 +113,7 @@ const createSplitQKVShader = () => `
 
 const createAttentionWeightsShader = () => `
   struct Matrix {
-    data: array<f32>, // runtime-sized array
+    data: array<f32>, 
   }
 
   struct Dimensions {
@@ -155,7 +155,7 @@ const createAttentionWeightsShader = () => `
 
 const createAttentionValuesShader = () => `
   struct Matrix {
-    data: array<f32>, // runtime-sized array
+    data: array<f32>, 
   }
 
   struct Dimensions {
@@ -196,7 +196,7 @@ const createAttentionValuesShader = () => `
 
 const createMultiplyShader = () => `
   struct Matrix {
-      data: array<f32>, // runtime-sized array
+      data: array<f32>, 
   }
 
   struct Dimensions {
@@ -238,8 +238,6 @@ function inlineAttention(
   linearWeightsBuffer,
   linearBiasBuffer
 ) {
-  const minStorageBufferOffsetAlignment = 1; // device.limits.minStorageBufferOffsetAlignment; // This was breaking things. Probably should check later.
-  const bufferSizeCalc = (dimA, dimB = 1) => alignedSize(dimA * dimB * Float32Array.BYTES_PER_ELEMENT, minStorageBufferOffsetAlignment);
   const workgroup_X = 16; // Dictated by shader.
   const workgroup_Y = 16; // Dictated by shader.
 
@@ -351,6 +349,7 @@ function inlineAttention(
   passEncoder_causalMask.dispatchWorkgroups(workgroupCalc(seq_length * n_heads, workgroup_Y), workgroupCalc(seq_length, workgroup_X));
   passEncoder_causalMask.end();
 
+  // This is a sloppy-ish solution to the casual mask buffer being processed with every head at once. Obviously, this could be fixed if we just did this in a smarter way but I only realized you could do this at the end. Still learning WebGPU!
   const softmaxOutputBuffer = createBuffer(
     device,
     bufferSizeCalc(seq_length, seq_length * n_heads),

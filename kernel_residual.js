@@ -1,7 +1,7 @@
 // Obviously super inefficient but i'll be optimizing later, just trying to get this working for now.
 const createElementWiseAdditionShader = () => `
   struct Matrix {
-      data: array<f32>, // runtime-sized array
+      data: array<f32>, 
   }
 
   struct Uniforms {

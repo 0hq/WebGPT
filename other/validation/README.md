@@ -1,5 +1,7 @@
 # Validating Results
 
+PSA: This is old code and not meant to be super maintained. More general guideline.
+
 This is an extremely helpful validation tool for checking the results of your WebGPU model versus the original when writing kernels or otherwise.
 
 The format is an array of model states at each point in a generation sequence, first generating from the reference model and saving the state of the model as you generate each token, then comparing to the browser model. You must greedily select tokens, of course, to maintain determinism. This can be done simply by setting top_k = 1.

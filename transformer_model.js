@@ -11,7 +11,8 @@ async function runGPT(
   posEmbdBuffer,
   layer_buffers,
   normGammaBuffer,
-  normBetaBuffer
+  normBetaBuffer,
+  embeddingWeights
 ) {
   const commandEncoder = device.createCommandEncoder();
 
@@ -69,7 +70,7 @@ async function runGPT(
   // You can't read twice from mapped range.
   const output = outputBuffer.getMappedRange();
 
-  return deEmbedCPU(output, seq_length, n_embd, vocab_size);
+  return deEmbedCPU(output, embeddingWeights, seq_length, n_embd, vocab_size);
 }
 
 function transformerBlock(
@@ -175,7 +176,7 @@ function transformerBlock(
   };
 }
 
-function deEmbedCPU(embeddings, seq_length, n_embd, vocab_size) {
+function deEmbedCPU(embeddings, embeddingWeights, seq_length, n_embd, vocab_size) {
   // console.log("De-embedding output... (CPU)");
 
   const predictionEmbeddings = new Float32Array(embeddings).slice((seq_length - 1) * n_embd);

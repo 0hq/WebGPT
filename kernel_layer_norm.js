@@ -1,6 +1,6 @@
 const createNormStatsShader = () => `
   struct Matrix {
-    data: array<f32>, // runtime-sized array
+    data: array<f32>, 
   }
 
   struct Dimensions {
@@ -43,7 +43,7 @@ const createNormStatsShader = () => `
 
 const createNormShaderInline = () => `
   struct Matrix {
-      data: array<f32>, // runtime-sized array
+      data: array<f32>, 
   }
 
   struct Dimensions {

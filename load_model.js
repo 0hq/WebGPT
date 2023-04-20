@@ -1,11 +1,16 @@
 async function loadGPTModel(folder) {
+  if (modelParams) {
+    console.error("Model already loaded");
+    return;
+  }
+
   console.log("Loading model from folder:", folder);
 
   const { device, queue } = await initializeWebGPU();
   console.log("Device:", device.limits);
 
   bufferSizeCalc = (dimA, dimB = 1) => alignedSize(dimA * dimB * Float32Array.BYTES_PER_ELEMENT, 1);
-  // device.limits.minStorageBufferOffsetAlignment;
+  // Should be device.limits.minStorageBufferOffsetAlignment once bug is fixed.
 
   const paramsJSON = await (await fetch(`models/${folder}/params_gpt.json`)).json();
   const { block_size: context_size, vocab_size, n_embd, n_head: n_heads, n_layer: n_layers, bias: biasEnabled } = paramsJSON;
@@ -14,8 +19,11 @@ async function loadGPTModel(folder) {
 
   console.log("context_size", context_size, "vocab_size", vocab_size, "n_embd", n_embd, "n_heads", n_heads, "n_layers", n_layers, "biasEnabled", biasEnabled);
 
+  // Sets global tokenizer variable.
+  tokenizer = await loadGPT2Tokenizer();
+
   console.log("Loading embeddings...");
-  embeddingWeights = await loadBinaryFile("models/" + folder + "/transformer.wte.weight_gpt.bin");
+  const embeddingWeights = await loadBinaryFile("models/" + folder + "/transformer.wte.weight_gpt.bin");
 
   console.log("Loading positional embeddings...");
   const posEmbeddings = await loadBinaryFile("models/" + folder + "/transformer.wpe.weight_gpt.bin");
@@ -110,6 +118,7 @@ async function loadGPTModel(folder) {
       hidden_size,
       context_size,
     },
+    embeddingWeights,
     posEmbdBuffer,
     layer_buffers,
     normGammaBuffer,

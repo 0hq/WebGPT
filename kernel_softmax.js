@@ -1,6 +1,6 @@
 const createNegMaxShader = () => `
   struct Matrix {
-    data: array<f32>, // runtime-sized array
+    data: array<f32>, 
   }
 
   struct Dimensions {
@@ -10,7 +10,6 @@ const createNegMaxShader = () => `
 
   @group(0) @binding(0) var<uniform> DimBuffer: Dimensions;
   @group(0) @binding(1) var<storage, read_write> Result: Matrix;
-
   @group(1) @binding(0) var<storage, read> Input: Matrix;
 
   @compute @workgroup_size(16, 16)
@@ -33,7 +32,7 @@ const createNegMaxShader = () => `
 
 const createAddShader = () => `
   struct Matrix {
-      data: array<f32>, // runtime-sized array
+      data: array<f32>, 
   }
 
   struct Dimensions {
@@ -43,7 +42,6 @@ const createAddShader = () => `
 
   @group(0) @binding(0) var<uniform> DimBuffer: Dimensions;
   @group(0) @binding(1) var<storage, read_write> Result: Matrix;
-
   @group(1) @binding(0) var<storage, read> Input: Matrix;
   @group(2) @binding(0) var<storage, read> Constants: Matrix;
 
@@ -64,7 +62,7 @@ const createAddShader = () => `
 
 const createExpShader = () => `
   struct Matrix {
-      data: array<f32>, // runtime-sized array
+      data: array<f32>, 
   }
 
   struct Dimensions {
@@ -74,7 +72,6 @@ const createExpShader = () => `
 
   @group(0) @binding(0) var<uniform> DimBuffer: Dimensions;
   @group(0) @binding(1) var<storage, read_write> Result: Matrix;
-
   @group(1) @binding(0) var<storage, read> Input: Matrix;
 
   @compute @workgroup_size(16, 16)
@@ -94,7 +91,7 @@ const createExpShader = () => `
 
 const createSumShader = () => `
   struct Matrix {
-    data: array<f32>, // runtime-sized array
+    data: array<f32>, 
   }
 
   struct Dimensions {
@@ -104,7 +101,6 @@ const createSumShader = () => `
 
   @group(0) @binding(0) var<uniform> DimBuffer: Dimensions;
   @group(0) @binding(1) var<storage, read_write> Result: Matrix;
-
   @group(1) @binding(0) var<storage, read> Input: Matrix;
 
   @compute @workgroup_size(16, 16)
@@ -127,7 +123,7 @@ const createSumShader = () => `
 
 const createDivideShader = () => `
   struct Matrix {
-      data: array<f32>, // runtime-sized array
+      data: array<f32>, 
   }
 
   struct Dimensions {
@@ -137,7 +133,6 @@ const createDivideShader = () => `
 
   @group(0) @binding(0) var<uniform> DimBuffer: Dimensions;
   @group(0) @binding(1) var<storage, read_write> Result: Matrix;
-
   @group(1) @binding(0) var<storage, read> Input: Matrix;
   @group(2) @binding(0) var<storage, read> Divisors: Matrix;
 
@@ -157,8 +152,6 @@ const createDivideShader = () => `
   `;
 
 function inlineSoftmax(device, queue, commandEncoder, rows, cols, inputBuffer) {
-  const minStorageBufferOffsetAlignment = device.limits.minStorageBufferOffsetAlignment;
-  const bufferSizeCalc = (dimA, dimB = 1) => alignedSize(dimA * dimB * Float32Array.BYTES_PER_ELEMENT, minStorageBufferOffsetAlignment);
   const workgroup_X = 16; // Dictated by shader.
   const workgroup_Y = 16; // Dictated by shader.
 

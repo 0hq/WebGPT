@@ -2,7 +2,7 @@
 
 const createGELUShader = () => `
   struct Matrix {
-      data: array<f32>, // runtime-sized array
+      data: array<f32>, 
   }
 
   struct Dimensions {
@@ -55,8 +55,6 @@ function inlineFFN(
   secondLayerWeightsBuffer,
   secondLayerBiasBuffer
 ) {
-  const minStorageBufferOffsetAlignment = 1; // device.limits.minStorageBufferOffsetAlignment; Bug, check back later.
-  const bufferSizeCalc = (dimA, dimB = 1) => alignedSize(dimA * dimB * Float32Array.BYTES_PER_ELEMENT, minStorageBufferOffsetAlignment);
   const workgroup_X = 16; // Dictated by shader.
   const workgroup_Y = 16; // Dictated by shader.
 

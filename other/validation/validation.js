@@ -203,3 +203,103 @@ async function loadValidateModel(validateFile) {
 
   return steps;
 }
+
+function checkAlmostEqualMatrices(a, b) {
+  if (a.length !== b.length) {
+    return false;
+  }
+  for (let i = 0; i < a.length; i++) {
+    if (a[i].length !== b[i].length) {
+      return false;
+    }
+    for (let j = 0; j < a[i].length; j++) {
+      if (a[i][j] - b[i][j] > 0.001) {
+        return false;
+      }
+    }
+  }
+  return true;
+}
+
+function formatAsMatrix(floatArray, dimA, dimB) {
+  const resultMatrix = [];
+  for (let i = 0; i < dimA; i++) {
+    resultMatrix.push(floatArray.slice(i * dimB, (i + 1) * dimB));
+  }
+  return resultMatrix;
+}
+
+async function runValidation(idx, validationIndex) {
+  if (!modelParams || !embeddingWeights) {
+    console.log("Model not loaded yet");
+    return;
+  }
+
+  console.log("\nRunning model inference.");
+  console.log("Starting with", idx.length, "tokens.");
+
+  const { device, queue, params, posEmbdBuffer, layer_buffers, normGammaBuffer, normBetaBuffer } = modelParams;
+  const { attentionDotProductScale, n_embd, n_heads, n_layers, vocab_size } = params;
+  const seq_length = idx.length;
+
+  console.log("Embedding inputs...");
+
+  const embeddings = idx.map((token) => embeddingWeights.slice(token * n_embd, (token + 1) * n_embd));
+  const flattened = flattenEmbeddings(embeddings);
+  const embdOutputBuffer = createBuffer(device, bufferSizeCalc(seq_length, n_embd), GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST);
+  queue.writeBuffer(embdOutputBuffer, 0, flattened);
+
+  const startTime = performance.now();
+  const result = await runGPTValidation(
+    device,
+    queue,
+    seq_length,
+    vocab_size,
+    n_embd,
+    n_heads,
+    n_layers,
+    attentionDotProductScale,
+    embdOutputBuffer,
+    posEmbdBuffer,
+    layer_buffers,
+    normGammaBuffer,
+    normBetaBuffer,
+    validationIndex
+  );
+
+  const endTime = performance.now();
+  console.log(`Time: ${endTime - startTime} ms`);
+
+  return new Float32Array(result);
+}
+
+async function validateAgainstModel() {
+  if (!modelParams || !validateModel) {
+    console.log("Model not loaded yet");
+    return;
+  }
+
+  const context_size = modelParams.params.context_size;
+
+  console.log(`Starting validation.`);
+  console.log("Validate model loaded", validateModel);
+  console.log("Model params", modelParams);
+  console.log("Context size", context_size);
+
+  for (let i = 0; i < validateModel.length; i++) {
+    const step = validateModel[i];
+
+    const idx_cond = Array.from(step.idx.data[0].slice(-context_size));
+    const logits = await runInference(idx_cond, i);
+    const probs = cpuSoftmax(logits, 1.0);
+
+    const idx_next = sampleFromDistribution(probs, 1);
+
+    console.log("Next token", idx_next);
+    console.log("Expected token", sampleFromDistribution(step.probs.data[0], 1));
+
+    if (idx_next !== sampleFromDistribution(step.probs.data[0], 1)) {
+      throw new Error("Validation failed");
+    }
+  }
+}

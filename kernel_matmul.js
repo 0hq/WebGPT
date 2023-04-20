@@ -1,7 +1,7 @@
 function createMatMulShader() {
   return `
     struct Matrix {
-        data: array<f32>, // runtime-sized array
+        data: array<f32>, 
     }
 
     struct Uniforms {
@@ -39,8 +39,6 @@ function createMatMulShader() {
 }
 
 function inlineMatMul(device, queue, commandEncoder, Abuffer, Bbuffer, rows, cols, shared) {
-  const minStorageBufferOffsetAlignment = device.limits.minStorageBufferOffsetAlignment;
-  const bufferSizeCalc = (dimA, dimB = 1) => alignedSize(dimA * dimB * Float32Array.BYTES_PER_ELEMENT, minStorageBufferOffsetAlignment);
   const workgroup_X = 16; // Dictated by shader.
   const workgroup_Y = 16; // Dictated by shader.
 
