@@ -16,7 +16,7 @@ Running WebGPT is remarkably simple, as it's just a set of HTML + JS files. Sinc
 
 I've included two different models: a toy GPT-Shakespeare model (which is severly undertrained haha) and GPT-2 117M. See main.js for more information on how to run these models. If you want to import custom models, take a look at misc/conversion_scripts.
 
-If you want to try out WebGPT, visit the demo website here [KMeans.org]((https://www.kmeans.org). I'd generally reccomend cloning the repo and running locally, just because loading the weights remotely is significantly slower.
+If you want to try out WebGPT, visit the demo website here [KMeans.org](https://www.kmeans.org). I'd generally reccomend cloning the repo and running locally, just because loading the weights remotely is significantly slower.
 
 ![file sizes](other/misc/files.png)
 
