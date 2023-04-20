@@ -2133,3 +2133,120 @@ async function softmax(rows, cols, input) {
   console.log("Done!");
   return readBuffer.getMappedRange();
 }
+
+function transformerBlock(
+  device,
+  queue,
+  commandEncoder,
+  seq_length,
+  n_embd,
+  n_heads,
+  hidden_size,
+  attentionDotProductScale,
+  inputBuffer,
+  normAttentionGammaBuffer,
+  normAttentionBetaBuffer,
+  qkvWeightsBuffer,
+  qkvBiasBuffer,
+  linearWeightsBuffer,
+  linearBiasBuffer,
+  normLinearGammaBuffer,
+  normLinearBetaBuffer,
+  firstLayerWeightsBuffer,
+  firstLayerBiasBuffer,
+  secondLayerWeightsBuffer,
+  secondLayerBiasBuffer
+) {
+  const layerNormAttentionOutputBuffer = inlineLayerNorm(
+    device,
+    queue,
+    commandEncoder,
+    seq_length,
+    n_embd,
+    inputBuffer,
+    normAttentionGammaBuffer,
+    normAttentionBetaBuffer
+  );
+
+  const attentionOutputBuffer = inlineAttention(
+    device,
+    queue,
+    commandEncoder,
+    seq_length,
+    n_embd,
+    attentionDotProductScale,
+    layerNormAttentionOutputBuffer,
+    n_heads,
+    qkvWeightsBuffer,
+    qkvBiasBuffer,
+    linearWeightsBuffer,
+    linearBiasBuffer
+  );
+
+  const residualAttentionOutputBuffer = inlineResidual(device, queue, commandEncoder, seq_length, n_embd, attentionOutputBuffer, inputBuffer);
+
+  const layerNormLinearOutputBuffer = inlineLayerNorm(
+    device,
+    queue,
+    commandEncoder,
+    seq_length,
+    n_embd,
+    residualAttentionOutputBuffer,
+    normLinearGammaBuffer,
+    normLinearBetaBuffer
+  );
+
+  const linearOutputBuffer = inlineFFN(
+    device,
+    queue,
+    commandEncoder,
+    seq_length,
+    n_embd,
+    hidden_size,
+    layerNormLinearOutputBuffer,
+    firstLayerWeightsBuffer,
+    firstLayerBiasBuffer,
+    secondLayerWeightsBuffer,
+    secondLayerBiasBuffer
+  );
+
+  const residualLinearOutputBuffer = inlineResidual(device, queue, commandEncoder, seq_length, n_embd, linearOutputBuffer, residualAttentionOutputBuffer);
+
+  return residualLinearOutputBuffer;
+}
+
+async function runInference(idx) {
+  if (!modelParams) {
+    console.log("Model not loaded yet");
+    return;
+  }
+
+  const { device, queue, params, posEmbdBuffer, layer_buffers, normGammaBuffer, normBetaBuffer, embeddingWeights } = modelParams;
+  const { attentionDotProductScale, n_embd, n_heads, n_layers, vocab_size } = params;
+  const seq_length = idx.length;
+
+  const embeddings = idx.map((token) => embeddingWeights.slice(token * n_embd, (token + 1) * n_embd));
+  const flattened = flattenEmbeddings(embeddings);
+  const embdOutputBuffer = createBuffer(device, bufferSizeCalc(seq_length, n_embd), GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST);
+  queue.writeBuffer(embdOutputBuffer, 0, flattened);
+
+  const result = await runGPT(
+    device,
+    queue,
+    seq_length,
+    vocab_size,
+    n_embd,
+    n_heads,
+    hidden_size,
+    n_layers,
+    attentionDotProductScale,
+    embdOutputBuffer,
+    posEmbdBuffer,
+    layer_buffers,
+    normGammaBuffer,
+    normBetaBuffer,
+    embeddingWeights
+  );
+
+  return new Float32Array(result);
+}

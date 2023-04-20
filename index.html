@@ -10,8 +10,6 @@
     <script src="kernel_softmax.js"></script>
     <script src="kernel_residual.js"></script>
     <script src="kernel_layer_norm.js"></script>
-    <script src="transformer_model.js"></script>
-    <script src="load_model.js"></script>
     <script src="main.js"></script>
   </head>
   <body>
@@ -83,10 +81,6 @@
         promptTextarea.disabled = bool;
         generateButton.disabled = bool;
       }
-
-      tokensRange.addEventListener("input", () => {
-        document.getElementById("tokensValue").innerHTML = tokensRange.value;
-      });
     </script>
   </body>
 </html>

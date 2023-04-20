@@ -232,7 +232,7 @@ function inlineAttention(
   n_embd,
   attentionDotProductScale,
   inputBuffer,
-  n_heads,
+  n_head,
   qkvWeightsBuffer,
   qkvBiasBuffer,
   linearWeightsBuffer,
@@ -241,8 +241,8 @@ function inlineAttention(
   const workgroup_X = 16; // Dictated by shader.
   const workgroup_Y = 16; // Dictated by shader.
 
-  if (n_embd % n_heads != 0) {
-    throw new Error("cols must be divisible by n_heads");
+  if (n_embd % n_head != 0) {
+    throw new Error("cols must be divisible by n_head");
   }
 
   // Generic bind group for input buffer, can be reused.
@@ -288,25 +288,25 @@ function inlineAttention(
   queue.writeBuffer(splitQKVUniformBuffer, 0, new Uint32Array([seq_length, n_embd]));
 
   const attentionWeightsUniformBuffer = createBuffer(device, 16, GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST);
-  const attentionWeightsResultBuffer = createBuffer(device, bufferSizeCalc(seq_length, seq_length * n_heads), GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC);
+  const attentionWeightsResultBuffer = createBuffer(device, bufferSizeCalc(seq_length, seq_length * n_head), GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC);
   const attentionWeightsBindGroup = createBindGroup(device, attentionBindGroupLayout, [attentionWeightsUniformBuffer, attentionWeightsResultBuffer]);
-  queue.writeBuffer(attentionWeightsUniformBuffer, 0, new Uint32Array([seq_length, seq_length * n_heads, n_embd / n_heads, n_embd]));
+  queue.writeBuffer(attentionWeightsUniformBuffer, 0, new Uint32Array([seq_length, seq_length * n_head, n_embd / n_head, n_embd]));
 
   const multiplyUniformBuffer = createBuffer(device, 16, GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST);
-  const multiplyResultBuffer = createBuffer(device, bufferSizeCalc(seq_length, seq_length * n_heads), GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC);
+  const multiplyResultBuffer = createBuffer(device, bufferSizeCalc(seq_length, seq_length * n_head), GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC);
   const multiplyBindGroup = createBindGroup(device, multiplyBindGroupLayout, [multiplyUniformBuffer, multiplyResultBuffer]);
-  queue.writeBuffer(multiplyUniformBuffer, 0, new Uint32Array([seq_length, seq_length * n_heads]));
+  queue.writeBuffer(multiplyUniformBuffer, 0, new Uint32Array([seq_length, seq_length * n_head]));
   queue.writeBuffer(multiplyUniformBuffer, 8, new Float32Array([attentionDotProductScale]));
 
   const causalMaskUniformBuffer = createBuffer(device, 16, GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST);
-  const causalMaskResultBuffer = createBuffer(device, bufferSizeCalc(seq_length, seq_length * n_heads), GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC);
+  const causalMaskResultBuffer = createBuffer(device, bufferSizeCalc(seq_length, seq_length * n_head), GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC);
   const causalMaskBindGroup = createBindGroup(device, causalMaskBindGroupLayout, [causalMaskUniformBuffer, causalMaskResultBuffer]);
-  queue.writeBuffer(causalMaskUniformBuffer, 0, new Uint32Array([seq_length * n_heads, seq_length])); // Transposes! This is needed for softmax.
+  queue.writeBuffer(causalMaskUniformBuffer, 0, new Uint32Array([seq_length * n_head, seq_length])); // Transposes! This is needed for softmax.
 
   const attentionValuesUniformBuffer = createBuffer(device, 16, GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST);
   const attentionValuesResultBuffer = createBuffer(device, bufferSizeCalc(seq_length, n_embd), GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC);
   const attentionValuesBindGroup = createBindGroup(device, attentionBindGroupLayout, [attentionValuesUniformBuffer, attentionValuesResultBuffer]);
-  queue.writeBuffer(attentionValuesUniformBuffer, 0, new Uint32Array([seq_length, n_embd, n_heads, n_embd / n_heads]));
+  queue.writeBuffer(attentionValuesUniformBuffer, 0, new Uint32Array([seq_length, n_embd, n_head, n_embd / n_head]));
 
   const linearUniformBuffer = createBuffer(device, 16, GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST);
 
@@ -332,30 +332,30 @@ function inlineAttention(
   passEncoder_attentionWeights.setPipeline(attentionWeightsPipeline);
   passEncoder_attentionWeights.setBindGroup(0, attentionWeightsBindGroup);
   passEncoder_attentionWeights.setBindGroup(1, createBindGroup(device, attentionInputBindGroupLayout, [splitQResultBuffer, splitKResultBuffer]));
-  passEncoder_attentionWeights.dispatchWorkgroups(workgroupCalc(seq_length, workgroup_Y), workgroupCalc(seq_length * n_heads, workgroup_X));
+  passEncoder_attentionWeights.dispatchWorkgroups(workgroupCalc(seq_length, workgroup_Y), workgroupCalc(seq_length * n_head, workgroup_X));
   passEncoder_attentionWeights.end();
 
   const passEncoder_multiply = commandEncoder.beginComputePass();
   passEncoder_multiply.setPipeline(multiplyPipeline);
   passEncoder_multiply.setBindGroup(0, multiplyBindGroup);
   passEncoder_multiply.setBindGroup(1, createBindGroup(device, inputBufferBindGroupLayout, [attentionWeightsResultBuffer]));
-  passEncoder_multiply.dispatchWorkgroups(workgroupCalc(seq_length, workgroup_Y), workgroupCalc(seq_length * n_heads, workgroup_X));
+  passEncoder_multiply.dispatchWorkgroups(workgroupCalc(seq_length, workgroup_Y), workgroupCalc(seq_length * n_head, workgroup_X));
   passEncoder_multiply.end();
 
   const passEncoder_causalMask = commandEncoder.beginComputePass();
   passEncoder_causalMask.setPipeline(causalMaskPipeline);
   passEncoder_causalMask.setBindGroup(0, causalMaskBindGroup);
   passEncoder_causalMask.setBindGroup(1, createBindGroup(device, inputBufferBindGroupLayout, [multiplyResultBuffer]));
-  passEncoder_causalMask.dispatchWorkgroups(workgroupCalc(seq_length * n_heads, workgroup_Y), workgroupCalc(seq_length, workgroup_X));
+  passEncoder_causalMask.dispatchWorkgroups(workgroupCalc(seq_length * n_head, workgroup_Y), workgroupCalc(seq_length, workgroup_X));
   passEncoder_causalMask.end();
 
   // This is a sloppy-ish solution to the casual mask buffer being processed with every head at once. Obviously, this could be fixed if we just did this in a smarter way but I only realized you could do this at the end. Still learning WebGPU!
   const softmaxOutputBuffer = createBuffer(
     device,
-    bufferSizeCalc(seq_length, seq_length * n_heads),
+    bufferSizeCalc(seq_length, seq_length * n_head),
     GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST | GPUBufferUsage.COPY_SRC
   );
-  for (let i = 0; i < n_heads; i++) {
+  for (let i = 0; i < n_head; i++) {
     const softmaxInputBuffer = createBuffer(
       device,
       bufferSizeCalc(seq_length, seq_length),
