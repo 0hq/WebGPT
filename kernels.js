@@ -1,5 +1,6 @@
 // --------------------- SHADER CODE --------------------- //
 
+// Return maximum value of each row in a matrix times -1.
 const createNegMaxShader = () => `
   struct Matrix {
     data: array<f32>, 
@@ -32,6 +33,7 @@ const createNegMaxShader = () => `
   }
 `;
 
+// Adds constants [rows, 1] to each row of a matrix [rows, cols].
 const createAddShader = () => `
   struct Matrix {
       data: array<f32>, 
@@ -62,6 +64,7 @@ const createAddShader = () => `
     } 
 `;
 
+// Exponentiates each element of a matrix.
 const createExpShader = () => `
   struct Matrix {
       data: array<f32>, 
@@ -91,6 +94,7 @@ const createExpShader = () => `
     }
 `;
 
+// Returns the sum of each row of a matrix.
 const createSumShader = () => `
   struct Matrix {
     data: array<f32>, 
@@ -123,6 +127,7 @@ const createSumShader = () => `
   }
 `;
 
+// Divides each element of a matrix by a constant [rows, 1].
 const createDivideShader = () => `
   struct Matrix {
       data: array<f32>, 
@@ -153,6 +158,7 @@ const createDivideShader = () => `
     } 
 `;
 
+// Multiplies matrix times weights and adds bias.
 const createFFNShader = () => `
   struct Matrix {
     data: array<f32>, 
@@ -192,7 +198,8 @@ const createFFNShader = () => `
   }
 `;
 
-// currently also transposes the matrix for copying
+// Masks all values in the matrix that are not causal.
+// Currently also transposes the matrix for copying.
 const createCausalMaskShader = () => `
   struct Matrix {
       data: array<f32>, 
@@ -230,6 +237,7 @@ const createCausalMaskShader = () => `
     } 
 `;
 
+// Splits a matrix into Q, K, and V matrices.
 const createSplitQKVShader = () => `
   struct Matrix {
     data: array<f32>, 
@@ -266,6 +274,7 @@ const createSplitQKVShader = () => `
   }
 `;
 
+// Calculates attention weights from Q and K matrices.
 const createAttentionWeightsShader = () => `
   struct Matrix {
     data: array<f32>, 
@@ -308,6 +317,7 @@ const createAttentionWeightsShader = () => `
   }
 `;
 
+// Calculates attention values from attention weights and V matrix.
 const createAttentionValuesShader = () => `
   struct Matrix {
     data: array<f32>, 
@@ -349,6 +359,7 @@ const createAttentionValuesShader = () => `
   }
 `;
 
+// Multiplies every value in a matrix by a single constant.
 const createMultiplyShader = () => `
   struct Matrix {
       data: array<f32>, 
@@ -379,6 +390,7 @@ const createMultiplyShader = () => `
     } 
 `;
 
+// Adds two matrices element-wise.
 // Obviously super inefficient but i'll be optimizing later, just trying to get this working for now.
 const createElementWiseAdditionShader = () => `
   struct Matrix {
@@ -411,6 +423,7 @@ const createElementWiseAdditionShader = () => `
   } 
 `;
 
+// Multiplies two matrices.
 const createMatMulShader = () => `
     struct Matrix {
         data: array<f32>, 
@@ -449,6 +462,7 @@ const createMatMulShader = () => `
       } 
   `;
 
+// Calculates mean and standard deviation per row of a matrix.
 const createNormStatsShader = () => `
   struct Matrix {
     data: array<f32>, 
@@ -492,6 +506,7 @@ const createNormStatsShader = () => `
   }
 `;
 
+// Adjusts the input matrix by the mean and standard deviation and gamma and beta parameters.
 const createNormShaderInline = () => `
   struct Matrix {
       data: array<f32>, 
@@ -531,8 +546,8 @@ const createNormShaderInline = () => `
   } 
 `;
 
+// Squashes all elements of a matrix using the GELU function.
 // There's tons of obvious ineffiencies here but I'm pushing them to after this is working.
-
 const createGELUShader = () => `
   struct Matrix {
       data: array<f32>, 
@@ -575,12 +590,13 @@ const createGELUShader = () => `
     } 
   `;
 
+// TODO: Optimize workgroup size and set globals per shader.
+const workgroup_X = 16; // Dictated by shader.
+const workgroup_Y = 16; // Dictated by shader.
+
 // --------------------- PIPELINES --------------------- //
 
 function inlineSoftmax(device, queue, commandEncoder, rows, cols, inputBuffer) {
-  const workgroup_X = 16; // Dictated by shader.
-  const workgroup_Y = 16; // Dictated by shader.
-
   const inputBufferBindGroupLayout = createBindGroupLayout(device, ["read-only-storage"]);
   const operationBindGroupLayout = createBindGroupLayout(device, ["uniform", "storage"]);
   const maxPipeline = createPipeline(device, createNegMaxShader(), [operationBindGroupLayout, inputBufferBindGroupLayout]);
@@ -648,11 +664,6 @@ function inlineSoftmax(device, queue, commandEncoder, rows, cols, inputBuffer) {
 }
 
 function inlineResidual(device, queue, commandEncoder, rows, cols, layerOutputBuffer, residualBuffer) {
-  const minStorageBufferOffsetAlignment = device.limits.minStorageBufferOffsetAlignment;
-  const bufferSizeCalc = (dimA, dimB = 1) => alignedSize(dimA * dimB * Float32Array.BYTES_PER_ELEMENT, minStorageBufferOffsetAlignment);
-  const workgroup_X = 16; // Dictated by shader.
-  const workgroup_Y = 16; // Dictated by shader.
-
   const inputBufferBindGroupLayout = createBindGroupLayout(device, ["read-only-storage"]);
   const residualBindGroupLayout = createBindGroupLayout(device, ["uniform", "storage"]);
   const residualPipeline = createPipeline(device, createElementWiseAdditionShader(), [
@@ -678,9 +689,6 @@ function inlineResidual(device, queue, commandEncoder, rows, cols, layerOutputBu
 }
 
 function inlineMatMul(device, queue, commandEncoder, Abuffer, Bbuffer, rows, cols, shared) {
-  const workgroup_X = 16; // Dictated by shader.
-  const workgroup_Y = 16; // Dictated by shader.
-
   const inputBufferBindGroupLayout = createBindGroupLayout(device, ["read-only-storage", "read-only-storage"]);
   const matmulBindGroupLayout = createBindGroupLayout(device, ["uniform", "storage"]);
   const matmulPipeline = createPipeline(device, createMatMulShader(), [matmulBindGroupLayout, inputBufferBindGroupLayout]);
@@ -701,12 +709,6 @@ function inlineMatMul(device, queue, commandEncoder, Abuffer, Bbuffer, rows, col
 }
 
 function inlineLayerNorm(device, queue, commandEncoder, seq_length, n_embd, inputBuffer, gammaBuffer, betaBuffer) {
-  const minStorageBufferOffsetAlignment = device.limits.minStorageBufferOffsetAlignment;
-  const bufferSizeCalc = (dimA, dimB = 1) => alignedSize(dimA * dimB * Float32Array.BYTES_PER_ELEMENT, minStorageBufferOffsetAlignment);
-  const workgroup_stats_Y = 16; // Dictated by shader.
-  const workgroup_norm_X = 16; // Dictated by shader.
-  const workgroup_norm_Y = 16; // Dictated by shader.
-
   const inputBufferBindGroupLayout = createBindGroupLayout(device, ["read-only-storage"]);
   const statsBindGroupLayout = createBindGroupLayout(device, ["uniform", "storage"]);
   const statsPipeline = createPipeline(device, createNormStatsShader(), [statsBindGroupLayout, inputBufferBindGroupLayout]);
@@ -736,7 +738,7 @@ function inlineLayerNorm(device, queue, commandEncoder, seq_length, n_embd, inpu
   passEncoder_norm.setBindGroup(0, normBindGroup);
   passEncoder_norm.setBindGroup(1, createBindGroup(device, normInputBindGroupLayout, [inputBuffer, gammaBuffer, betaBuffer]));
   passEncoder_norm.setBindGroup(2, createBindGroup(device, inputBufferBindGroupLayout, [statsResultBuffer]));
-  passEncoder_norm.dispatchWorkgroups(workgroupCalc(seq_length, workgroup_norm_Y), workgroupCalc(n_embd, workgroup_norm_X));
+  passEncoder_norm.dispatchWorkgroups(workgroupCalc(seq_length, workgroup_Y), workgroupCalc(n_embd, workgroup_X));
   passEncoder_norm.end();
 
   return normResultBuffer;
@@ -755,9 +757,6 @@ function inlineFFN(
   secondLayerWeightsBuffer,
   secondLayerBiasBuffer
 ) {
-  const workgroup_X = 16; // Dictated by shader.
-  const workgroup_Y = 16; // Dictated by shader.
-
   const inputBufferBindGroupLayout = createBindGroupLayout(device, ["read-only-storage"]);
   const ffnBindGroupLayout = createBindGroupLayout(device, ["uniform", "read-only-storage", "read-only-storage", "storage"]);
   const FFNpipeline = createPipeline(device, createFFNShader(), [ffnBindGroupLayout, inputBufferBindGroupLayout]);
@@ -827,9 +826,6 @@ function inlineAttention(
   linearWeightsBuffer,
   linearBiasBuffer
 ) {
-  const workgroup_X = 16; // Dictated by shader.
-  const workgroup_Y = 16; // Dictated by shader.
-
   if (n_embd % n_head != 0) {
     throw new Error("cols must be divisible by n_head");
   }
