@@ -54,7 +54,7 @@
 
         const topK = document.getElementById("topKInput").value;
         const temperature = document.getElementById("temperatureInput").value;
-        const textStream = streamModelOutput(prompt, numTokens, 10, topK, temperature);
+        const textStream = generate(prompt, numTokens, 10, topK, temperature);
 
         for await (const text of textStream) {
           outputDiv.innerHTML += text;
@@ -64,7 +64,8 @@
       }
 
       async function loadModel() {
-        modelParams = await loadGPTModel("gpt2");
+        modelParams = await loadModel("gpt2");
+        tokenizer = await loadGPT2Tokenizer(); // Sets global tokenizer variable.
         setTextareaVisibility(false);
         tokensInput.disabled = false;
         document.getElementById("topKInput").disabled = false;

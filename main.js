@@ -1,19 +1,33 @@
-// These are globals so we don't need to load these multiple times.
 let modelParams = null;
 let tokenizer = null;
 
-async function* streamModelOutput(prompt, max_new_tokens, top_k = 10, temperature = 1.0) {
+async function demo() {
+  /* 
+    If you're trying to run a custom model or modify the code, here's a quick guide.
+    You'll need to first load a model + load a tokenizer.
+      (1) Call loadModel(folder_name) with the name of a folder which contains the weights + params of your model.
+      (2) Set the global tokenizer to a certain one. Pre-loaded is loadGPT2Tokenizer (most common) and loadSimpleTokenizer.
+    The main entry point is generate() -> runGPT() -> various kernels.
+    If you're interested in learning more about how WebGPU works, I'll likely be releasing a Youtube video/blog post on how the whole system works. Let me know if you're looking for that @ https://twitter.com/willdepue.
+  */
+  modelParams = await loadModel("gpt2");
+  tokenizer = await loadGPT2Tokenizer();
+  const textStream = generate("What is the answer to life, the universe, and everything?", 30);
+  for await (const text of textStream) {
+    console.log("Generated token:", text);
+  }
+}
+
+async function* generate(prompt, max_new_tokens, top_k = 10, temperature = 1.0) {
   if (!modelParams || !tokenizer) {
-    console.log("Model not loaded yet");
+    console.error("Model not loaded yet");
     return;
   }
 
   console.log("Starting generation with prompt", prompt);
   let history = tokenizer.encode(prompt);
-  console.log("Tokenized prompt", history);
 
   const block_size = modelParams.params.block_size;
-  console.log("block_size", block_size);
   for (let i = 0; i < max_new_tokens; i++) {
     const idx_cond = history.slice(-block_size);
 
@@ -26,7 +40,6 @@ async function* streamModelOutput(prompt, max_new_tokens, top_k = 10, temperatur
 
     console.log(`Output:\n${tokenizer.decode(history)}`);
 
-    // Yield the generated text to the caller
     yield tokenizer.decode([idx_next]);
   }
 }
@@ -139,7 +152,7 @@ async function runGPT(idx) {
   return new Float32Array(deEmbed);
 }
 
-async function loadGPTModel(folder) {
+async function loadModel(folder) {
   if (modelParams) {
     console.error("Model already loaded");
     return;
@@ -155,8 +168,6 @@ async function loadGPTModel(folder) {
   paramsJSON.attentionDotProductScale = 1 / Math.sqrt(n_embd / n_head);
   const { hidden_size } = paramsJSON;
   console.log("Params:", paramsJSON);
-
-  tokenizer = await loadGPT2Tokenizer(); // Sets global tokenizer variable.
 
   console.log("Loading token embeddings...");
   const embeddingWeights = await loadBinaryFile("models/" + folder + "/transformer.wte.weight_gpt.bin");
