@@ -152,22 +152,6 @@ async function runGPT(idx) {
   return new Float32Array(deEmbed);
 }
 
-function deEmbedCPU(embeddings, embeddingWeights, seq_length, n_embd, vocab_size) {
-  console.warn("I'm sorry for cheating... De-embedding output with CPU.");
-
-  const predictionEmbeddings = new Float32Array(embeddings).slice((seq_length - 1) * n_embd);
-  const logits = [];
-  for (let i = 0; i < vocab_size; i++) {
-    let dotProduct = 0;
-    for (let j = 0; j < n_embd; j++) {
-      dotProduct += embeddingWeights[i * n_embd + j] * predictionEmbeddings[j];
-    }
-    logits.push(dotProduct);
-  }
-
-  return logits;
-}
-
 async function loadGPTModel(folder) {
   if (modelParams) {
     console.error("Model already loaded");
@@ -192,7 +176,7 @@ async function loadGPTModel(folder) {
 
   console.log("Loading positional embeddings...");
   const posEmbeddings = await loadBinaryFile("models/" + folder + "/transformer.wpe.weight_gpt.bin");
-  const posEmbdBuffer = createBuffer(device, bufferSizeCalc(block_size, n_embd), GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST);
+  const posEmbdBuffer = createBuffer(device, bufferSizeCalc(block_size, n_embd), GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST | GPUBufferUsage.COPY_SRC);
   queue.writeBuffer(posEmbdBuffer, 0, posEmbeddings);
 
   const layer_buffers = [];
@@ -274,8 +258,7 @@ async function loadGPTModel(folder) {
   queue.writeBuffer(normGammaBuffer, 0, layerNormGamma);
   queue.writeBuffer(normBetaBuffer, 0, layerNormBeta);
 
-  console.log("Finished loading model.");
-  return {
+  const output = {
     device,
     queue,
     params: paramsJSON,
@@ -285,4 +268,7 @@ async function loadGPTModel(folder) {
     normGammaBuffer,
     normBetaBuffer,
   };
+
+  console.log("Finished loading model.", output);
+  return output;
 }

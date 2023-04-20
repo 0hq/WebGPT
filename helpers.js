@@ -144,3 +144,19 @@ function transposeArray(array, input_rows, input_cols) {
 
   return new Float32Array(transpose);
 }
+
+function deEmbedCPU(embeddings, embeddingWeights, seq_length, n_embd, vocab_size) {
+  console.warn("I'm sorry for cheating... De-embedding output with CPU.");
+
+  const predictionEmbeddings = new Float32Array(embeddings).slice((seq_length - 1) * n_embd);
+  const logits = [];
+  for (let i = 0; i < vocab_size; i++) {
+    let dotProduct = 0;
+    for (let j = 0; j < n_embd; j++) {
+      dotProduct += embeddingWeights[i * n_embd + j] * predictionEmbeddings[j];
+    }
+    logits.push(dotProduct);
+  }
+
+  return logits;
+}
