@@ -124,9 +124,3 @@ function inlineLayerNorm(device, queue, commandEncoder, seq_length, n_embd, inpu
 
   return normResultBuffer;
 }
-
-function getStandardDeviation(array) {
-  const n = array.length;
-  const mean = array.reduce((a, b) => a + b) / n;
-  return Math.sqrt(array.map((x) => Math.pow(x - mean, 2)).reduce((a, b) => a + b) / n);
-}

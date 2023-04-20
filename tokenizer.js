@@ -1,14 +1,33 @@
+// ------------------ Simple Tokenizer ------------------
+
+async function loadSimpleTokenizer() {
+  console.log("Loading simple tokenizer...");
+
+  const encoder = await (await fetch("models/tokenization/simple_tokens.json")).json();
+
+  const decoder = {};
+  Object.keys(encoder).map((x) => {
+    decoder[encoder[x]] = x;
+  });
+
+  return {
+    encode: (str) => str.split("").map((x) => encoder[x]),
+    decode: (arr) => arr.map((x) => decoder[x]).join(""),
+  };
+}
+
+// ------------------ GPT Tokenizer ------------------
+// Credit to https://github.com/latitudegames/GPT-3-Encoder
+
 const pat = /'s|'t|'re|'ve|'m|'ll|'d| ?\p{L}+| ?\p{N}+| ?[^\s\p{L}\p{N}]+|\s+(?!\S)|\s+/gu;
 const textEncoder = new TextEncoder("utf-8");
 const textDecoder = new TextDecoder("utf-8");
 
-// ------------------ Tokenizer ------------------
-
 async function loadGPT2Tokenizer() {
   console.log("Loading GPT2 tokenizer...");
 
-  const bpe_file = await (await fetch("models/vocab.bpe")).text();
-  const encoder = await (await fetch("models/gpt_string_to_int.json")).json();
+  const bpe_file = await (await fetch("models/tokenization/vocab.bpe")).text();
+  const encoder = await (await fetch("models/tokenization/gpt_tokens.json")).json();
 
   const decoder = {};
   Object.keys(encoder).map((x) => {
@@ -45,16 +64,6 @@ async function loadGPT2Tokenizer() {
   };
 }
 
-async function loadSimpleTokenizer() {
-  console.log("Loading simple tokenizer...");
-
-  const tokenDict = await (await fetch("models/tokens.json")).json();
-  return {
-    encode: (str) => str.split("").map((x) => tokenDict.stoi[x]),
-    decode: (arr) => arr.map((x) => tokenDict.itos[x]).join(""),
-  };
-}
-
 async function loadBinaryFile(url) {
   const response = await fetch(url);
   const buffer = await response.arrayBuffer();
@@ -73,8 +82,6 @@ function flattenEmbeddings(embeddings) {
 
   return flattened;
 }
-
-// ------------------ Helper functions ------------------
 
 const range = (x, y) => {
   const res = Array.from(Array(y).keys()).slice(x);

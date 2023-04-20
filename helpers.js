@@ -207,3 +207,26 @@ function sumMatrix(matrix) {
   }
   return sum;
 }
+
+function getStandardDeviation(array) {
+  const n = array.length;
+  const mean = array.reduce((a, b) => a + b) / n;
+  return Math.sqrt(array.map((x) => Math.pow(x - mean, 2)).reduce((a, b) => a + b) / n);
+}
+
+function transposeArray(array, input_rows, input_cols) {
+  if (array.length !== input_rows * input_cols) {
+    console.error("Transpose dims failed, not transposing!");
+    // return array;
+    throw new Error("Transpose dims failed");
+  }
+
+  const transpose = [];
+  for (let col = 0; col < input_cols; col++) {
+    for (let row = 0; row < input_rows; row++) {
+      transpose.push(array[row * input_cols + col]);
+    }
+  }
+
+  return new Float32Array(transpose);
+}
