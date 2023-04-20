@@ -22,4 +22,4 @@ I copied from LatitudeGames' implementation of OpenAI's GPT-3 tokenizer in Javas
 
 ## Note: I'm looking for work!
 
-I'm currently working on switching into working in the AI field. I'm specifically looking for opportunites at larger research labs in a variety of jobs, with the goal of breaking into the space and finding an area in which to specialize. If you're interested, check out my personal website: [Personal Website](https://depue.design/)
+I'm currently in the process of switching into the AI field. I'm specifically looking for opportunites at larger research labs in a variety of jobs, with the goal of breaking into the space and finding an area in which to specialize. If you're interested, check out my personal website: [Personal Website](https://depue.design/)
