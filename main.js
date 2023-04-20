@@ -55,7 +55,7 @@ async function runGPT(idx) {
   const seq_length = idx.length;
 
   const embeddings = idx.map((token) => embeddingWeights.slice(token * n_embd, (token + 1) * n_embd));
-  const flattened = flattenEmbeddings(embeddings);
+  const flattened = flattenEmbeddings(embeddings, n_embd, seq_length);
   const embdOutputBuffer = createBuffer(device, bufferSizeCalc(seq_length, n_embd), GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST);
   queue.writeBuffer(embdOutputBuffer, 0, flattened);
 

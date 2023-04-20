@@ -730,7 +730,7 @@ function inlineLayerNorm(device, queue, commandEncoder, seq_length, n_embd, inpu
   passEncoder_stats.setPipeline(statsPipeline);
   passEncoder_stats.setBindGroup(0, statsBindGroup);
   passEncoder_stats.setBindGroup(1, createBindGroup(device, inputBufferBindGroupLayout, [inputBuffer]));
-  passEncoder_stats.dispatchWorkgroups(workgroupCalc(seq_length, workgroup_stats_Y));
+  passEncoder_stats.dispatchWorkgroups(workgroupCalc(seq_length, workgroup_Y));
   passEncoder_stats.end();
 
   const passEncoder_norm = commandEncoder.beginComputePass();

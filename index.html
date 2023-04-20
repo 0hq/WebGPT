@@ -10,19 +10,19 @@
   <body>
     <h1>WebGPU GPT Model Demo</h1>
     <p id="webgpuSupportMessage">Checking WebGPU support...</p>
-    <button id="loadModelButton" onclick="loadModel()" disabled>Load Model</button>
+    <button id="loadModelButton" onclick="loadModelHandler()" disabled>Load Model</button>
     <br /><br />
     <label for="tokens">Number of tokens:</label>
-    <input type="number" min="1" max="300" value="50" id="tokensInput" disabled />
+    <input type="number" min="1" max="300" value="1" id="tokensInput" disabled />
     <br /><br />
     <label for="topK">Top K:</label>
-    <input type="number" min="1" max="100" value="10" id="topKInput" disabled />
+    <input type="number" min="1" max="100" value="1" id="topKInput" disabled />
     <br /><br />
     <label for="temperature">Temperature:</label>
-    <input type="number" step="0.01" min="0.1" max="2" value="0.8" id="temperatureInput" disabled />
+    <input type="number" step="0.01" min="0.1" max="2" value="1" id="temperatureInput" disabled />
 
     <br /><br />
-    <textarea id="prompt" rows="5" cols="50" disabled></textarea>
+    <textarea id="prompt" rows="5" cols="50" disabled>What is the answer to life, the universe, and everything? </textarea>
     <br />
     <button id="generateButton" onclick="startGeneration()" disabled>Generate Text</button>
     <br /><br />
@@ -63,7 +63,7 @@
         setTextareaVisibility(false);
       }
 
-      async function loadModel() {
+      async function loadModelHandler() {
         modelParams = await loadModel("gpt2");
         tokenizer = await loadGPT2Tokenizer(); // Sets global tokenizer variable.
         setTextareaVisibility(false);

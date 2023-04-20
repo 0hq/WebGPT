@@ -70,19 +70,6 @@ async function loadBinaryFile(url) {
   return new Float32Array(buffer);
 }
 
-function flattenEmbeddings(embeddings) {
-  const totalLength = embeddings.reduce((acc, arr) => acc + arr.length, 0);
-  const flattened = new Float32Array(totalLength);
-
-  let offset = 0;
-  for (const arr of embeddings) {
-    flattened.set(arr, offset);
-    offset += arr.length;
-  }
-
-  return flattened;
-}
-
 const range = (x, y) => {
   const res = Array.from(Array(y).keys()).slice(x);
   return res;

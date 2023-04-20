@@ -146,7 +146,7 @@ function transposeArray(array, input_rows, input_cols) {
 }
 
 function deEmbedCPU(embeddings, embeddingWeights, seq_length, n_embd, vocab_size) {
-  console.warn("I'm sorry for cheating... De-embedding output with CPU.");
+  // console.warn("I'm sorry for cheating... De-embedding output with CPU.");
 
   const predictionEmbeddings = new Float32Array(embeddings).slice((seq_length - 1) * n_embd);
   const logits = [];
@@ -159,4 +159,10 @@ function deEmbedCPU(embeddings, embeddingWeights, seq_length, n_embd, vocab_size
   }
 
   return logits;
+}
+
+function flattenEmbeddings(embeddings, n_embd, seq_length) {
+  const flattened = new Float32Array(n_embd * seq_length);
+  for (const [i, v] of embeddings.entries()) flattened.set(v, n_embd * i);
+  return flattened;
 }
