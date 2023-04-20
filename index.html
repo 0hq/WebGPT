@@ -4,12 +4,7 @@
     <title>WebGPU GPT Model Demo</title>
     <script src="helpers.js"></script>
     <script src="tokenizer.js"></script>
-    <script src="kernel_matmul.js"></script>
-    <script src="kernel_attention.js"></script>
-    <script src="kernel_ffn.js"></script>
-    <script src="kernel_softmax.js"></script>
-    <script src="kernel_residual.js"></script>
-    <script src="kernel_layer_norm.js"></script>
+    <script src="kernels.js"></script>
     <script src="main.js"></script>
   </head>
   <body>
@@ -51,7 +46,7 @@
       async function startGeneration() {
         setTextareaVisibility(true);
 
-        const prompt = document.getElementById("prompt").value;
+        const prompt = document.getElementById("prompt").value || " ";
         const numTokens = tokensInput.value;
 
         const outputDiv = document.getElementById("output");

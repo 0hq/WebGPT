@@ -66,20 +66,7 @@ async function runGPT(idx) {
   let layerOutputBuffer = embeddedInputBuffer;
 
   for (let i = 0; i < n_layer; i++) {
-    const {
-      normAttentionGammaBuffer,
-      normAttentionBetaBuffer,
-      qkvWeightsBuffer,
-      qkvBiasBuffer,
-      linearWeightsBuffer,
-      linearBiasBuffer,
-      normLinearGammaBuffer,
-      normLinearBetaBuffer,
-      firstLayerWeightsBuffer,
-      firstLayerBiasBuffer,
-      secondLayerWeightsBuffer,
-      secondLayerBiasBuffer,
-    } = layer_buffers[i];
+    const buffers = layer_buffers[i];
 
     const layerNormAttentionOutputBuffer = inlineLayerNorm(
       device,
@@ -88,8 +75,8 @@ async function runGPT(idx) {
       seq_length,
       n_embd,
       layerOutputBuffer,
-      normAttentionGammaBuffer,
-      normAttentionBetaBuffer
+      buffers.normAttentionGammaBuffer,
+      buffers.normAttentionBetaBuffer
     );
 
     const attentionOutputBuffer = inlineAttention(
@@ -101,10 +88,10 @@ async function runGPT(idx) {
       attentionDotProductScale,
       layerNormAttentionOutputBuffer,
       n_head,
-      qkvWeightsBuffer,
-      qkvBiasBuffer,
-      linearWeightsBuffer,
-      linearBiasBuffer
+      buffers.qkvWeightsBuffer,
+      buffers.qkvBiasBuffer,
+      buffers.linearWeightsBuffer,
+      buffers.linearBiasBuffer
     );
 
     const residualAttentionOutputBuffer = inlineResidual(device, queue, commandEncoder, seq_length, n_embd, attentionOutputBuffer, layerOutputBuffer);
@@ -116,8 +103,8 @@ async function runGPT(idx) {
       seq_length,
       n_embd,
       residualAttentionOutputBuffer,
-      normLinearGammaBuffer,
-      normLinearBetaBuffer
+      buffers.normLinearGammaBuffer,
+      buffers.normLinearBetaBuffer
     );
 
     const linearOutputBuffer = inlineFFN(
@@ -128,10 +115,10 @@ async function runGPT(idx) {
       n_embd,
       hidden_size,
       layerNormLinearOutputBuffer,
-      firstLayerWeightsBuffer,
-      firstLayerBiasBuffer,
-      secondLayerWeightsBuffer,
-      secondLayerBiasBuffer
+      buffers.firstLayerWeightsBuffer,
+      buffers.firstLayerBiasBuffer,
+      buffers.secondLayerWeightsBuffer,
+      buffers.secondLayerBiasBuffer
     );
 
     const residualLinearOutputBuffer = inlineResidual(device, queue, commandEncoder, seq_length, n_embd, linearOutputBuffer, residualAttentionOutputBuffer);
