@@ -10,9 +10,13 @@
   <body>
     <h1>WebGPU GPT Model Demo</h1>
     <p id="webgpuSupportMessage">Checking WebGPU support...</p>
+    <p>
+      <i>PS: Loading models is 5x slower on the web rather than running locally. Just <a href="https://github.com/0hq/WebGPT">clone the repo</a> and open!</i>
+    </p>
+
     <button id="loadModelButton" onclick="loadModelHandler()" disabled>Load Shakespeare Model</button>
-    <button id="loadGPT2ModelButton" onclick="loadGPT2ModelHandler()" disabled>Load GPT2 Model</button>
-    <br /><br />
+    <button id="loadGPT2ModelButton" onclick="loadGPT2ModelHandler()" disabled>Load GPT2 Model</button><br />
+    <br />
     <label for="tokens">Number of tokens:</label>
     <input type="number" min="1" max="300" value="100" id="tokensInput" disabled />
     <br /><br />
@@ -26,7 +30,7 @@
     <textarea id="prompt" rows="5" cols="50" disabled>
 WILL: 
 Ah, how dare you challenge me?
-Have you forgotten I built WebGPT?</textarea
+Have you forgotten I built WebGPT? </textarea
     >
     <br />
     <button id="generateButton" onclick="startGeneration()" disabled>Generate Text</button>
