@@ -30,7 +30,7 @@ const createNegMaxShader = () => `
 
     Result.data[row] = -max_buffer;
   }
-  `;
+`;
 
 const createAddShader = () => `
   struct Matrix {
@@ -60,7 +60,7 @@ const createAddShader = () => `
 
       Result.data[row * dimX + col] = Input.data[row * dimX + col] + Constants.data[row];
     } 
-  `;
+`;
 
 const createExpShader = () => `
   struct Matrix {
@@ -89,7 +89,7 @@ const createExpShader = () => `
 
       Result.data[row * dimX + col] = exp(Input.data[row * dimX + col]);
     }
-  `;
+`;
 
 const createSumShader = () => `
   struct Matrix {
@@ -121,7 +121,7 @@ const createSumShader = () => `
 
     Result.data[row] = sum;
   }
-  `;
+`;
 
 const createDivideShader = () => `
   struct Matrix {
@@ -151,7 +151,7 @@ const createDivideShader = () => `
 
       Result.data[row * dimX + col] = Input.data[row * dimX + col] / Divisors.data[row];
     } 
-  `;
+`;
 
 const createFFNShader = () => `
   struct Matrix {
@@ -190,7 +190,7 @@ const createFFNShader = () => `
 
     Result.data[row * dimX + col] = sum + Bias.data[col];
   }
-  `;
+`;
 
 // currently also transposes the matrix for copying
 const createCausalMaskShader = () => `
@@ -228,7 +228,7 @@ const createCausalMaskShader = () => `
       }
 
     } 
-  `;
+`;
 
 const createSplitQKVShader = () => `
   struct Matrix {
@@ -264,7 +264,7 @@ const createSplitQKVShader = () => `
     V.data[row * dimX + col] = Input.data[row * dimX * 3 + 2 * dimX + col];
 
   }
-  `;
+`;
 
 const createAttentionWeightsShader = () => `
   struct Matrix {
@@ -306,7 +306,7 @@ const createAttentionWeightsShader = () => `
 
     Result.data[row * dimX + col] = sum;
   }
-  `;
+`;
 
 const createAttentionValuesShader = () => `
   struct Matrix {
@@ -347,7 +347,7 @@ const createAttentionValuesShader = () => `
 
     Result.data[row * dimX + col] = sum;
   }
-  `;
+`;
 
 const createMultiplyShader = () => `
   struct Matrix {
@@ -377,143 +377,141 @@ const createMultiplyShader = () => `
 
       Result.data[row * dimX + col] = Input.data[row * dimX + col] * DimBuffer.attentionScale;
     } 
-  `;
+`;
 
 // Obviously super inefficient but i'll be optimizing later, just trying to get this working for now.
 const createElementWiseAdditionShader = () => `
-struct Matrix {
-    data: array<f32>, 
-}
-
-struct Uniforms {
-  dimY: u32, 
-  dimX: u32, 
-};
-
-@group(2) @binding(0) var<storage, read> LayerOutput: Matrix;
-@group(1) @binding(0) var<storage, read> Residual: Matrix;
-
-@group(0) @binding(0) var<uniform> dimBuffer: Uniforms;
-@group(0) @binding(1) var<storage, read_write> Result: Matrix;
-
-@compute @workgroup_size(16, 16)
-fn main (@builtin(global_invocation_id) global_id: vec3<u32>) {
-  let row: u32 = global_id.x;
-  let col: u32 = global_id.y;
-  let dimX: u32 = dimBuffer.dimX;
-  let dimY: u32 = dimBuffer.dimY;
-
-  if (row >= dimY || col >= dimX) {
-    return;
+  struct Matrix {
+      data: array<f32>, 
   }
 
-  Result.data[row * dimX + col] = LayerOutput.data[row * dimX + col] + Residual.data[row * dimX + col];
-} 
+  struct Uniforms {
+    dimY: u32, 
+    dimX: u32, 
+  };
+
+  @group(2) @binding(0) var<storage, read> LayerOutput: Matrix;
+  @group(1) @binding(0) var<storage, read> Residual: Matrix;
+
+  @group(0) @binding(0) var<uniform> dimBuffer: Uniforms;
+  @group(0) @binding(1) var<storage, read_write> Result: Matrix;
+
+  @compute @workgroup_size(16, 16)
+  fn main (@builtin(global_invocation_id) global_id: vec3<u32>) {
+    let row: u32 = global_id.x;
+    let col: u32 = global_id.y;
+    let dimX: u32 = dimBuffer.dimX;
+    let dimY: u32 = dimBuffer.dimY;
+
+    if (row >= dimY || col >= dimX) {
+      return;
+    }
+
+    Result.data[row * dimX + col] = LayerOutput.data[row * dimX + col] + Residual.data[row * dimX + col];
+  } 
 `;
 
-function createMatMulShader() {
-  return `
-        struct Matrix {
-            data: array<f32>, 
+const createMatMulShader = () => `
+    struct Matrix {
+        data: array<f32>, 
+    }
+
+    struct Uniforms {
+      dimY: u32, // row dimension of A and row dimension of C
+      dimX: u32, // col dimension of B and col dimension of C
+      dimS: u32, // shared dimension of A and B
+    };
+
+    @group(1) @binding(0) var<storage, read> A: Matrix;
+    @group(1) @binding(1) var<storage, read> B: Matrix;
+
+    @group(0) @binding(1) var<storage, read_write> C: Matrix;
+    @group(0) @binding(0) var<uniform> dimBuffer: Uniforms;
+
+    @compute @workgroup_size(16, 16)
+    fn main (@builtin(global_invocation_id) global_id: vec3<u32>) {
+        let row: u32 = global_id.x;
+        let col: u32 = global_id.y;
+        let dimX: u32 = dimBuffer.dimX;
+        let dimY: u32 = dimBuffer.dimY;
+        let dimS: u32 = dimBuffer.dimS;
+
+        if (row >= dimY || col >= dimX) {
+          return;
         }
-    
-        struct Uniforms {
-          dimY: u32, // row dimension of A and row dimension of C
-          dimX: u32, // col dimension of B and col dimension of C
-          dimS: u32, // shared dimension of A and B
-        };
-    
-        @group(1) @binding(0) var<storage, read> A: Matrix;
-        @group(1) @binding(1) var<storage, read> B: Matrix;
-    
-        @group(0) @binding(1) var<storage, read_write> C: Matrix;
-        @group(0) @binding(0) var<uniform> dimBuffer: Uniforms;
-    
-        @compute @workgroup_size(16, 16)
-        fn main (@builtin(global_invocation_id) global_id: vec3<u32>) {
-            let row: u32 = global_id.x;
-            let col: u32 = global_id.y;
-            let dimX: u32 = dimBuffer.dimX;
-            let dimY: u32 = dimBuffer.dimY;
-            let dimS: u32 = dimBuffer.dimS;
-    
-            if (row >= dimY || col >= dimX) {
-              return;
-            }
-    
-            var sum: f32 = 0.0;
-            for (var i: u32 = 0; i < dimS; i = i + 1) {
-                sum = sum + A.data[row * dimS + i] * B.data[i * dimX + col];
-            }
-    
-            C.data[row * dimX + col] = sum;
-          } 
-      `;
-}
+
+        var sum: f32 = 0.0;
+        for (var i: u32 = 0; i < dimS; i = i + 1) {
+            sum = sum + A.data[row * dimS + i] * B.data[i * dimX + col];
+        }
+
+        C.data[row * dimX + col] = sum;
+      } 
+  `;
 
 const createNormStatsShader = () => `
-struct Matrix {
-  data: array<f32>, 
-}
-
-struct Dimensions {
-  dimY: u32, // row dimension
-  dimX: u32, // col dimension
-};
-
-@group(1) @binding(0) var<storage, read> Input: Matrix;
-
-@group(0) @binding(0) var<uniform> DimBuffer: Dimensions;
-@group(0) @binding(1) var<storage, read_write> Result: Matrix;
-
-@compute @workgroup_size(16, 16)
-fn main (@builtin(global_invocation_id) global_id: vec3<u32>) {
-  let row: u32 = global_id.x;
-  let col: u32 = global_id.y;
-  let dimX: u32 = DimBuffer.dimX;
-
-  if (row >= DimBuffer.dimY || col >= 1) {
-    return;
+  struct Matrix {
+    data: array<f32>, 
   }
 
-  var sum: f32 = 0.0;
-  for (var i: u32 = 0; i < dimX; i = i + 1) {
-      sum = sum + Input.data[row * dimX + i];
-  }
-  var mean: f32 = sum / f32(dimX);
-  
-  var variance: f32 = 0.0;
-  for (var i: u32 = 0; i < dimX; i = i + 1) {
-      variance = variance + (Input.data[row * dimX + i] - mean) * (Input.data[row * dimX + i] - mean);
-  }
-  variance = variance / f32(dimX);
-  var stdev: f32 = sqrt(variance + 1e-5);
+  struct Dimensions {
+    dimY: u32, // row dimension
+    dimX: u32, // col dimension
+  };
 
-  Result.data[row * 2] = mean;
-  Result.data[row * 2 + 1] = stdev;
-}
+  @group(1) @binding(0) var<storage, read> Input: Matrix;
+
+  @group(0) @binding(0) var<uniform> DimBuffer: Dimensions;
+  @group(0) @binding(1) var<storage, read_write> Result: Matrix;
+
+  @compute @workgroup_size(16, 16)
+  fn main (@builtin(global_invocation_id) global_id: vec3<u32>) {
+    let row: u32 = global_id.x;
+    let col: u32 = global_id.y;
+    let dimX: u32 = DimBuffer.dimX;
+
+    if (row >= DimBuffer.dimY || col >= 1) {
+      return;
+    }
+
+    var sum: f32 = 0.0;
+    for (var i: u32 = 0; i < dimX; i = i + 1) {
+        sum = sum + Input.data[row * dimX + i];
+    }
+    var mean: f32 = sum / f32(dimX);
+    
+    var variance: f32 = 0.0;
+    for (var i: u32 = 0; i < dimX; i = i + 1) {
+        variance = variance + (Input.data[row * dimX + i] - mean) * (Input.data[row * dimX + i] - mean);
+    }
+    variance = variance / f32(dimX);
+    var stdev: f32 = sqrt(variance + 1e-5);
+
+    Result.data[row * 2] = mean;
+    Result.data[row * 2 + 1] = stdev;
+  }
 `;
 
 const createNormShaderInline = () => `
-struct Matrix {
-    data: array<f32>, 
-}
+  struct Matrix {
+      data: array<f32>, 
+  }
 
-struct Dimensions {
-  dimY: u32, // row dimension of input matrix
-  dimX: u32, // col dimension of input matrix
-};
+  struct Dimensions {
+    dimY: u32, // row dimension of input matrix
+    dimX: u32, // col dimension of input matrix
+  };
 
-@group(0) @binding(0) var<uniform> DimBuffer: Dimensions;
-@group(0) @binding(1) var<storage, read_write> Result: Matrix;
+  @group(0) @binding(0) var<uniform> DimBuffer: Dimensions;
+  @group(0) @binding(1) var<storage, read_write> Result: Matrix;
 
-@group(1) @binding(0) var<storage, read> Input: Matrix;
-@group(1) @binding(1) var<storage, read> Gamma: Matrix;
-@group(1) @binding(2) var<storage, read> Beta: Matrix;
-@group(2) @binding(0) var<storage, read> Stats: Matrix;
+  @group(1) @binding(0) var<storage, read> Input: Matrix;
+  @group(1) @binding(1) var<storage, read> Gamma: Matrix;
+  @group(1) @binding(2) var<storage, read> Beta: Matrix;
+  @group(2) @binding(0) var<storage, read> Stats: Matrix;
 
-@compute @workgroup_size(16, 16)
-fn main (@builtin(global_invocation_id) global_id: vec3<u32>) {
+  @compute @workgroup_size(16, 16)
+  fn main (@builtin(global_invocation_id) global_id: vec3<u32>) {
     let row: u32 = global_id.x;
     let col: u32 = global_id.y;
     let dimX: u32 = DimBuffer.dimX;
