@@ -29,6 +29,7 @@ If you want to try out WebGPT, visit the demo website here [KMeans.org](https://
 - [ ] Convert into a package.
 - [ ] Compute pass splitting for larger models *(maxStorageBufferBindingSize)*
 - [ ] Key-value caching!!
+- [ ] Write better comments + make Youtube explainer.
 
 ## Acknowledgements
 
