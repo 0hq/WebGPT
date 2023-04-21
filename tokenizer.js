@@ -20,7 +20,7 @@ async function loadSimpleTokenizer() {
 // Credit to https://github.com/latitudegames/GPT-3-Encoder
 
 const pat = /'s|'t|'re|'ve|'m|'ll|'d| ?\p{L}+| ?\p{N}+| ?[^\s\p{L}\p{N}]+|\s+(?!\S)|\s+/gu;
-const textEncoder = new TextEncoder("utf-8");
+const textEncoder = new TextEncoder(); // always utf-8 by spec
 const textDecoder = new TextDecoder("utf-8");
 
 async function loadGPT2Tokenizer() {
