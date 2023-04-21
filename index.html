@@ -28,7 +28,7 @@
 
     <br /><br />
     <textarea id="prompt" rows="5" cols="50" disabled>
-WILL: 
+WILL:
 Ah, how dare you challenge me?
 Have you forgotten I built WebGPT? </textarea
     >
@@ -43,7 +43,12 @@ Have you forgotten I built WebGPT? </textarea
       const loadGPT2ModelButton = document.getElementById("loadGPT2ModelButton");
 
       const tokensInput = document.getElementById("tokensInput");
+      const topKInput = document.getElementById("topKInput")
+      const temperatureInput = document.getElementById("temperatureInput")
+      const promptTextarea = document.getElementById("prompt");
       const generateButton = document.getElementById("generateButton");
+      const continueButton = document.getElementById("continueButton")
+      const outputDiv = document.getElementById("output");
 
       // Check for WebGPU support
       if (!navigator.gpu) {
@@ -57,24 +62,23 @@ Have you forgotten I built WebGPT? </textarea
       }
 
       async function startGeneration() {
-        setTextareaVisibility(true);
+        setTextareaDisabled(true);
 
         const prompt = document.getElementById("prompt").value || " ";
         const numTokens = tokensInput.value;
 
-        const outputDiv = document.getElementById("output");
         outputDiv.innerHTML = prompt;
 
-        const topK = document.getElementById("topKInput").value;
-        const temperature = document.getElementById("temperatureInput").value;
+        const topK = topKInput.value;
+        const temperature = temperatureInput.value;
         const textStream = generate(prompt, numTokens, 10, topK, temperature);
 
         for await (const text of textStream) {
           outputDiv.innerHTML += text;
         }
 
-        setTextareaVisibility(false);
-        document.getElementById("continueButton").disabled = false;
+        setTextareaDisabled(false);
+        continueButton.disabled = false;
       }
 
       async function loadModelHandler() {
@@ -82,11 +86,11 @@ Have you forgotten I built WebGPT? </textarea
         loadGPT2ModelButton.disabled = true;
         modelParams = await loadModel("better_shakespeare");
         tokenizer = await loadSimpleTokenizer(); // Sets global tokenizer variable.
-        setTextareaVisibility(false);
+        setTextareaDisabled(false);
         tokensInput.disabled = false;
-        document.getElementById("topKInput").disabled = false;
-        document.getElementById("temperatureInput").disabled = false;
-        document.getElementById("continueButton").disabled = true;
+        topKInput.disabled = false;
+        temperatureInput.disabled = false;
+        continueButton.disabled = true;
       }
 
       async function loadGPT2ModelHandler() {
@@ -94,45 +98,43 @@ Have you forgotten I built WebGPT? </textarea
         loadGPT2ModelButton.disabled = true;
         modelParams = await loadModel("gpt2");
         tokenizer = await loadGPT2Tokenizer(); // Sets global tokenizer variable.
-        setTextareaVisibility(false);
+        setTextareaDisabled(false);
         tokensInput.disabled = false;
-        document.getElementById("topKInput").disabled = false;
-        document.getElementById("temperatureInput").disabled = false;
-        document.getElementById("continueButton").disabled = true;
+        topKInput.disabled = false;
+        temperatureInput.disabled = false;
+        continueButton.disabled = true;
 
         // Set the default prompt for GPT2 model
-        const promptTextarea = document.getElementById("prompt");
         promptTextarea.value = "What is the answer to life, the universe, and everything?\n";
 
-        document.getElementById("topKInput").value = 5;
+        topKInput.value = 5;
         tokensInput.value = 30;
-        document.getElementById("temperatureInput").value = 1;
+        temperatureInput.value = 1;
       }
 
-      function setTextareaVisibility(bool) {
-        const promptTextarea = document.getElementById("prompt");
+      function setTextareaDisabled(bool) {
         promptTextarea.disabled = bool;
         generateButton.disabled = bool;
+        continueButton.disabled = bool;
       }
 
       async function continueGeneration() {
-        setTextareaVisibility(true);
+        setTextareaDisabled(true);
 
-        const prompt = document.getElementById("output").innerHTML || " ";
+        const prompt = outputDiv.innerHTML || " ";
         const numTokens = tokensInput.value;
 
-        const outputDiv = document.getElementById("output");
         outputDiv.innerHTML = prompt;
 
-        const topK = document.getElementById("topKInput").value;
-        const temperature = document.getElementById("temperatureInput").value;
+        const topK = topKInput.value;
+        const temperature = temperatureInput.value;
         const textStream = generate(prompt, numTokens, 10, topK, temperature);
 
         for await (const text of textStream) {
           outputDiv.innerHTML += text;
         }
 
-        setTextareaVisibility(false);
+        setTextareaDisabled(false);
       }
     </script>
   </body>
