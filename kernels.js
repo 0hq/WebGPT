@@ -1,9 +1,9 @@
 // --------------------- SHADER CODE --------------------- //
 
 // Return maximum value of each row in a matrix times -1.
-const createNegMaxShader = () => `
+const negMaxShader = `
   struct Matrix {
-    data: array<f32>, 
+    data: array<f32>,
   }
 
   struct Dimensions {
@@ -34,9 +34,9 @@ const createNegMaxShader = () => `
 `;
 
 // Adds constants [rows, 1] to each row of a matrix [rows, cols].
-const createAddShader = () => `
+const addShader = `
   struct Matrix {
-      data: array<f32>, 
+      data: array<f32>,
   }
 
   struct Dimensions {
@@ -61,13 +61,13 @@ const createAddShader = () => `
       }
 
       Result.data[row * dimX + col] = Input.data[row * dimX + col] + Constants.data[row];
-    } 
+    }
 `;
 
 // Exponentiates each element of a matrix.
-const createExpShader = () => `
+const expShader = `
   struct Matrix {
-      data: array<f32>, 
+      data: array<f32>,
   }
 
   struct Dimensions {
@@ -95,9 +95,9 @@ const createExpShader = () => `
 `;
 
 // Returns the sum of each row of a matrix.
-const createSumShader = () => `
+const sumShader = `
   struct Matrix {
-    data: array<f32>, 
+    data: array<f32>,
   }
 
   struct Dimensions {
@@ -128,9 +128,9 @@ const createSumShader = () => `
 `;
 
 // Divides each element of a matrix by a constant [rows, 1].
-const createDivideShader = () => `
+const divideShader = `
   struct Matrix {
-      data: array<f32>, 
+      data: array<f32>,
   }
 
   struct Dimensions {
@@ -155,13 +155,13 @@ const createDivideShader = () => `
       }
 
       Result.data[row * dimX + col] = Input.data[row * dimX + col] / Divisors.data[row];
-    } 
+    }
 `;
 
 // Multiplies matrix times weights and adds bias.
-const createFFNShader = () => `
+const FFNShader = `
   struct Matrix {
-    data: array<f32>, 
+    data: array<f32>,
   }
 
   struct Dimensions {
@@ -200,9 +200,9 @@ const createFFNShader = () => `
 
 // Masks all values in the matrix that are not causal.
 // Currently also transposes the matrix for copying.
-const createCausalMaskShader = () => `
+const causalMaskShader = `
   struct Matrix {
-      data: array<f32>, 
+      data: array<f32>,
   }
 
   struct Dimensions {
@@ -234,13 +234,13 @@ const createCausalMaskShader = () => `
         Result.data[row * dimX + col] = Input.data[rowMask * dimY + col + rowNum * dimX];
       }
 
-    } 
+    }
 `;
 
 // Splits a matrix into Q, K, and V matrices.
-const createSplitQKVShader = () => `
+const splitQKVShader = `
   struct Matrix {
-    data: array<f32>, 
+    data: array<f32>,
   }
 
   struct Dimensions {
@@ -261,7 +261,7 @@ const createSplitQKVShader = () => `
     let row: u32 = global_id.x;
     let col: u32 = global_id.y;
     let dimX: u32 = DimBuffer.dimX;
-    let dimY: u32 = DimBuffer.dimY;    
+    let dimY: u32 = DimBuffer.dimY;
 
     if (row >= dimY || col >= dimX) {
       return;
@@ -275,9 +275,9 @@ const createSplitQKVShader = () => `
 `;
 
 // Calculates attention weights from Q and K matrices.
-const createAttentionWeightsShader = () => `
+const attentionWeightsShader = `
   struct Matrix {
-    data: array<f32>, 
+    data: array<f32>,
   }
 
   struct Dimensions {
@@ -318,9 +318,9 @@ const createAttentionWeightsShader = () => `
 `;
 
 // Calculates attention values from attention weights and V matrix.
-const createAttentionValuesShader = () => `
+const attentionValuesShader = `
   struct Matrix {
-    data: array<f32>, 
+    data: array<f32>,
   }
 
   struct Dimensions {
@@ -360,15 +360,15 @@ const createAttentionValuesShader = () => `
 `;
 
 // Multiplies every value in a matrix by a single constant.
-const createMultiplyShader = () => `
+const multiplyShader = `
   struct Matrix {
-      data: array<f32>, 
+      data: array<f32>,
   }
 
   struct Dimensions {
     dimY: u32, // row dimension of input matrix
     dimX: u32, // col dimension of input matrix
-    attentionScale: f32, 
+    attentionScale: f32,
   };
 
   @group(0) @binding(0) var<uniform> DimBuffer: Dimensions;
@@ -387,19 +387,19 @@ const createMultiplyShader = () => `
       }
 
       Result.data[row * dimX + col] = Input.data[row * dimX + col] * DimBuffer.attentionScale;
-    } 
+    }
 `;
 
 // Adds two matrices element-wise.
 // Obviously super inefficient but i'll be optimizing later, just trying to get this working for now.
-const createElementWiseAdditionShader = () => `
+const elementWiseAdditionShader = `
   struct Matrix {
-      data: array<f32>, 
+      data: array<f32>,
   }
 
   struct Uniforms {
-    dimY: u32, 
-    dimX: u32, 
+    dimY: u32,
+    dimX: u32,
   };
 
   @group(2) @binding(0) var<storage, read> LayerOutput: Matrix;
@@ -420,13 +420,13 @@ const createElementWiseAdditionShader = () => `
     }
 
     Result.data[row * dimX + col] = LayerOutput.data[row * dimX + col] + Residual.data[row * dimX + col];
-  } 
+  }
 `;
 
 // Multiplies two matrices.
-const createMatMulShader = () => `
+const matMulShader = `
     struct Matrix {
-        data: array<f32>, 
+        data: array<f32>,
     }
 
     struct Uniforms {
@@ -459,13 +459,13 @@ const createMatMulShader = () => `
         }
 
         C.data[row * dimX + col] = sum;
-      } 
+      }
   `;
 
 // Calculates mean and standard deviation per row of a matrix.
-const createNormStatsShader = () => `
+const normStatsShader = `
   struct Matrix {
-    data: array<f32>, 
+    data: array<f32>,
   }
 
   struct Dimensions {
@@ -493,7 +493,7 @@ const createNormStatsShader = () => `
         sum = sum + Input.data[row * dimX + i];
     }
     var mean: f32 = sum / f32(dimX);
-    
+
     var variance: f32 = 0.0;
     for (var i: u32 = 0; i < dimX; i = i + 1) {
         variance = variance + (Input.data[row * dimX + i] - mean) * (Input.data[row * dimX + i] - mean);
@@ -507,9 +507,9 @@ const createNormStatsShader = () => `
 `;
 
 // Adjusts the input matrix by the mean and standard deviation and gamma and beta parameters.
-const createNormShaderInline = () => `
+const normShaderInline = `
   struct Matrix {
-      data: array<f32>, 
+      data: array<f32>,
   }
 
   struct Dimensions {
@@ -543,14 +543,14 @@ const createNormShaderInline = () => `
     let beta = Beta.data[col];
     let shift = gamma * output + beta;
     Result.data[row * dimX + col] = shift;
-  } 
+  }
 `;
 
 // Squashes all elements of a matrix using the GELU function.
 // There's tons of obvious ineffiencies here but I'm pushing them to after this is working.
-const createGELUShader = () => `
+const GELUShader = `
   struct Matrix {
-      data: array<f32>, 
+      data: array<f32>,
   }
 
   struct Dimensions {
@@ -587,7 +587,7 @@ const createGELUShader = () => `
       }
 
       Result.data[row * dimX + col] = gelu(Input.data[row * dimX + col]);
-    } 
+    }
   `;
 
 // TODO: Optimize workgroup size and set globals per shader.
@@ -599,11 +599,11 @@ const workgroup_Y = 16; // Dictated by shader.
 function inlineSoftmax(device, queue, commandEncoder, rows, cols, inputBuffer) {
   const inputBufferBindGroupLayout = createBindGroupLayout(device, ["read-only-storage"]);
   const operationBindGroupLayout = createBindGroupLayout(device, ["uniform", "storage"]);
-  const maxPipeline = createPipeline(device, createNegMaxShader(), [operationBindGroupLayout, inputBufferBindGroupLayout]);
-  const addPipeline = createPipeline(device, createAddShader(), [operationBindGroupLayout, inputBufferBindGroupLayout, inputBufferBindGroupLayout]);
-  const expPipeline = createPipeline(device, createExpShader(), [operationBindGroupLayout, inputBufferBindGroupLayout]);
-  const sumPipeline = createPipeline(device, createSumShader(), [operationBindGroupLayout, inputBufferBindGroupLayout]);
-  const dividePipeline = createPipeline(device, createDivideShader(), [operationBindGroupLayout, inputBufferBindGroupLayout, inputBufferBindGroupLayout]);
+  const maxPipeline = createPipeline(device, negMaxShader, [operationBindGroupLayout, inputBufferBindGroupLayout]);
+  const addPipeline = createPipeline(device, addShader, [operationBindGroupLayout, inputBufferBindGroupLayout, inputBufferBindGroupLayout]);
+  const expPipeline = createPipeline(device, expShader, [operationBindGroupLayout, inputBufferBindGroupLayout]);
+  const sumPipeline = createPipeline(device, sumShader, [operationBindGroupLayout, inputBufferBindGroupLayout]);
+  const dividePipeline = createPipeline(device, divideShader, [operationBindGroupLayout, inputBufferBindGroupLayout, inputBufferBindGroupLayout]);
 
   const dimUniformBuffer = createBuffer(device, 16, GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST);
   queue.writeBuffer(dimUniformBuffer, 0, new Uint32Array([rows, cols]));
@@ -666,7 +666,7 @@ function inlineSoftmax(device, queue, commandEncoder, rows, cols, inputBuffer) {
 function inlineResidual(device, queue, commandEncoder, rows, cols, layerOutputBuffer, residualBuffer) {
   const inputBufferBindGroupLayout = createBindGroupLayout(device, ["read-only-storage"]);
   const residualBindGroupLayout = createBindGroupLayout(device, ["uniform", "storage"]);
-  const residualPipeline = createPipeline(device, createElementWiseAdditionShader(), [
+  const residualPipeline = createPipeline(device, elementWiseAdditionShader, [
     residualBindGroupLayout,
     inputBufferBindGroupLayout,
     inputBufferBindGroupLayout,
@@ -691,7 +691,7 @@ function inlineResidual(device, queue, commandEncoder, rows, cols, layerOutputBu
 function inlineMatMul(device, queue, commandEncoder, Abuffer, Bbuffer, rows, cols, shared) {
   const inputBufferBindGroupLayout = createBindGroupLayout(device, ["read-only-storage", "read-only-storage"]);
   const matmulBindGroupLayout = createBindGroupLayout(device, ["uniform", "storage"]);
-  const matmulPipeline = createPipeline(device, createMatMulShader(), [matmulBindGroupLayout, inputBufferBindGroupLayout]);
+  const matmulPipeline = createPipeline(device, matMulShader, [matmulBindGroupLayout, inputBufferBindGroupLayout]);
 
   const matmulUniformBuffer = createBuffer(device, 16, GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST);
   const matmulResultBuffer = createBuffer(device, bufferSizeCalc(rows, cols), GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC);
@@ -711,10 +711,10 @@ function inlineMatMul(device, queue, commandEncoder, Abuffer, Bbuffer, rows, col
 function inlineLayerNorm(device, queue, commandEncoder, seq_length, n_embd, inputBuffer, gammaBuffer, betaBuffer) {
   const inputBufferBindGroupLayout = createBindGroupLayout(device, ["read-only-storage"]);
   const statsBindGroupLayout = createBindGroupLayout(device, ["uniform", "storage"]);
-  const statsPipeline = createPipeline(device, createNormStatsShader(), [statsBindGroupLayout, inputBufferBindGroupLayout]);
+  const statsPipeline = createPipeline(device, normStatsShader, [statsBindGroupLayout, inputBufferBindGroupLayout]);
   const normInputBindGroupLayout = createBindGroupLayout(device, ["read-only-storage", "read-only-storage", "read-only-storage"]);
   const normBindGroupLayout = createBindGroupLayout(device, ["uniform", "storage"]);
-  const normPipeline = createPipeline(device, createNormShaderInline(), [normBindGroupLayout, normInputBindGroupLayout, inputBufferBindGroupLayout]);
+  const normPipeline = createPipeline(device, normShaderInline, [normBindGroupLayout, normInputBindGroupLayout, inputBufferBindGroupLayout]);
 
   const statsUniformBuffer = createBuffer(device, 16, GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST);
   const statsResultBuffer = createBuffer(device, bufferSizeCalc(seq_length, 2), GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC);
@@ -759,9 +759,9 @@ function inlineFFN(
 ) {
   const inputBufferBindGroupLayout = createBindGroupLayout(device, ["read-only-storage"]);
   const ffnBindGroupLayout = createBindGroupLayout(device, ["uniform", "read-only-storage", "read-only-storage", "storage"]);
-  const FFNpipeline = createPipeline(device, createFFNShader(), [ffnBindGroupLayout, inputBufferBindGroupLayout]);
+  const FFNpipeline = createPipeline(device, FFNShader, [ffnBindGroupLayout, inputBufferBindGroupLayout]);
   const geluBindGroupLayout = createBindGroupLayout(device, ["uniform", "storage"]);
-  const GELUpipeline = createPipeline(device, createGELUShader(), [geluBindGroupLayout, inputBufferBindGroupLayout]);
+  const GELUpipeline = createPipeline(device, GELUShader, [geluBindGroupLayout, inputBufferBindGroupLayout]);
 
   const firstLayerUniformBuffer = createBuffer(device, 16, GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST);
   const firstLayerResultBuffer = createBuffer(device, bufferSizeCalc(context, hidden_size), GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC);
@@ -832,17 +832,17 @@ function inlineAttention(
 
   const inputBufferBindGroupLayout = createBindGroupLayout(device, ["read-only-storage"]);
   const ffnBindGroupLayout = createBindGroupLayout(device, ["uniform", "read-only-storage", "read-only-storage", "storage"]);
-  const FFNpipeline = createPipeline(device, createFFNShader(), [ffnBindGroupLayout, inputBufferBindGroupLayout]);
+  const FFNpipeline = createPipeline(device, FFNShader, [ffnBindGroupLayout, inputBufferBindGroupLayout]);
   const splitQKVBindGroupLayout = createBindGroupLayout(device, ["uniform", "storage", "storage", "storage"]);
-  const splitQKVpipeline = createPipeline(device, createSplitQKVShader(), [splitQKVBindGroupLayout, inputBufferBindGroupLayout]);
+  const splitQKVpipeline = createPipeline(device, splitQKVShader, [splitQKVBindGroupLayout, inputBufferBindGroupLayout]);
   const attentionInputBindGroupLayout = createBindGroupLayout(device, ["read-only-storage", "read-only-storage"]);
   const attentionBindGroupLayout = createBindGroupLayout(device, ["uniform", "storage"]);
-  const attentionWeightsPipeline = createPipeline(device, createAttentionWeightsShader(), [attentionBindGroupLayout, attentionInputBindGroupLayout]);
-  const attentionValuesPipeline = createPipeline(device, createAttentionValuesShader(), [attentionBindGroupLayout, attentionInputBindGroupLayout]);
+  const attentionWeightsPipeline = createPipeline(device, attentionWeightsShader, [attentionBindGroupLayout, attentionInputBindGroupLayout]);
+  const attentionValuesPipeline = createPipeline(device, attentionValuesShader, [attentionBindGroupLayout, attentionInputBindGroupLayout]);
   const multiplyBindGroupLayout = createBindGroupLayout(device, ["uniform", "storage"]);
-  const multiplyPipeline = createPipeline(device, createMultiplyShader(), [multiplyBindGroupLayout, inputBufferBindGroupLayout]);
+  const multiplyPipeline = createPipeline(device, multiplyShader, [multiplyBindGroupLayout, inputBufferBindGroupLayout]);
   const causalMaskBindGroupLayout = createBindGroupLayout(device, ["uniform", "storage"]);
-  const causalMaskPipeline = createPipeline(device, createCausalMaskShader(), [causalMaskBindGroupLayout, inputBufferBindGroupLayout]);
+  const causalMaskPipeline = createPipeline(device, causalMaskShader, [causalMaskBindGroupLayout, inputBufferBindGroupLayout]);
 
   const qkvUniformBuffer = createBuffer(device, 16, GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST);
   const qkvResultBuffer = createBuffer(device, bufferSizeCalc(seq_length, 3 * n_embd), GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC);
