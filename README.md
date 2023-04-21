@@ -1,3 +1,4 @@
+
 # WebGPT
 
 ![webGPT](other/misc/header.png)
@@ -19,6 +20,14 @@ I've included two different models: a toy GPT-Shakespeare model (which is severl
 If you want to try out WebGPT, visit the demo website here [KMeans.org](https://www.kmeans.org). I'd generally reccomend cloning the repo and running locally, just because loading the weights remotely is significantly slower. Note: You'll need to use Git LFS to download the model files, after cloning the repository.
 
 ![file sizes](other/misc/files.png)
+
+## Roadmap / Fixing Stupid Decisions
+
+- [ ] Initializing pipelines on every step is incredibly inefficient.
+- [ ] Embeddings / de-embeddings on GPU.
+- [ ]  Kernel shared memory!
+- [ ]  Convert into a package.
+- [ ]  Compute pass splitting for larger models *(maxStorageBufferBindingSize)*
 
 ## Acknowledgements
 
