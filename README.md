@@ -12,11 +12,11 @@ https://user-images.githubusercontent.com/30643741/233488471-0cd93d38-af27-4648-
 
 ## Running WebGPT
 
-Running WebGPT is remarkably simple, as it's just a set of HTML + JS files. Since WebGPU is still in the process of being released, you'll need to open with a compatible browser. WebGPU is currently available on Chrome v113 but the most straightforward way to insure proper functionality is to install Chrome Canary and enable "Unsafe WebGPU" in settings.
+Running WebGPT is remarkably simple, as it's just a set of HTML + JS files. Since WebGPU is still in the process of being released, you'll need to open with a compatible browser. WebGPU is currently available on Chrome v113 but the most straightforward way to ensure proper functionality is to install [Chrome Canary](https://www.google.com/chrome/canary/) and enable "Unsafe WebGPU" at `chrome://flags/#enable-unsafe-webgpu`.
 
 I've included two different models: a toy GPT-Shakespeare model (which is severly undertrained haha) and GPT-2 117M. See main.js for more information on how to run these models. If you want to import custom models, take a look at misc/conversion_scripts.
 
-If you want to try out WebGPT, visit the demo website here [KMeans.org](https://www.kmeans.org). I'd generally reccomend cloning the repo and running locally, just because loading the weights remotely is significantly slower.
+If you want to try out WebGPT, visit the demo website here [KMeans.org](https://www.kmeans.org). I'd generally reccomend cloning the repo and running locally, just because loading the weights remotely is significantly slower. Note: You'll need to use Git LFS to download the model files, after cloning the repository.
 
 ![file sizes](other/misc/files.png)
 
