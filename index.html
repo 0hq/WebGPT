@@ -25,18 +25,14 @@
     <br /><br />
     <label for="temperature">Temperature:</label>
     <input type="number" step="0.01" min="0.1" max="2" value="1" id="temperatureInput" disabled />
-
+    <br /><br />
+    <button id="generateButton" onclick="startGeneration()" disabled>Generate Text</button>
     <br /><br />
     <textarea id="prompt" rows="5" cols="50" disabled>
 WILL:
 Ah, how dare you challenge me?
-Have you forgotten I built WebGPT? </textarea
-    >
-    <br />
-    <button id="generateButton" onclick="startGeneration()" disabled>Generate Text</button>
-    <button id="continueButton" onclick="continueGeneration()" disabled>Continue Generation</button>
+Have you forgotten I built WebGPT? </textarea>
     <br /><br />
-    <p id="output" style="white-space: pre-wrap"></p>
     <script>
       const webgpuSupportMessage = document.getElementById("webgpuSupportMessage");
       const loadModelButton = document.getElementById("loadModelButton");
@@ -45,10 +41,8 @@ Have you forgotten I built WebGPT? </textarea
       const tokensInput = document.getElementById("tokensInput");
       const topKInput = document.getElementById("topKInput")
       const temperatureInput = document.getElementById("temperatureInput")
-      const promptTextarea = document.getElementById("prompt");
       const generateButton = document.getElementById("generateButton");
-      const continueButton = document.getElementById("continueButton")
-      const outputDiv = document.getElementById("output");
+      const promptTextarea = document.getElementById("prompt");
 
       // Check for WebGPU support
       if (!navigator.gpu) {
@@ -64,21 +58,18 @@ Have you forgotten I built WebGPT? </textarea
       async function startGeneration() {
         setTextareaDisabled(true);
 
-        const prompt = document.getElementById("prompt").value || " ";
+        const prompt = promptTextarea.value || " ";
         const numTokens = tokensInput.value;
-
-        outputDiv.innerHTML = prompt;
 
         const topK = topKInput.value;
         const temperature = temperatureInput.value;
         const textStream = generate(prompt, numTokens, 10, topK, temperature);
 
         for await (const text of textStream) {
-          outputDiv.innerHTML += text;
+          promptTextarea.value += text;
         }
 
         setTextareaDisabled(false);
-        continueButton.disabled = false;
       }
 
       async function loadModelHandler() {
@@ -90,7 +81,6 @@ Have you forgotten I built WebGPT? </textarea
         tokensInput.disabled = false;
         topKInput.disabled = false;
         temperatureInput.disabled = false;
-        continueButton.disabled = true;
       }
 
       async function loadGPT2ModelHandler() {
@@ -102,7 +92,6 @@ Have you forgotten I built WebGPT? </textarea
         tokensInput.disabled = false;
         topKInput.disabled = false;
         temperatureInput.disabled = false;
-        continueButton.disabled = true;
 
         // Set the default prompt for GPT2 model
         promptTextarea.value = "What is the answer to life, the universe, and everything?\n";
