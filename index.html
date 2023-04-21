@@ -36,7 +36,7 @@ Have you forgotten I built WebGPT? </textarea
     <button id="generateButton" onclick="startGeneration()" disabled>Generate Text</button>
     <button id="continueButton" onclick="continueGeneration()" disabled>Continue Generation</button>
     <br /><br />
-    <span id="output" style="white-space: pre"></span>
+    <p id="output" style="white-space: pre-wrap"></p>
     <script>
       const webgpuSupportMessage = document.getElementById("webgpuSupportMessage");
       const loadModelButton = document.getElementById("loadModelButton");
