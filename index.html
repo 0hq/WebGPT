@@ -104,6 +104,26 @@ Have you forgotten I built WebGPT? </textarea>
       function setTextareaDisabled(bool) {
         promptTextarea.disabled = bool;
         generateButton.disabled = bool;
+        continueButton.disabled = bool;
+      }
+
+      async function continueGeneration() {
+        setTextareaDisabled(true);
+
+        const prompt = outputDiv.innerHTML || " ";
+        const numTokens = tokensInput.value;
+
+        outputDiv.innerHTML = prompt;
+
+        const topK = topKInput.value;
+        const temperature = temperatureInput.value;
+        const textStream = generate(prompt, numTokens, 10, topK, temperature);
+
+        for await (const text of textStream) {
+          outputDiv.innerHTML += text;
+        }
+
+        setTextareaDisabled(false);
       }
     </script>
   </body>
