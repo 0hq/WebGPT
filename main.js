@@ -50,16 +50,22 @@ async function runGPT(idx) {
     return;
   }
 
-  const { device, queue, params, posEmbdBuffer, layer_buffers, normGammaBuffer, normBetaBuffer, embeddingWeights } = modelParams;
+  const { device, queue, params, posEmbdBuffer, layer_buffers, normGammaBuffer, normBetaBuffer, embeddingWeights, embeddingWeightsBuffer } = modelParams;
   const { attentionDotProductScale, n_embd, n_head, n_layer, vocab_size, hidden_size } = params;
   const seq_length = idx.length;
 
-  const embeddings = idx.map((token) => embeddingWeights.slice(token * n_embd, (token + 1) * n_embd));
-  const flattened = flattenEmbeddings(embeddings, n_embd, seq_length);
-  const embdOutputBuffer = createBuffer(device, bufferSizeCalc(seq_length, n_embd), GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST);
-  queue.writeBuffer(embdOutputBuffer, 0, flattened);
-
   const commandEncoder = device.createCommandEncoder();
+
+  const embdOutputBuffer = createBuffer(device, bufferSizeCalc(seq_length, n_embd), GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST);
+  for (let i = 0; i < seq_length; i++) {
+    commandEncoder.copyBufferToBuffer(
+      embeddingWeightsBuffer, // Source buffer (original position embeddings)
+      bufferSizeCalc(n_embd) * idx[i], // Source offset (starting from the beginning of the buffer)
+      embdOutputBuffer, // Destination buffer (cropped buffer)
+      bufferSizeCalc(n_embd) * i, // Destination offset (starting from the beginning of the cropped buffer)
+      bufferSizeCalc(n_embd) // Number of bytes to copy
+    );
+  }
 
   // Crop the position embeddings to the correct size.
   const posEmbdOutputBuffer = createBuffer(
@@ -169,13 +175,6 @@ async function runGPT(idx) {
     bufferSizeCalc(1, n_embd) // Number of bytes to copy
   );
 
-  const embeddingWeightsBuffer = createBuffer(
-    device,
-    bufferSizeCalc(vocab_size, n_embd),
-    GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST | GPUBufferUsage.COPY_SRC
-  );
-  queue.writeBuffer(embeddingWeightsBuffer, 0, embeddingWeights);
-
   const deEmbedOutputBuffer = createBuffer(device, bufferSizeCalc(1, vocab_size), GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ);
 
   // Assumes that vocab_size has a decent least prime factor.
@@ -209,8 +208,6 @@ async function runGPT(idx) {
   await deEmbedOutputBuffer.mapAsync(GPUMapMode.READ);
   const output = deEmbedOutputBuffer.getMappedRange();
 
-  console.log(new Float32Array(output));
-
   return new Float32Array(output);
 }
 
@@ -225,7 +222,7 @@ async function loadModel(folder) {
 
   console.log("Loading model from folder:", folder);
   const paramsJSON = await (await fetch(`models/${folder}/params_gpt.json`)).json();
-  const { block_size, n_embd, n_head, n_layer, bias } = paramsJSON;
+  const { block_size, n_embd, n_head, n_layer, bias, vocab_size } = paramsJSON;
   paramsJSON.hidden_size = n_embd * 4;
   paramsJSON.attentionDotProductScale = 1 / Math.sqrt(n_embd / n_head);
   const { hidden_size } = paramsJSON;
@@ -233,6 +230,12 @@ async function loadModel(folder) {
 
   console.log("Loading token embeddings...");
   const embeddingWeights = await loadBinaryFile("models/" + folder + "/transformer.wte.weight_gpt.bin");
+  const embeddingWeightsBuffer = createBuffer(
+    device,
+    bufferSizeCalc(vocab_size, n_embd),
+    GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST | GPUBufferUsage.COPY_SRC
+  );
+  queue.writeBuffer(embeddingWeightsBuffer, 0, embeddingWeights);
 
   console.log("Loading positional embeddings...");
   const posEmbeddings = await loadBinaryFile("models/" + folder + "/transformer.wpe.weight_gpt.bin");
@@ -324,6 +327,7 @@ async function loadModel(folder) {
     params: paramsJSON,
     layer_buffers,
     embeddingWeights,
+    embeddingWeightsBuffer,
     posEmbdBuffer,
     normGammaBuffer,
     normBetaBuffer,
