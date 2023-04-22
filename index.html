@@ -21,17 +21,18 @@
     <input type="number" min="1" max="300" value="100" id="tokensInput" disabled />
     <br /><br />
     <label for="topK">Top K:</label>
-    <input type="number" min="1" max="100" value="1" id="topKInput" disabled />
+    <input type="number" min="1" max="100" value="2" id="topKInput" disabled />
     <br /><br />
     <label for="temperature">Temperature:</label>
     <input type="number" step="0.01" min="0.1" max="2" value="1" id="temperatureInput" disabled />
     <br /><br />
     <button id="generateButton" onclick="startGeneration()" disabled>Generate Text</button>
     <br /><br />
-    <textarea id="prompt" rows="5" cols="50" disabled>
+    <textarea id="prompt" rows="15" cols="50" disabled>
 WILL:
 Ah, how dare you challenge me?
-Have you forgotten I built WebGPT? </textarea>
+Have you forgotten I built WebGPT?&#13;&#10;</textarea
+    >
     <br /><br />
     <script>
       const webgpuSupportMessage = document.getElementById("webgpuSupportMessage");
@@ -39,8 +40,8 @@ Have you forgotten I built WebGPT? </textarea>
       const loadGPT2ModelButton = document.getElementById("loadGPT2ModelButton");
 
       const tokensInput = document.getElementById("tokensInput");
-      const topKInput = document.getElementById("topKInput")
-      const temperatureInput = document.getElementById("temperatureInput")
+      const topKInput = document.getElementById("topKInput");
+      const temperatureInput = document.getElementById("temperatureInput");
       const generateButton = document.getElementById("generateButton");
       const promptTextarea = document.getElementById("prompt");
 
@@ -63,7 +64,7 @@ Have you forgotten I built WebGPT? </textarea>
 
         const topK = topKInput.value;
         const temperature = temperatureInput.value;
-        const textStream = generate(prompt, numTokens, 10, topK, temperature);
+        const textStream = generate(prompt, numTokens, topK, temperature);
 
         for await (const text of textStream) {
           promptTextarea.value += text;

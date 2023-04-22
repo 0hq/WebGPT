@@ -96,27 +96,16 @@ let bufferSizeCalc = (dimA, dimB = 1) => {
   throw new Error("BufferSizeCalc not initialized.");
 };
 
-function sampleFromDistribution(probs, top_k) {
-  const sortedIndices = Array.from(probs)
-    .map((value, index) => ({ value, index }))
-    .sort((a, b) => b.value - a.value)
-    .map(({ index }) => index);
-
-  const topKIndices = sortedIndices.slice(0, top_k);
-  const topKProbs = topKIndices.map((index) => probs[index]);
-
-  const sumTopKProbs = topKProbs.reduce((a, b) => a + b, 0);
-  const normalizedTopKProbs = topKProbs.map((prob) => prob / sumTopKProbs);
-
+function sampleFromDistribution(probs) {
   const rand = Math.random();
   let cumulativeProb = 0;
-  for (let i = 0; i < top_k; i++) {
-    cumulativeProb += normalizedTopKProbs[i];
+  for (let i = 0; i < probs.length; i++) {
+    cumulativeProb += probs[i];
     if (rand < cumulativeProb) {
-      return topKIndices[i];
+      return i;
     }
   }
-  return topKIndices[top_k - 1];
+  return probs.length - 1;
 }
 
 function cpuSoftmax(logits, temperature = 1.0) {
@@ -124,6 +113,16 @@ function cpuSoftmax(logits, temperature = 1.0) {
   const expLogits = logits.map((logit) => Math.exp((logit - maxLogit) / temperature));
   const sumExpLogits = expLogits.reduce((a, b) => a + b, 0);
   return expLogits.map((expLogit) => expLogit / sumExpLogits);
+}
+
+function selectTopK(probs, top_k) {
+  const sortedIndices = Array.from(probs)
+    .map((value, index) => ({ value, index }))
+    .sort((a, b) => b.value - a.value)
+    .map(({ index }) => index);
+  const topKIndices = sortedIndices.slice(0, top_k);
+  const topKProbs = topKIndices.map((index) => probs[index]);
+  return { topKIndices, topKProbs };
 }
 
 // ----------------------- Matrix Operations -----------------------
@@ -165,4 +164,11 @@ function flattenEmbeddings(embeddings, n_embd, seq_length) {
   const flattened = new Float32Array(n_embd * seq_length);
   for (const [i, v] of embeddings.entries()) flattened.set(v, n_embd * i);
   return flattened;
+}
+
+function leastPrimeFactor(n, start = 2) {
+  for (let i = start; i <= Math.sqrt(n); i++) {
+    if (n % i === 0) return i;
+  }
+  return n;
 }
