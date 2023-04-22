@@ -628,66 +628,64 @@ const workgroup_Y = 16; // Dictated by shader.
 // --------------------- PIPELINES --------------------- //
 
 function inlineSoftmax(device, queue, commandEncoder, rows, cols, inputBuffer) {
-  const inputBufferBindGroupLayout = r_BindLayout;
-  const operationBindGroupLayout = u_s_BindLayout;
-  const maxPipeline = createPipeline(device, negMaxShader, [operationBindGroupLayout, inputBufferBindGroupLayout]);
-  const addPipeline = createPipeline(device, addShader, [operationBindGroupLayout, inputBufferBindGroupLayout, inputBufferBindGroupLayout]);
-  const expPipeline = createPipeline(device, expShader, [operationBindGroupLayout, inputBufferBindGroupLayout]);
-  const sumPipeline = createPipeline(device, sumShader, [operationBindGroupLayout, inputBufferBindGroupLayout]);
-  const dividePipeline = createPipeline(device, divideShader, [operationBindGroupLayout, inputBufferBindGroupLayout, inputBufferBindGroupLayout]);
+  const maxPipeline = createPipeline(device, negMaxShader, [u_s_BindLayout, r_BindLayout]);
+  const addPipeline = createPipeline(device, addShader, [u_s_BindLayout, r_BindLayout, r_BindLayout]);
+  const expPipeline = createPipeline(device, expShader, [u_s_BindLayout, r_BindLayout]);
+  const sumPipeline = createPipeline(device, sumShader, [u_s_BindLayout, r_BindLayout]);
+  const dividePipeline = createPipeline(device, divideShader, [u_s_BindLayout, r_BindLayout, r_BindLayout]);
 
   const dimUniformBuffer = createBuffer(device, 16, GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST);
   queue.writeBuffer(dimUniformBuffer, 0, new Uint32Array([rows, cols]));
 
   const maxResultBuffer = createBuffer(device, bufferSizeCalc(rows), GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC);
-  const maxBindGroup = createBindGroup(device, operationBindGroupLayout, [dimUniformBuffer, maxResultBuffer]);
+  const maxBindGroup = createBindGroup(device, u_s_BindLayout, [dimUniformBuffer, maxResultBuffer]);
 
   const addResultBuffer = createBuffer(device, bufferSizeCalc(rows, cols), GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC);
-  const addBindGroup = createBindGroup(device, operationBindGroupLayout, [dimUniformBuffer, addResultBuffer]);
+  const addBindGroup = createBindGroup(device, u_s_BindLayout, [dimUniformBuffer, addResultBuffer]);
 
   const expResultBuffer = createBuffer(device, bufferSizeCalc(rows, cols), GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC);
-  const expBindGroup = createBindGroup(device, operationBindGroupLayout, [dimUniformBuffer, expResultBuffer]);
+  const expBindGroup = createBindGroup(device, u_s_BindLayout, [dimUniformBuffer, expResultBuffer]);
 
   const sumResultBuffer = createBuffer(device, bufferSizeCalc(rows), GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC);
-  const sumBindGroup = createBindGroup(device, operationBindGroupLayout, [dimUniformBuffer, sumResultBuffer]);
+  const sumBindGroup = createBindGroup(device, u_s_BindLayout, [dimUniformBuffer, sumResultBuffer]);
 
   const divResultBuffer = createBuffer(device, bufferSizeCalc(rows, cols), GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC);
-  const divBindGroup = createBindGroup(device, operationBindGroupLayout, [dimUniformBuffer, divResultBuffer]);
+  const divBindGroup = createBindGroup(device, u_s_BindLayout, [dimUniformBuffer, divResultBuffer]);
 
   const passEncoder_max = commandEncoder.beginComputePass();
   passEncoder_max.setPipeline(maxPipeline);
   passEncoder_max.setBindGroup(0, maxBindGroup);
-  passEncoder_max.setBindGroup(1, createBindGroup(device, inputBufferBindGroupLayout, [inputBuffer]));
+  passEncoder_max.setBindGroup(1, createBindGroup(device, r_BindLayout, [inputBuffer]));
   passEncoder_max.dispatchWorkgroups(workgroupCalc(rows, workgroup_Y), workgroupCalc(cols, workgroup_X));
   passEncoder_max.end();
 
   const passEncoder_add = commandEncoder.beginComputePass();
   passEncoder_add.setPipeline(addPipeline);
   passEncoder_add.setBindGroup(0, addBindGroup);
-  passEncoder_add.setBindGroup(1, createBindGroup(device, inputBufferBindGroupLayout, [inputBuffer]));
-  passEncoder_add.setBindGroup(2, createBindGroup(device, inputBufferBindGroupLayout, [maxResultBuffer]));
+  passEncoder_add.setBindGroup(1, createBindGroup(device, r_BindLayout, [inputBuffer]));
+  passEncoder_add.setBindGroup(2, createBindGroup(device, r_BindLayout, [maxResultBuffer]));
   passEncoder_add.dispatchWorkgroups(workgroupCalc(rows, workgroup_Y), workgroupCalc(cols, workgroup_X));
   passEncoder_add.end();
 
   const passEncoder_exp = commandEncoder.beginComputePass();
   passEncoder_exp.setPipeline(expPipeline);
   passEncoder_exp.setBindGroup(0, expBindGroup);
-  passEncoder_exp.setBindGroup(1, createBindGroup(device, inputBufferBindGroupLayout, [addResultBuffer]));
+  passEncoder_exp.setBindGroup(1, createBindGroup(device, r_BindLayout, [addResultBuffer]));
   passEncoder_exp.dispatchWorkgroups(workgroupCalc(rows, workgroup_Y), workgroupCalc(cols, workgroup_X));
   passEncoder_exp.end();
 
   const passEncoder_sum = commandEncoder.beginComputePass();
   passEncoder_sum.setPipeline(sumPipeline);
   passEncoder_sum.setBindGroup(0, sumBindGroup);
-  passEncoder_sum.setBindGroup(1, createBindGroup(device, inputBufferBindGroupLayout, [expResultBuffer]));
+  passEncoder_sum.setBindGroup(1, createBindGroup(device, r_BindLayout, [expResultBuffer]));
   passEncoder_sum.dispatchWorkgroups(workgroupCalc(rows, workgroup_Y), workgroupCalc(cols, workgroup_X));
   passEncoder_sum.end();
 
   const passEncoder_div = commandEncoder.beginComputePass();
   passEncoder_div.setPipeline(dividePipeline);
   passEncoder_div.setBindGroup(0, divBindGroup);
-  passEncoder_div.setBindGroup(1, createBindGroup(device, inputBufferBindGroupLayout, [expResultBuffer]));
-  passEncoder_div.setBindGroup(2, createBindGroup(device, inputBufferBindGroupLayout, [sumResultBuffer]));
+  passEncoder_div.setBindGroup(1, createBindGroup(device, r_BindLayout, [expResultBuffer]));
+  passEncoder_div.setBindGroup(2, createBindGroup(device, r_BindLayout, [sumResultBuffer]));
   passEncoder_div.dispatchWorkgroups(workgroupCalc(rows, workgroup_Y), workgroupCalc(cols, workgroup_X));
   passEncoder_div.end();
 
@@ -695,20 +693,18 @@ function inlineSoftmax(device, queue, commandEncoder, rows, cols, inputBuffer) {
 }
 
 function inlineResidual(device, queue, commandEncoder, rows, cols, layerOutputBuffer, residualBuffer) {
-  const inputBufferBindGroupLayout = r_BindLayout;
-  const residualBindGroupLayout = u_s_BindLayout;
-  const residualPipeline = createPipeline(device, elementWiseAdditionShader, [residualBindGroupLayout, inputBufferBindGroupLayout, inputBufferBindGroupLayout]);
+  const residualPipeline = createPipeline(device, elementWiseAdditionShader, [u_s_BindLayout, r_BindLayout, r_BindLayout]);
 
   const residualUniformBuffer = createBuffer(device, 16, GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST);
   const residualResultBuffer = createBuffer(device, bufferSizeCalc(rows, cols), GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC);
-  const residualBindGroup = createBindGroup(device, residualBindGroupLayout, [residualUniformBuffer, residualResultBuffer]);
+  const residualBindGroup = createBindGroup(device, u_s_BindLayout, [residualUniformBuffer, residualResultBuffer]);
   queue.writeBuffer(residualUniformBuffer, 0, new Uint32Array([rows, cols]));
 
   const passEncoder = commandEncoder.beginComputePass();
   passEncoder.setPipeline(residualPipeline);
   passEncoder.setBindGroup(0, residualBindGroup);
-  passEncoder.setBindGroup(1, createBindGroup(device, inputBufferBindGroupLayout, [residualBuffer]));
-  passEncoder.setBindGroup(2, createBindGroup(device, inputBufferBindGroupLayout, [layerOutputBuffer]));
+  passEncoder.setBindGroup(1, createBindGroup(device, r_BindLayout, [residualBuffer]));
+  passEncoder.setBindGroup(2, createBindGroup(device, r_BindLayout, [layerOutputBuffer]));
   passEncoder.dispatchWorkgroups(workgroupCalc(rows, workgroup_Y), workgroupCalc(cols, workgroup_X));
   passEncoder.end();
 
@@ -716,19 +712,17 @@ function inlineResidual(device, queue, commandEncoder, rows, cols, layerOutputBu
 }
 
 function inlineMatMul(device, queue, commandEncoder, Abuffer, Bbuffer, rows, cols, shared) {
-  const inputBufferBindGroupLayout = r_r_BindLayout;
-  const matmulBindGroupLayout = u_s_BindLayout;
-  const matmulPipeline = createPipeline(device, matMulShader, [matmulBindGroupLayout, inputBufferBindGroupLayout]);
+  const matmulPipeline = createPipeline(device, matMulShader, [u_s_BindLayout, r_r_BindLayout]);
 
   const matmulUniformBuffer = createBuffer(device, 16, GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST);
   const matmulResultBuffer = createBuffer(device, bufferSizeCalc(rows, cols), GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC);
-  const matMulBindGroup = createBindGroup(device, matmulBindGroupLayout, [matmulUniformBuffer, matmulResultBuffer]);
+  const matMulBindGroup = createBindGroup(device, u_s_BindLayout, [matmulUniformBuffer, matmulResultBuffer]);
   queue.writeBuffer(matmulUniformBuffer, 0, new Uint32Array([rows, cols, shared]));
 
   const passEncoder = commandEncoder.beginComputePass();
   passEncoder.setPipeline(matmulPipeline);
   passEncoder.setBindGroup(0, matMulBindGroup);
-  passEncoder.setBindGroup(1, createBindGroup(device, inputBufferBindGroupLayout, [Abuffer, Bbuffer]));
+  passEncoder.setBindGroup(1, createBindGroup(device, r_r_BindLayout, [Abuffer, Bbuffer]));
   passEncoder.dispatchWorkgroups(workgroupCalc(rows, workgroup_Y), workgroupCalc(cols, workgroup_X));
   passEncoder.end();
 
@@ -736,19 +730,17 @@ function inlineMatMul(device, queue, commandEncoder, Abuffer, Bbuffer, rows, col
 }
 
 function inlineTranspose(device, queue, commandEncoder, inputBuffer, rows, cols) {
-  const inputBufferBindGroupLayout = r_BindLayout;
-  const transposeBindGroupLayout = u_s_BindLayout;
-  const transposePipeline = createPipeline(device, transposeShader, [transposeBindGroupLayout, inputBufferBindGroupLayout]);
+  const transposePipeline = createPipeline(device, transposeShader, [u_s_BindLayout, r_BindLayout]);
 
   const transposeUniformBuffer = createBuffer(device, 16, GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST);
   const transposeResultBuffer = createBuffer(device, bufferSizeCalc(rows, cols), GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC);
-  const transposeBindGroup = createBindGroup(device, transposeBindGroupLayout, [transposeUniformBuffer, transposeResultBuffer]);
+  const transposeBindGroup = createBindGroup(device, u_s_BindLayout, [transposeUniformBuffer, transposeResultBuffer]);
   queue.writeBuffer(transposeUniformBuffer, 0, new Uint32Array([rows, cols]));
 
   const passEncoder = commandEncoder.beginComputePass();
   passEncoder.setPipeline(transposePipeline);
   passEncoder.setBindGroup(0, transposeBindGroup);
-  passEncoder.setBindGroup(1, createBindGroup(device, inputBufferBindGroupLayout, [Abuffer]));
+  passEncoder.setBindGroup(1, createBindGroup(device, r_BindLayout, [inputBuffer]));
   passEncoder.dispatchWorkgroups(workgroupCalc(rows, workgroup_Y), workgroupCalc(cols, workgroup_X));
   passEncoder.end();
 
@@ -756,35 +748,31 @@ function inlineTranspose(device, queue, commandEncoder, inputBuffer, rows, cols)
 }
 
 function inlineLayerNorm(device, queue, commandEncoder, seq_length, n_embd, inputBuffer, gammaBuffer, betaBuffer) {
-  const inputBufferBindGroupLayout = r_BindLayout;
-  const statsBindGroupLayout = u_s_BindLayout;
-  const statsPipeline = createPipeline(device, normStatsShader, [statsBindGroupLayout, inputBufferBindGroupLayout]);
-  const normInputBindGroupLayout = createBindGroupLayout(device, ["read-only-storage", "read-only-storage", "read-only-storage"]);
-  const normBindGroupLayout = u_s_BindLayout;
-  const normPipeline = createPipeline(device, normShaderInline, [normBindGroupLayout, normInputBindGroupLayout, inputBufferBindGroupLayout]);
+  const statsPipeline = createPipeline(device, normStatsShader, [u_s_BindLayout, r_BindLayout]);
+  const normPipeline = createPipeline(device, normShaderInline, [u_s_BindLayout, r_r_r_BindLayout, r_BindLayout]);
 
   const statsUniformBuffer = createBuffer(device, 16, GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST);
   const statsResultBuffer = createBuffer(device, bufferSizeCalc(seq_length, 2), GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC);
-  const statsBindGroup = createBindGroup(device, statsBindGroupLayout, [statsUniformBuffer, statsResultBuffer]);
+  const statsBindGroup = createBindGroup(device, u_s_BindLayout, [statsUniformBuffer, statsResultBuffer]);
   queue.writeBuffer(statsUniformBuffer, 0, new Uint32Array([seq_length, n_embd]));
 
   const normUniformBuffer = createBuffer(device, 16, GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST);
   const normResultBuffer = createBuffer(device, bufferSizeCalc(seq_length, n_embd), GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC);
-  const normBindGroup = createBindGroup(device, normBindGroupLayout, [normUniformBuffer, normResultBuffer]);
+  const normBindGroup = createBindGroup(device, u_s_BindLayout, [normUniformBuffer, normResultBuffer]);
   queue.writeBuffer(normUniformBuffer, 0, new Uint32Array([seq_length, n_embd]));
 
   const passEncoder_stats = commandEncoder.beginComputePass();
   passEncoder_stats.setPipeline(statsPipeline);
   passEncoder_stats.setBindGroup(0, statsBindGroup);
-  passEncoder_stats.setBindGroup(1, createBindGroup(device, inputBufferBindGroupLayout, [inputBuffer]));
+  passEncoder_stats.setBindGroup(1, createBindGroup(device, r_BindLayout, [inputBuffer]));
   passEncoder_stats.dispatchWorkgroups(workgroupCalc(seq_length, workgroup_Y));
   passEncoder_stats.end();
 
   const passEncoder_norm = commandEncoder.beginComputePass();
   passEncoder_norm.setPipeline(normPipeline);
   passEncoder_norm.setBindGroup(0, normBindGroup);
-  passEncoder_norm.setBindGroup(1, createBindGroup(device, normInputBindGroupLayout, [inputBuffer, gammaBuffer, betaBuffer]));
-  passEncoder_norm.setBindGroup(2, createBindGroup(device, inputBufferBindGroupLayout, [statsResultBuffer]));
+  passEncoder_norm.setBindGroup(1, createBindGroup(device, r_r_r_BindLayout, [inputBuffer, gammaBuffer, betaBuffer]));
+  passEncoder_norm.setBindGroup(2, createBindGroup(device, r_BindLayout, [statsResultBuffer]));
   passEncoder_norm.dispatchWorkgroups(workgroupCalc(seq_length, workgroup_Y), workgroupCalc(n_embd, workgroup_X));
   passEncoder_norm.end();
 
@@ -804,15 +792,12 @@ function inlineFFN(
   secondLayerWeightsBuffer,
   secondLayerBiasBuffer
 ) {
-  const inputBufferBindGroupLayout = r_BindLayout;
-  const ffnBindGroupLayout = u_r_r_s_BindLayout;
-  const FFNpipeline = createPipeline(device, FFNShader, [ffnBindGroupLayout, inputBufferBindGroupLayout]);
-  const geluBindGroupLayout = u_s_BindLayout;
-  const GELUpipeline = createPipeline(device, GELUShader, [geluBindGroupLayout, inputBufferBindGroupLayout]);
+  const FFNpipeline = createPipeline(device, FFNShader, [u_r_r_s_BindLayout, r_BindLayout]);
+  const GELUpipeline = createPipeline(device, GELUShader, [u_s_BindLayout, r_BindLayout]);
 
   const firstLayerUniformBuffer = createBuffer(device, 16, GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST);
   const firstLayerResultBuffer = createBuffer(device, bufferSizeCalc(context, hidden_size), GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC);
-  const firstLayerBindGroup = createBindGroup(device, ffnBindGroupLayout, [
+  const firstLayerBindGroup = createBindGroup(device, u_r_r_s_BindLayout, [
     firstLayerUniformBuffer,
     firstLayerBiasBuffer,
     firstLayerWeightsBuffer,
@@ -822,12 +807,12 @@ function inlineFFN(
 
   const geluUniformBuffer = createBuffer(device, 16, GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST);
   const geluResultBuffer = createBuffer(device, bufferSizeCalc(context, hidden_size), GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC);
-  const geluBindGroup = createBindGroup(device, geluBindGroupLayout, [geluUniformBuffer, geluResultBuffer]);
+  const geluBindGroup = createBindGroup(device, u_s_BindLayout, [geluUniformBuffer, geluResultBuffer]);
   queue.writeBuffer(geluUniformBuffer, 0, new Uint32Array([context, hidden_size]));
 
   const secondLayerUniformBuffer = createBuffer(device, 16, GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST);
   const secondLayerResultBuffer = createBuffer(device, bufferSizeCalc(context, n_embed), GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC);
-  const secondLayerBindGroup = createBindGroup(device, ffnBindGroupLayout, [
+  const secondLayerBindGroup = createBindGroup(device, u_r_r_s_BindLayout, [
     secondLayerUniformBuffer,
     secondLayerBiasBuffer,
     secondLayerWeightsBuffer,
@@ -838,21 +823,21 @@ function inlineFFN(
   const passEncoder_first = commandEncoder.beginComputePass();
   passEncoder_first.setPipeline(FFNpipeline);
   passEncoder_first.setBindGroup(0, firstLayerBindGroup);
-  passEncoder_first.setBindGroup(1, createBindGroup(device, inputBufferBindGroupLayout, [inputBuffer]));
+  passEncoder_first.setBindGroup(1, createBindGroup(device, r_BindLayout, [inputBuffer]));
   passEncoder_first.dispatchWorkgroups(workgroupCalc(context, workgroup_Y), workgroupCalc(hidden_size, workgroup_X));
   passEncoder_first.end();
 
   const passEncoder_gelu = commandEncoder.beginComputePass();
   passEncoder_gelu.setPipeline(GELUpipeline);
   passEncoder_gelu.setBindGroup(0, geluBindGroup);
-  passEncoder_gelu.setBindGroup(1, createBindGroup(device, inputBufferBindGroupLayout, [firstLayerResultBuffer]));
+  passEncoder_gelu.setBindGroup(1, createBindGroup(device, r_BindLayout, [firstLayerResultBuffer]));
   passEncoder_gelu.dispatchWorkgroups(workgroupCalc(context, workgroup_Y), workgroupCalc(hidden_size, workgroup_X));
   passEncoder_gelu.end();
 
   const passEncoder_second = commandEncoder.beginComputePass();
   passEncoder_second.setPipeline(FFNpipeline);
   passEncoder_second.setBindGroup(0, secondLayerBindGroup);
-  passEncoder_second.setBindGroup(1, createBindGroup(device, inputBufferBindGroupLayout, [geluResultBuffer]));
+  passEncoder_second.setBindGroup(1, createBindGroup(device, r_BindLayout, [geluResultBuffer]));
   passEncoder_second.dispatchWorkgroups(workgroupCalc(context, workgroup_Y), workgroupCalc(n_embed, workgroup_X));
   passEncoder_second.end();
 
@@ -877,96 +862,84 @@ function inlineAttention(
     throw new Error("cols must be divisible by n_head");
   }
 
-  const inputBufferBindGroupLayout = r_BindLayout;
-  const ffnBindGroupLayout = u_r_r_s_BindLayout;
-  const FFNpipeline = createPipeline(device, FFNShader, [ffnBindGroupLayout, inputBufferBindGroupLayout]);
-  const splitQKVBindGroupLayout = u_s_s_s_BindLayout;
-  const splitQKVpipeline = createPipeline(device, splitQKVShader, [splitQKVBindGroupLayout, inputBufferBindGroupLayout]);
-  const attentionInputBindGroupLayout = r_r_BindLayout;
-  const attentionBindGroupLayout = u_s_BindLayout;
-  const attentionWeightsPipeline = createPipeline(device, attentionWeightsShader, [attentionBindGroupLayout, attentionInputBindGroupLayout]);
-  const attentionValuesPipeline = createPipeline(device, attentionValuesShader, [attentionBindGroupLayout, attentionInputBindGroupLayout]);
-  const multiplyBindGroupLayout = u_s_BindLayout;
-  const multiplyPipeline = createPipeline(device, multiplyShader, [multiplyBindGroupLayout, inputBufferBindGroupLayout]);
-  const causalMaskBindGroupLayout = u_s_BindLayout;
-  const causalMaskPipeline = createPipeline(device, causalMaskShader, [causalMaskBindGroupLayout, inputBufferBindGroupLayout]);
+  const FFNpipeline = createPipeline(device, FFNShader, [u_r_r_s_BindLayout, r_BindLayout]);
+  const splitQKVpipeline = createPipeline(device, splitQKVShader, [u_s_s_s_BindLayout, r_BindLayout]);
+  const attentionWeightsPipeline = createPipeline(device, attentionWeightsShader, [u_s_BindLayout, r_r_BindLayout]);
+  const attentionValuesPipeline = createPipeline(device, attentionValuesShader, [u_s_BindLayout, r_r_BindLayout]);
+  const multiplyPipeline = createPipeline(device, multiplyShader, [u_s_BindLayout, r_BindLayout]);
+  const causalMaskPipeline = createPipeline(device, causalMaskShader, [u_s_BindLayout, r_BindLayout]);
 
   const qkvUniformBuffer = createBuffer(device, 16, GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST);
   const qkvResultBuffer = createBuffer(device, bufferSizeCalc(seq_length, 3 * n_embd), GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC);
-  const qkvBindGroup = createBindGroup(device, ffnBindGroupLayout, [qkvUniformBuffer, qkvBiasBuffer, qkvWeightsBuffer, qkvResultBuffer]);
+  const qkvBindGroup = createBindGroup(device, u_r_r_s_BindLayout, [qkvUniformBuffer, qkvBiasBuffer, qkvWeightsBuffer, qkvResultBuffer]);
   queue.writeBuffer(qkvUniformBuffer, 0, new Uint32Array([seq_length, 3 * n_embd, n_embd]));
 
   const splitQKVUniformBuffer = createBuffer(device, 16, GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST);
   const splitQResultBuffer = createBuffer(device, bufferSizeCalc(seq_length, n_embd), GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC);
   const splitKResultBuffer = createBuffer(device, bufferSizeCalc(seq_length, n_embd), GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC);
   const splitVResultBuffer = createBuffer(device, bufferSizeCalc(seq_length, n_embd), GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC);
-  const splitQKVBindGroup = createBindGroup(device, splitQKVBindGroupLayout, [
-    splitQKVUniformBuffer,
-    splitQResultBuffer,
-    splitKResultBuffer,
-    splitVResultBuffer,
-  ]);
+  const splitQKVBindGroup = createBindGroup(device, u_s_s_s_BindLayout, [splitQKVUniformBuffer, splitQResultBuffer, splitKResultBuffer, splitVResultBuffer]);
   queue.writeBuffer(splitQKVUniformBuffer, 0, new Uint32Array([seq_length, n_embd]));
 
   const attentionWeightsUniformBuffer = createBuffer(device, 16, GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST);
   const attentionWeightsResultBuffer = createBuffer(device, bufferSizeCalc(seq_length, seq_length * n_head), GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC);
-  const attentionWeightsBindGroup = createBindGroup(device, attentionBindGroupLayout, [attentionWeightsUniformBuffer, attentionWeightsResultBuffer]);
+  const attentionWeightsBindGroup = createBindGroup(device, u_s_BindLayout, [attentionWeightsUniformBuffer, attentionWeightsResultBuffer]);
   queue.writeBuffer(attentionWeightsUniformBuffer, 0, new Uint32Array([seq_length, seq_length * n_head, n_embd / n_head, n_embd]));
 
   const multiplyUniformBuffer = createBuffer(device, 16, GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST);
   const multiplyResultBuffer = createBuffer(device, bufferSizeCalc(seq_length, seq_length * n_head), GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC);
-  const multiplyBindGroup = createBindGroup(device, multiplyBindGroupLayout, [multiplyUniformBuffer, multiplyResultBuffer]);
+  const multiplyBindGroup = createBindGroup(device, u_s_BindLayout, [multiplyUniformBuffer, multiplyResultBuffer]);
   queue.writeBuffer(multiplyUniformBuffer, 0, new Uint32Array([seq_length, seq_length * n_head]));
   queue.writeBuffer(multiplyUniformBuffer, 8, new Float32Array([attentionDotProductScale]));
 
   const causalMaskUniformBuffer = createBuffer(device, 16, GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST);
   const causalMaskResultBuffer = createBuffer(device, bufferSizeCalc(seq_length, seq_length * n_head), GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC);
-  const causalMaskBindGroup = createBindGroup(device, causalMaskBindGroupLayout, [causalMaskUniformBuffer, causalMaskResultBuffer]);
+  const causalMaskBindGroup = createBindGroup(device, u_s_BindLayout, [causalMaskUniformBuffer, causalMaskResultBuffer]);
   queue.writeBuffer(causalMaskUniformBuffer, 0, new Uint32Array([seq_length * n_head, seq_length])); // Transposes! This is needed for softmax.
 
   const attentionValuesUniformBuffer = createBuffer(device, 16, GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST);
   const attentionValuesResultBuffer = createBuffer(device, bufferSizeCalc(seq_length, n_embd), GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC);
-  const attentionValuesBindGroup = createBindGroup(device, attentionBindGroupLayout, [attentionValuesUniformBuffer, attentionValuesResultBuffer]);
+  const attentionValuesBindGroup = createBindGroup(device, u_s_BindLayout, [attentionValuesUniformBuffer, attentionValuesResultBuffer]);
   queue.writeBuffer(attentionValuesUniformBuffer, 0, new Uint32Array([seq_length, n_embd, n_head, n_embd / n_head]));
 
   const linearUniformBuffer = createBuffer(device, 16, GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST);
 
   const linearResultBuffer = createBuffer(device, bufferSizeCalc(seq_length, n_embd), GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC);
-  const linearBindGroup = createBindGroup(device, ffnBindGroupLayout, [linearUniformBuffer, linearBiasBuffer, linearWeightsBuffer, linearResultBuffer]);
+  const linearBindGroup = createBindGroup(device, u_r_r_s_BindLayout, [linearUniformBuffer, linearBiasBuffer, linearWeightsBuffer, linearResultBuffer]);
   queue.writeBuffer(linearUniformBuffer, 0, new Uint32Array([seq_length, n_embd, n_embd]));
 
   const passEncoder_qkv = commandEncoder.beginComputePass();
   passEncoder_qkv.setPipeline(FFNpipeline);
   passEncoder_qkv.setBindGroup(0, qkvBindGroup);
-  passEncoder_qkv.setBindGroup(1, createBindGroup(device, inputBufferBindGroupLayout, [inputBuffer]));
+  passEncoder_qkv.setBindGroup(1, createBindGroup(device, r_BindLayout, [inputBuffer]));
   passEncoder_qkv.dispatchWorkgroups(workgroupCalc(seq_length, workgroup_Y), workgroupCalc(3 * n_embd, workgroup_X));
   passEncoder_qkv.end();
 
   const passEncoder_splitQKV = commandEncoder.beginComputePass();
   passEncoder_splitQKV.setPipeline(splitQKVpipeline);
   passEncoder_splitQKV.setBindGroup(0, splitQKVBindGroup);
-  passEncoder_splitQKV.setBindGroup(1, createBindGroup(device, inputBufferBindGroupLayout, [qkvResultBuffer]));
+  passEncoder_splitQKV.setBindGroup(1, createBindGroup(device, r_BindLayout, [qkvResultBuffer]));
   passEncoder_splitQKV.dispatchWorkgroups(workgroupCalc(seq_length, workgroup_Y), workgroupCalc(n_embd, workgroup_X));
   passEncoder_splitQKV.end();
 
   const passEncoder_attentionWeights = commandEncoder.beginComputePass();
   passEncoder_attentionWeights.setPipeline(attentionWeightsPipeline);
   passEncoder_attentionWeights.setBindGroup(0, attentionWeightsBindGroup);
-  passEncoder_attentionWeights.setBindGroup(1, createBindGroup(device, attentionInputBindGroupLayout, [splitQResultBuffer, splitKResultBuffer]));
+  passEncoder_attentionWeights.setBindGroup(1, createBindGroup(device, r_r_BindLayout, [splitQResultBuffer, splitKResultBuffer]));
   passEncoder_attentionWeights.dispatchWorkgroups(workgroupCalc(seq_length, workgroup_Y), workgroupCalc(seq_length * n_head, workgroup_X));
   passEncoder_attentionWeights.end();
 
   const passEncoder_multiply = commandEncoder.beginComputePass();
   passEncoder_multiply.setPipeline(multiplyPipeline);
   passEncoder_multiply.setBindGroup(0, multiplyBindGroup);
-  passEncoder_multiply.setBindGroup(1, createBindGroup(device, inputBufferBindGroupLayout, [attentionWeightsResultBuffer]));
+  passEncoder_multiply.setBindGroup(1, createBindGroup(device, r_BindLayout, [attentionWeightsResultBuffer]));
   passEncoder_multiply.dispatchWorkgroups(workgroupCalc(seq_length, workgroup_Y), workgroupCalc(seq_length * n_head, workgroup_X));
   passEncoder_multiply.end();
 
   const passEncoder_causalMask = commandEncoder.beginComputePass();
   passEncoder_causalMask.setPipeline(causalMaskPipeline);
   passEncoder_causalMask.setBindGroup(0, causalMaskBindGroup);
-  passEncoder_causalMask.setBindGroup(1, createBindGroup(device, inputBufferBindGroupLayout, [multiplyResultBuffer]));
+  passEncoder_causalMask.setBindGroup(1, createBindGroup(device, r_BindLayout, [multiplyResultBuffer]));
   passEncoder_causalMask.dispatchWorkgroups(workgroupCalc(seq_length * n_head, workgroup_Y), workgroupCalc(seq_length, workgroup_X));
   passEncoder_causalMask.end();
 
@@ -1002,14 +975,14 @@ function inlineAttention(
   const passEncoder_attentionValues = commandEncoder.beginComputePass();
   passEncoder_attentionValues.setPipeline(attentionValuesPipeline);
   passEncoder_attentionValues.setBindGroup(0, attentionValuesBindGroup);
-  passEncoder_attentionValues.setBindGroup(1, createBindGroup(device, attentionInputBindGroupLayout, [softmaxOutputBuffer, splitVResultBuffer]));
+  passEncoder_attentionValues.setBindGroup(1, createBindGroup(device, r_r_BindLayout, [softmaxOutputBuffer, splitVResultBuffer]));
   passEncoder_attentionValues.dispatchWorkgroups(workgroupCalc(seq_length, workgroup_Y), workgroupCalc(n_embd, workgroup_X));
   passEncoder_attentionValues.end();
 
   const passEncoder_linear = commandEncoder.beginComputePass();
   passEncoder_linear.setPipeline(FFNpipeline);
   passEncoder_linear.setBindGroup(0, linearBindGroup);
-  passEncoder_linear.setBindGroup(1, createBindGroup(device, inputBufferBindGroupLayout, [attentionValuesResultBuffer]));
+  passEncoder_linear.setBindGroup(1, createBindGroup(device, r_BindLayout, [attentionValuesResultBuffer]));
   passEncoder_linear.dispatchWorkgroups(workgroupCalc(seq_length, workgroup_Y), workgroupCalc(n_embd, workgroup_X));
   passEncoder_linear.end();
 

@@ -15,7 +15,7 @@ async function initializeWebGPU() {
   bufferSizeCalc = (dimA, dimB = 1) => alignedSize(dimA * dimB * Float32Array.BYTES_PER_ELEMENT, minStorageBufferOffsetAlignment);
 
   r_r_r_BindLayout = createBindGroupLayout(device, ["read-only-storage", "read-only-storage", "read-only-storage"]);
-  r_r_BindLayout = createBindGroupLayout(device, ["read-only-storage", "read-only-storage", "read-only-storage"]);
+  r_r_BindLayout = createBindGroupLayout(device, ["read-only-storage", "read-only-storage"]);
   r_BindLayout = createBindGroupLayout(device, ["read-only-storage"]);
   u_r_r_s_BindLayout = createBindGroupLayout(device, ["uniform", "read-only-storage", "read-only-storage", "storage"]);
   u_s_BindLayout = createBindGroupLayout(device, ["uniform", "storage"]);
