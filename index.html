@@ -21,7 +21,7 @@
     <input type="number" min="1" max="300" value="100" id="tokensInput" disabled />
     <br /><br />
     <label for="topK">Top K:</label>
-    <input type="number" min="1" max="100" value="1" id="topKInput" disabled />
+    <input type="number" min="1" max="100" value="5" id="topKInput" disabled />
     <br /><br />
     <label for="temperature">Temperature:</label>
     <input type="number" step="0.01" min="0.1" max="2" value="1" id="temperatureInput" disabled />
@@ -31,7 +31,7 @@
     <textarea id="prompt" rows="15" cols="50" disabled>
 WILL:
 Ah, how dare you challenge me?
-Have you forgotten I built WebGPT? </textarea
+Have you forgotten I built WebGPT?&#13;&#10;</textarea
     >
     <br /><br />
     <script>
@@ -64,7 +64,7 @@ Have you forgotten I built WebGPT? </textarea
 
         const topK = topKInput.value;
         const temperature = temperatureInput.value;
-        const textStream = generate(prompt, numTokens, 10, topK, temperature);
+        const textStream = generate(prompt, numTokens, topK, temperature);
 
         for await (const text of textStream) {
           promptTextarea.value += text;
@@ -83,7 +83,7 @@ Have you forgotten I built WebGPT? </textarea
         topKInput.disabled = false;
         temperatureInput.disabled = false;
 
-        startGeneration();
+        // startGeneration();
       }
 
       async function loadGPT2ModelHandler() {
