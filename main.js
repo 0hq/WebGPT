@@ -31,7 +31,12 @@ async function* generate(prompt, max_new_tokens, top_k = 10, temperature = 1.0) 
   for (let i = 0; i < max_new_tokens; i++) {
     const idx_cond = history.slice(-block_size);
 
+    const startTime = performance.now();
     const logits = await runGPT(idx_cond);
+    const endTime = performance.now();
+
+    console.log(`Kernel execution time: ${endTime - startTime} ms`);
+
     const { topKIndices, topKProbs } = selectTopK(logits, top_k);
     const probs = cpuSoftmax(topKProbs, temperature);
     const idx_next = topKIndices[sampleFromDistribution(probs)];
