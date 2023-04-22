@@ -31,8 +31,7 @@ async function* generate(prompt, max_new_tokens, top_k = 10, temperature = 1.0) 
   for (let i = 0; i < max_new_tokens; i++) {
     const idx_cond = history.slice(-block_size);
 
-    const result = await runGPT(idx_cond);
-    const logits = result;
+    const logits = await runGPT(idx_cond);
     const probs = cpuSoftmax(logits, temperature);
     const idx_next = sampleFromDistribution(probs, top_k);
 
@@ -174,7 +173,7 @@ async function runGPT(idx) {
     bufferSizeCalc(vocab_size, n_embd),
     GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST | GPUBufferUsage.COPY_SRC
   );
-  queue.writeBuffer(embeddingWeightsBuffer, 0, transposeArray(embeddingWeights, vocab_size, n_embd));
+  queue.writeBuffer(embeddingWeightsBuffer, 0, embeddingWeights);
 
   const deEmbedOutputBuffer = createBuffer(device, bufferSizeCalc(1, vocab_size), GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ);
 
@@ -199,17 +198,8 @@ async function runGPT(idx) {
       0,
       bufferSizeCalc(n_embd, vocabChunkSize)
     );
-    // We're doing some buffer tricks here. Since slicedlayerNormOutputBuffer is a row matrix, we can just pretend it's a column matrix without any changes to the way it's stored. We then multiply it by the transposed embeddingWeights chunk, resulting in a column vector which, once again, we can pretend is a row vector.
-    const deEmbedChunkResultBuffer = inlineMatMul(
-      device,
-      queue,
-      commandEncoder,
-      deEmbedChunkInputBuffer,
-      slicedlayerNormOutputBuffer,
-      vocabChunkSize,
-      1,
-      n_embd
-    );
+    // We're doing some buffer tricks here. Since slicedEmbedOutputBuffer is a row matrix, we can just pretend it's a column matrix without any changes to the way it's stored. We then multiply it by the transposed embeddingWeights chunk, resulting in a column vector which, once again, we can pretend is a row vector.
+    const deEmbedChunkResultBuffer = inlineMatMul(device, queue, commandEncoder, deEmbedChunkInputBuffer, slicedEmbedOutputBuffer, vocabChunkSize, 1, n_embd);
     commandEncoder.copyBufferToBuffer(deEmbedChunkResultBuffer, 0, deEmbedOutputBuffer, i * bufferSizeCalc(vocabChunkSize), bufferSizeCalc(vocabChunkSize));
   }
 
@@ -217,6 +207,8 @@ async function runGPT(idx) {
 
   await deEmbedOutputBuffer.mapAsync(GPUMapMode.READ);
   const output = deEmbedOutputBuffer.getMappedRange();
+
+  console.log(new Float32Array(output));
 
   return new Float32Array(output);
 }

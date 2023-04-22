@@ -28,10 +28,11 @@
     <br /><br />
     <button id="generateButton" onclick="startGeneration()" disabled>Generate Text</button>
     <br /><br />
-    <textarea id="prompt" rows="5" cols="50" disabled>
+    <textarea id="prompt" rows="15" cols="50" disabled>
 WILL:
 Ah, how dare you challenge me?
-Have you forgotten I built WebGPT? </textarea>
+Have you forgotten I built WebGPT? </textarea
+    >
     <br /><br />
     <script>
       const webgpuSupportMessage = document.getElementById("webgpuSupportMessage");
@@ -39,8 +40,8 @@ Have you forgotten I built WebGPT? </textarea>
       const loadGPT2ModelButton = document.getElementById("loadGPT2ModelButton");
 
       const tokensInput = document.getElementById("tokensInput");
-      const topKInput = document.getElementById("topKInput")
-      const temperatureInput = document.getElementById("temperatureInput")
+      const topKInput = document.getElementById("topKInput");
+      const temperatureInput = document.getElementById("temperatureInput");
       const generateButton = document.getElementById("generateButton");
       const promptTextarea = document.getElementById("prompt");
 
@@ -81,6 +82,8 @@ Have you forgotten I built WebGPT? </textarea>
         tokensInput.disabled = false;
         topKInput.disabled = false;
         temperatureInput.disabled = false;
+
+        startGeneration();
       }
 
       async function loadGPT2ModelHandler() {
@@ -124,6 +127,8 @@ Have you forgotten I built WebGPT? </textarea>
 
         setTextareaDisabled(false);
       }
+
+      // loadModelHandler();
     </script>
   </body>
 </html>
