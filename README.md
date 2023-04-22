@@ -25,6 +25,7 @@ If you want to try out WebGPT, visit the demo website here [KMeans.org](https://
 
 - [X] Embeddings / de-embeddings on GPU.
 - [X] Initializing pipelines on every step is incredibly inefficient.
+- [ ] Reuse buffers as well!
 - [ ] Kernel shared memory!
 - [ ] Convert into a package.
 - [ ] Compute pass splitting for larger models *(maxStorageBufferBindingSize)*
