@@ -538,7 +538,7 @@ const normStatsShader = `
 `;
 
 // Adjusts the input matrix by the mean and standard deviation and gamma and beta parameters.
-const normShaderInline = `
+const normShader = `
   struct Matrix {
       data: array<f32>,
   }
@@ -628,12 +628,6 @@ const workgroup_Y = 16; // Dictated by shader.
 // --------------------- PIPELINES --------------------- //
 
 function inlineSoftmax(device, queue, commandEncoder, rows, cols, inputBuffer) {
-  const maxPipeline = createPipeline(device, negMaxShader, [u_s_BindLayout, r_BindLayout]);
-  const addPipeline = createPipeline(device, addShader, [u_s_BindLayout, r_BindLayout, r_BindLayout]);
-  const expPipeline = createPipeline(device, expShader, [u_s_BindLayout, r_BindLayout]);
-  const sumPipeline = createPipeline(device, sumShader, [u_s_BindLayout, r_BindLayout]);
-  const dividePipeline = createPipeline(device, divideShader, [u_s_BindLayout, r_BindLayout, r_BindLayout]);
-
   const dimUniformBuffer = createBuffer(device, 16, GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST);
   queue.writeBuffer(dimUniformBuffer, 0, new Uint32Array([rows, cols]));
 
@@ -693,15 +687,13 @@ function inlineSoftmax(device, queue, commandEncoder, rows, cols, inputBuffer) {
 }
 
 function inlineResidual(device, queue, commandEncoder, rows, cols, layerOutputBuffer, residualBuffer) {
-  const residualPipeline = createPipeline(device, elementWiseAdditionShader, [u_s_BindLayout, r_BindLayout, r_BindLayout]);
-
   const residualUniformBuffer = createBuffer(device, 16, GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST);
   const residualResultBuffer = createBuffer(device, bufferSizeCalc(rows, cols), GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC);
   const residualBindGroup = createBindGroup(device, u_s_BindLayout, [residualUniformBuffer, residualResultBuffer]);
   queue.writeBuffer(residualUniformBuffer, 0, new Uint32Array([rows, cols]));
 
   const passEncoder = commandEncoder.beginComputePass();
-  passEncoder.setPipeline(residualPipeline);
+  passEncoder.setPipeline(elementAddPipeline);
   passEncoder.setBindGroup(0, residualBindGroup);
   passEncoder.setBindGroup(1, createBindGroup(device, r_BindLayout, [residualBuffer]));
   passEncoder.setBindGroup(2, createBindGroup(device, r_BindLayout, [layerOutputBuffer]));
@@ -712,8 +704,6 @@ function inlineResidual(device, queue, commandEncoder, rows, cols, layerOutputBu
 }
 
 function inlineMatMul(device, queue, commandEncoder, Abuffer, Bbuffer, rows, cols, shared) {
-  const matmulPipeline = createPipeline(device, matMulShader, [u_s_BindLayout, r_r_BindLayout]);
-
   const matmulUniformBuffer = createBuffer(device, 16, GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST);
   const matmulResultBuffer = createBuffer(device, bufferSizeCalc(rows, cols), GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC);
   const matMulBindGroup = createBindGroup(device, u_s_BindLayout, [matmulUniformBuffer, matmulResultBuffer]);
@@ -748,9 +738,6 @@ function inlineTranspose(device, queue, commandEncoder, inputBuffer, rows, cols)
 }
 
 function inlineLayerNorm(device, queue, commandEncoder, seq_length, n_embd, inputBuffer, gammaBuffer, betaBuffer) {
-  const statsPipeline = createPipeline(device, normStatsShader, [u_s_BindLayout, r_BindLayout]);
-  const normPipeline = createPipeline(device, normShaderInline, [u_s_BindLayout, r_r_r_BindLayout, r_BindLayout]);
-
   const statsUniformBuffer = createBuffer(device, 16, GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST);
   const statsResultBuffer = createBuffer(device, bufferSizeCalc(seq_length, 2), GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC);
   const statsBindGroup = createBindGroup(device, u_s_BindLayout, [statsUniformBuffer, statsResultBuffer]);
@@ -792,9 +779,6 @@ function inlineFFN(
   secondLayerWeightsBuffer,
   secondLayerBiasBuffer
 ) {
-  const FFNpipeline = createPipeline(device, FFNShader, [u_r_r_s_BindLayout, r_BindLayout]);
-  const GELUpipeline = createPipeline(device, GELUShader, [u_s_BindLayout, r_BindLayout]);
-
   const firstLayerUniformBuffer = createBuffer(device, 16, GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST);
   const firstLayerResultBuffer = createBuffer(device, bufferSizeCalc(context, hidden_size), GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC);
   const firstLayerBindGroup = createBindGroup(device, u_r_r_s_BindLayout, [
@@ -861,13 +845,6 @@ function inlineAttention(
   if (n_embd % n_head != 0) {
     throw new Error("cols must be divisible by n_head");
   }
-
-  const FFNpipeline = createPipeline(device, FFNShader, [u_r_r_s_BindLayout, r_BindLayout]);
-  const splitQKVpipeline = createPipeline(device, splitQKVShader, [u_s_s_s_BindLayout, r_BindLayout]);
-  const attentionWeightsPipeline = createPipeline(device, attentionWeightsShader, [u_s_BindLayout, r_r_BindLayout]);
-  const attentionValuesPipeline = createPipeline(device, attentionValuesShader, [u_s_BindLayout, r_r_BindLayout]);
-  const multiplyPipeline = createPipeline(device, multiplyShader, [u_s_BindLayout, r_BindLayout]);
-  const causalMaskPipeline = createPipeline(device, causalMaskShader, [u_s_BindLayout, r_BindLayout]);
 
   const qkvUniformBuffer = createBuffer(device, 16, GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST);
   const qkvResultBuffer = createBuffer(device, bufferSizeCalc(seq_length, 3 * n_embd), GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC);
