@@ -50,7 +50,7 @@ async function runGPT(idx) {
     return;
   }
 
-  const { device, queue, params, posEmbdBuffer, layer_buffers, normGammaBuffer, normBetaBuffer, embeddingWeights, embeddingWeightsBuffer } = modelParams;
+  const { device, queue, params, posEmbdBuffer, layer_buffers, normGammaBuffer, normBetaBuffer, embeddingWeightsBuffer } = modelParams;
   const { attentionDotProductScale, n_embd, n_head, n_layer, vocab_size, hidden_size } = params;
   const seq_length = idx.length;
 
@@ -59,11 +59,11 @@ async function runGPT(idx) {
   const embdOutputBuffer = createBuffer(device, bufferSizeCalc(seq_length, n_embd), GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST);
   for (let i = 0; i < seq_length; i++) {
     commandEncoder.copyBufferToBuffer(
-      embeddingWeightsBuffer, // Source buffer (original position embeddings)
-      bufferSizeCalc(n_embd) * idx[i], // Source offset (starting from the beginning of the buffer)
-      embdOutputBuffer, // Destination buffer (cropped buffer)
-      bufferSizeCalc(n_embd) * i, // Destination offset (starting from the beginning of the cropped buffer)
-      bufferSizeCalc(n_embd) // Number of bytes to copy
+      embeddingWeightsBuffer,
+      bufferSizeCalc(n_embd) * idx[i],
+      embdOutputBuffer,
+      bufferSizeCalc(n_embd) * i,
+      bufferSizeCalc(n_embd)
     );
   }
 
@@ -74,7 +74,7 @@ async function runGPT(idx) {
     GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST | GPUBufferUsage.COPY_SRC
   );
   commandEncoder.copyBufferToBuffer(
-    posEmbdBuffer, // Source buffer (original position embeddings)
+    posEmbdBuffer,
     0, // Source offset (starting from the beginning of the buffer)
     posEmbdOutputBuffer, // Destination buffer (cropped buffer)
     0, // Destination offset (starting from the beginning of the cropped buffer)
@@ -326,7 +326,6 @@ async function loadModel(folder) {
     queue,
     params: paramsJSON,
     layer_buffers,
-    embeddingWeights,
     embeddingWeightsBuffer,
     posEmbdBuffer,
     normGammaBuffer,
