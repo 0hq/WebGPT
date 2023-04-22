@@ -185,11 +185,6 @@ async function runGPT(idx) {
   if (numInstances > 1) numInstances = leastPrimeFactor(vocab_size, numInstances);
   var vocabChunkSize = vocab_size / numInstances;
 
-  console.log("maxStorageBufferSize: " + maxStorageBufferSize);
-  console.log("totalElements: " + totalElements);
-  console.log("numInstances: " + numInstances);
-  console.log("vocabChunkSize: " + vocabChunkSize);
-
   for (let i = 0; i < numInstances; i++) {
     const deEmbedChunkInputBuffer = createBuffer(
       device,

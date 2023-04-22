@@ -166,12 +166,6 @@ function flattenEmbeddings(embeddings, n_embd, seq_length) {
   return flattened;
 }
 
-function wasted_memory(vocab_size, n_embd, columns) {
-  const subMatrixCount = math.ceil(vocab_size / columns);
-  const totalElementsInSubMatrices = subMatrixCount * columns * n_embd;
-  return totalElementsInSubMatrices - vocab_size * n_embd;
-}
-
 function leastPrimeFactor(n, start = 2) {
   for (let i = start; i <= Math.sqrt(n); i++) {
     if (n % i === 0) return i;
