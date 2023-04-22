@@ -14,8 +14,22 @@ async function initializeWebGPU() {
   const minStorageBufferOffsetAlignment = 1; // Should be device.limits.minStorageBufferOffsetAlignment but tis was breaking things. Fix later, not breaking just slows performance AFAIK.
   bufferSizeCalc = (dimA, dimB = 1) => alignedSize(dimA * dimB * Float32Array.BYTES_PER_ELEMENT, minStorageBufferOffsetAlignment);
 
+  r_r_r_BindLayout = createBindGroupLayout(device, ["read-only-storage", "read-only-storage", "read-only-storage"]);
+  r_r_BindLayout = createBindGroupLayout(device, ["read-only-storage", "read-only-storage", "read-only-storage"]);
+  r_BindLayout = createBindGroupLayout(device, ["read-only-storage"]);
+  u_r_r_s_BindLayout = createBindGroupLayout(device, ["uniform", "read-only-storage", "read-only-storage", "storage"]);
+  u_s_BindLayout = createBindGroupLayout(device, ["uniform", "storage"]);
+  u_s_s_s_BindLayout = createBindGroupLayout(device, ["uniform", "storage", "storage", "storage"]);
+
   return { device, queue };
 }
+
+let r_r_r_BindLayout;
+let r_r_BindLayout;
+let r_BindLayout;
+let u_r_r_s_BindLayout;
+let u_s_BindLayout;
+let u_s_s_s_BindLayout;
 
 function createShader(device, code) {
   return device.createShaderModule({
