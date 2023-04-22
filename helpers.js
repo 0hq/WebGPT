@@ -14,8 +14,56 @@ async function initializeWebGPU() {
   const minStorageBufferOffsetAlignment = 1; // Should be device.limits.minStorageBufferOffsetAlignment but tis was breaking things. Fix later, not breaking just slows performance AFAIK.
   bufferSizeCalc = (dimA, dimB = 1) => alignedSize(dimA * dimB * Float32Array.BYTES_PER_ELEMENT, minStorageBufferOffsetAlignment);
 
+  r_r_r_BindLayout = createBindGroupLayout(device, ["read-only-storage", "read-only-storage", "read-only-storage"]);
+  r_r_BindLayout = createBindGroupLayout(device, ["read-only-storage", "read-only-storage"]);
+  r_BindLayout = createBindGroupLayout(device, ["read-only-storage"]);
+  u_r_r_s_BindLayout = createBindGroupLayout(device, ["uniform", "read-only-storage", "read-only-storage", "storage"]);
+  u_s_BindLayout = createBindGroupLayout(device, ["uniform", "storage"]);
+  u_s_s_s_BindLayout = createBindGroupLayout(device, ["uniform", "storage", "storage", "storage"]);
+
+  statsPipeline = createPipeline(device, normStatsShader, [u_s_BindLayout, r_BindLayout]);
+  normPipeline = createPipeline(device, normShader, [u_s_BindLayout, r_r_r_BindLayout, r_BindLayout]);
+  FFNpipeline = createPipeline(device, FFNShader, [u_r_r_s_BindLayout, r_BindLayout]);
+  GELUpipeline = createPipeline(device, GELUShader, [u_s_BindLayout, r_BindLayout]);
+  splitQKVpipeline = createPipeline(device, splitQKVShader, [u_s_s_s_BindLayout, r_BindLayout]);
+  attentionWeightsPipeline = createPipeline(device, attentionWeightsShader, [u_s_BindLayout, r_r_BindLayout]);
+  attentionValuesPipeline = createPipeline(device, attentionValuesShader, [u_s_BindLayout, r_r_BindLayout]);
+  multiplyPipeline = createPipeline(device, multiplyShader, [u_s_BindLayout, r_BindLayout]);
+  causalMaskPipeline = createPipeline(device, causalMaskShader, [u_s_BindLayout, r_BindLayout]);
+  matmulPipeline = createPipeline(device, matMulShader, [u_s_BindLayout, r_r_BindLayout]);
+  elementAddPipeline = createPipeline(device, elementWiseAdditionShader, [u_s_BindLayout, r_BindLayout, r_BindLayout]);
+  maxPipeline = createPipeline(device, negMaxShader, [u_s_BindLayout, r_BindLayout]);
+  addPipeline = createPipeline(device, addShader, [u_s_BindLayout, r_BindLayout, r_BindLayout]);
+  expPipeline = createPipeline(device, expShader, [u_s_BindLayout, r_BindLayout]);
+  sumPipeline = createPipeline(device, sumShader, [u_s_BindLayout, r_BindLayout]);
+  dividePipeline = createPipeline(device, divideShader, [u_s_BindLayout, r_BindLayout, r_BindLayout]);
+
   return { device, queue };
 }
+
+let statsPipeline;
+let normPipeline;
+let FFNpipeline;
+let GELUpipeline;
+let splitQKVpipeline;
+let attentionWeightsPipeline;
+let attentionValuesPipeline;
+let multiplyPipeline;
+let causalMaskPipeline;
+let matmulPipeline;
+let elementAddPipeline;
+let maxPipeline;
+let addPipeline;
+let expPipeline;
+let sumPipeline;
+let dividePipeline;
+
+let r_r_r_BindLayout;
+let r_r_BindLayout;
+let r_BindLayout;
+let u_r_r_s_BindLayout;
+let u_s_BindLayout;
+let u_s_s_s_BindLayout;
 
 function createShader(device, code) {
   return device.createShaderModule({

@@ -7,7 +7,7 @@ After six years of development, WebGPU is about to launch across most major web 
 
 WebGPT is a vanilla JS and HTML implementation of a transformer model, intended as a proof-of-concept as well as educational resource. WebGPT has been tested to be working with models up to 500 M parameters, though could likely support far more with further testing/optimization.
 
-At the moment, WebGPT averages ~300ms per token on GPT-2 124M running on a 2020 M1 Mac with Chrome Canary. This could be 500% faster, if not more, with proper optimization of the kernels, buffers, the WebGPU interface. WebGPU should also receive significant speed increases as it matures.
+At the moment, WebGPT averages ~130ms per token on GPT-2 124M running on a 2020 M1 Mac with Chrome Canary. This could be 500% faster, if not more, with proper optimization of the kernels, buffers, the WebGPU interface. WebGPU should also receive significant speed increases as it matures.
 
 https://user-images.githubusercontent.com/30643741/233488471-0cd93d38-af27-4648-bbf6-46aa033e44a1.mp4
 
