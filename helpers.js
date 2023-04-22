@@ -163,12 +163,57 @@ function cpuSoftmax(logits, temperature = 1.0) {
   return expLogits.map((expLogit) => expLogit / sumExpLogits);
 }
 
+// taken from https://github.com/mourner/quickselect/blob/26a241497b101167ab43c27c077bed4729c6b697/index.js
+function quickselectStep(arr, k, left, right, compare) {
+  while (right > left) {
+    if (right - left > 600) {
+      const n = right - left + 1;
+      const m = k - left + 1;
+      const z = Math.log(n);
+      const s = 0.5 * Math.exp(2 * z / 3);
+      const sd = 0.5 * Math.sqrt(z * s * (n - s) / n) * (m - n / 2 < 0 ? -1 : 1);
+      const newLeft = Math.max(left, Math.floor(k - m * s / n + sd));
+      const newRight = Math.min(right, Math.floor(k + (n - m) * s / n + sd));
+      quickselectStep(arr, k, newLeft, newRight, compare);
+    }
+
+    const t = arr[k];
+    let i = left;
+    let j = right;
+
+    swap(arr, left, k);
+    if (compare(arr[right], t) > 0) swap(arr, left, right);
+
+    while (i < j) {
+      swap(arr, i, j);
+      i++;
+      j--;
+      while (compare(arr[i], t) < 0) i++;
+      while (compare(arr[j], t) > 0) j--;
+    }
+
+    if (compare(arr[left], t) === 0) swap(arr, left, j);
+    else {
+      j++;
+      swap(arr, j, right);
+    }
+
+    if (j <= k) left = j + 1;
+    if (k <= j) right = j - 1;
+  }
+}
+
+function swap(arr, i, j) {
+  const tmp = arr[i];
+  arr[i] = arr[j];
+  arr[j] = tmp;
+}
+
 function selectTopK(probs, top_k) {
-  const sortedIndices = Array.from(probs)
-    .map((value, index) => ({ value, index }))
-    .sort((a, b) => b.value - a.value)
-    .map(({ index }) => index);
-  const topKIndices = sortedIndices.slice(0, top_k);
+  const sortedIndices = Array.from(probs).map((value, index) => ({ value, index }))
+  quickselectStep(sortedIndices, top_k, 0, probs.length - 1, (a, b) => b.value - a.value)
+
+  const topKIndices = sortedIndices.slice(0, top_k).map(({ index }) => index);
   const topKProbs = topKIndices.map((index) => probs[index]);
   return { topKIndices, topKProbs };
 }
