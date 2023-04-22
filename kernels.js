@@ -237,6 +237,37 @@ const causalMaskShader = `
     }
 `;
 
+// Transpose the matrix.
+const transposeShader = `
+  struct Matrix {
+    data: array<f32>,
+  }
+
+  struct Dimensions {
+    dimY: u32, // row dimension of input matrix
+    dimX: u32, // col dimension of input matrix
+  };
+
+  @group(0) @binding(0) var<uniform> DimBuffer: Dimensions;
+  @group(0) @binding(1) var<storage, write> Result: Matrix;
+
+  @group(1) @binding(0) var<storage, read> Input: Matrix;
+
+  @compute @workgroup_size(16, 16)
+  fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
+    let row: u32 = global_id.x;
+    let col: u32 = global_id.y;
+    let dimX: u32 = DimBuffer.dimX;
+    let dimY: u32 = DimBuffer.dimY;
+
+    if (row >= dimY || col >= dimX) {
+      return;
+    }
+
+    Result.data[row * dimX + col] = Input.data[col * dimY + row];
+  }
+`;
+
 // Splits a matrix into Q, K, and V matrices.
 const splitQKVShader = `
   struct Matrix {
@@ -666,11 +697,7 @@ function inlineSoftmax(device, queue, commandEncoder, rows, cols, inputBuffer) {
 function inlineResidual(device, queue, commandEncoder, rows, cols, layerOutputBuffer, residualBuffer) {
   const inputBufferBindGroupLayout = createBindGroupLayout(device, ["read-only-storage"]);
   const residualBindGroupLayout = createBindGroupLayout(device, ["uniform", "storage"]);
-  const residualPipeline = createPipeline(device, elementWiseAdditionShader, [
-    residualBindGroupLayout,
-    inputBufferBindGroupLayout,
-    inputBufferBindGroupLayout,
-  ]);
+  const residualPipeline = createPipeline(device, elementWiseAdditionShader, [residualBindGroupLayout, inputBufferBindGroupLayout, inputBufferBindGroupLayout]);
 
   const residualUniformBuffer = createBuffer(device, 16, GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST);
   const residualResultBuffer = createBuffer(device, bufferSizeCalc(rows, cols), GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC);
@@ -706,6 +733,26 @@ function inlineMatMul(device, queue, commandEncoder, Abuffer, Bbuffer, rows, col
   passEncoder.end();
 
   return matmulResultBuffer;
+}
+
+function inlineTranspose(device, queue, commandEncoder, inputBuffer, rows, cols) {
+  const inputBufferBindGroupLayout = createBindGroupLayout(device, ["read-only-storage"]);
+  const transposeBindGroupLayout = createBindGroupLayout(device, ["uniform", "storage"]);
+  const transposePipeline = createPipeline(device, transposeShader, [transposeBindGroupLayout, inputBufferBindGroupLayout]);
+
+  const transposeUniformBuffer = createBuffer(device, 16, GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST);
+  const transposeResultBuffer = createBuffer(device, bufferSizeCalc(rows, cols), GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC);
+  const transposeBindGroup = createBindGroup(device, transposeBindGroupLayout, [transposeUniformBuffer, transposeResultBuffer]);
+  queue.writeBuffer(transposeUniformBuffer, 0, new Uint32Array([rows, cols]));
+
+  const passEncoder = commandEncoder.beginComputePass();
+  passEncoder.setPipeline(transposePipeline);
+  passEncoder.setBindGroup(0, transposeBindGroup);
+  passEncoder.setBindGroup(1, createBindGroup(device, inputBufferBindGroupLayout, [Abuffer]));
+  passEncoder.dispatchWorkgroups(workgroupCalc(rows, workgroup_Y), workgroupCalc(cols, workgroup_X));
+  passEncoder.end();
+
+  return transposeResultBuffer;
 }
 
 function inlineLayerNorm(device, queue, commandEncoder, seq_length, n_embd, inputBuffer, gammaBuffer, betaBuffer) {
