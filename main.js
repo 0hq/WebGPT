@@ -34,7 +34,6 @@ async function* generate(prompt, max_new_tokens, top_k = 10, temperature = 1.0) 
     const logits = await runGPT(idx_cond);
     const { topKIndices, topKProbs } = selectTopK(logits, top_k);
     const probs = cpuSoftmax(topKProbs, temperature);
-    console.log(probs);
     const idx_next = topKIndices[sampleFromDistribution(probs)];
 
     history = history.concat(idx_next);
