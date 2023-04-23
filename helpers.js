@@ -30,11 +30,14 @@ async function initializeWebGPU() {
   attentionValuesPipeline = createPipeline(device, attentionValuesShader, [u_s_BindLayout, r_r_BindLayout]);
   multiplyPipeline = createPipeline(device, multiplyShader, [u_s_BindLayout, r_BindLayout]);
   causalMaskPipeline = createPipeline(device, causalMaskShader, [u_s_BindLayout, r_BindLayout]);
+  simpleCausalMaskPipeline = createPipeline(device, simpleCausalMaskShader, [u_s_BindLayout, r_BindLayout]);
   matmulPipeline = createPipeline(device, matMulShader, [u_s_BindLayout, r_r_BindLayout]);
   elementAddPipeline = createPipeline(device, elementWiseAdditionShader, [u_s_BindLayout, r_BindLayout, r_BindLayout]);
   maxPipeline = createPipeline(device, negMaxShader, [u_s_BindLayout, r_BindLayout]);
+  maskedMaxPipeline = createPipeline(device, maskedNegMaxShader, [u_s_BindLayout, r_BindLayout]);
   addPipeline = createPipeline(device, addShader, [u_s_BindLayout, r_BindLayout, r_BindLayout]);
   expPipeline = createPipeline(device, expShader, [u_s_BindLayout, r_BindLayout]);
+  addExpPipeline = createPipeline(device, addExpShader, [u_s_BindLayout, r_BindLayout, r_BindLayout]);
   sumPipeline = createPipeline(device, sumShader, [u_s_BindLayout, r_BindLayout]);
   dividePipeline = createPipeline(device, divideShader, [u_s_BindLayout, r_BindLayout, r_BindLayout]);
 
@@ -50,11 +53,14 @@ let attentionWeightsPipeline;
 let attentionValuesPipeline;
 let multiplyPipeline;
 let causalMaskPipeline;
+let simpleCausalMaskPipeline;
 let matmulPipeline;
 let elementAddPipeline;
 let maxPipeline;
+let maskedMaxPipeline;
 let addPipeline;
 let expPipeline;
+let addExpPipeline;
 let sumPipeline;
 let dividePipeline;
 
