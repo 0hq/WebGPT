@@ -33,6 +33,41 @@ const negMaxShader = `
   }
 `;
 
+// Return maximum value of each row in a matrix times -1.
+const maskedNegMaxShader = `
+  struct Matrix {
+    data: array<f32>,
+  }
+
+  struct Dimensions {
+    dimY: u32, // row dimension
+    dimX: u32, // col dimension
+  };
+
+  @group(0) @binding(0) var<uniform> DimBuffer: Dimensions;
+  @group(0) @binding(1) var<storage, read_write> Result: Matrix;
+  @group(1) @binding(0) var<storage, read> Input: Matrix;
+
+  @compute @workgroup_size(16, 16)
+  fn main (@builtin(global_invocation_id) global_id: vec3<u32>) {
+    let row: u32 = global_id.x;
+    let dimX: u32 = DimBuffer.dimX;
+
+    if (row >= DimBuffer.dimY) {
+      return;
+    }
+
+    let rowMask: u32 = row % dimX;
+
+    var max_buffer: f32 = 0.0;
+    for (var i: u32 = 0; i < rowMask; i = i + 1) {
+      max_buffer = max(max_buffer, Input.data[row * dimX + i]);
+    }
+
+    Result.data[row] = -max_buffer;
+  }
+`;
+
 // Adds constants [rows, 1] to each row of a matrix [rows, cols].
 const addShader = `
   struct Matrix {
@@ -91,6 +126,41 @@ const expShader = `
       }
 
       Result.data[row * dimX + col] = exp(Input.data[row * dimX + col]);
+    }
+`;
+
+// Combined add and exp.
+// Adds constants [rows, 1] to each row of a matrix [rows, cols].
+// Then exponentiates each element of the matrix.
+const addExpShader = `
+  struct Matrix {
+      data: array<f32>,
+  }
+
+  struct Dimensions {
+    dimY: u32, // row dimension of input matrix
+    dimX: u32, // col dimension of input matrix
+  };
+
+  @group(0) @binding(0) var<uniform> DimBuffer: Dimensions;
+  @group(0) @binding(1) var<storage, read_write> Result: Matrix;
+  @group(1) @binding(0) var<storage, read> Input: Matrix;
+  @group(2) @binding(0) var<storage, read> Constants: Matrix;
+
+  @compute @workgroup_size(16, 16)
+  fn main (@builtin(global_invocation_id) global_id: vec3<u32>) {
+      let row: u32 = global_id.x;
+      let col: u32 = global_id.y;
+      let dimX: u32 = DimBuffer.dimX;
+      let dimY: u32 = DimBuffer.dimY;
+
+      let rowMask: u32 = row % dimX;
+
+      if (row >= dimY || col > rowMask) {
+        return;
+      }
+
+      Result.data[row * dimX + col] = exp(Input.data[row * dimX + col] + Constants.data[row]);
     }
 `;
 
@@ -198,7 +268,7 @@ const FFNShader = `
   }
 `;
 
-// Masks all values in the matrix that are not causal.
+// Masks all values in the matrix that are not causal to -1 bil.
 // Currently also transposes the matrix for copying.
 const causalMaskShader = `
   struct Matrix {
@@ -235,6 +305,41 @@ const causalMaskShader = `
       }
 
     }
+`;
+
+// Masks all values in the matrix that are not causal to 0.
+// Currently also transposes the matrix for copying.
+const simpleCausalMaskShader = `
+  struct Matrix {
+      data: array<f32>,
+  }
+
+  struct Dimensions {
+    dimY: u32, // row dimension of input matrix
+    dimX: u32, // col dimension of input matrix
+  };
+
+  @group(0) @binding(0) var<uniform> DimBuffer: Dimensions;
+  @group(0) @binding(1) var<storage, read_write> Result: Matrix;
+
+  @group(1) @binding(0) var<storage, read> Input: Matrix;
+
+  @compute @workgroup_size(16, 16)
+  fn main (@builtin(global_invocation_id) global_id: vec3<u32>) {
+    let row: u32 = global_id.x;
+    let col: u32 = global_id.y;
+    let dimX: u32 = DimBuffer.dimX;
+    let dimY: u32 = DimBuffer.dimY;
+
+    let rowMask: u32 = row % dimX;
+    if (row >= dimY || col > rowMask) {
+      return;
+    }
+
+    let rowNum: u32 = row / dimX;
+    Result.data[row * dimX + col] = Input.data[rowMask * dimY + col + rowNum * dimX];
+
+  }
 `;
 
 // Transpose the matrix.
@@ -686,6 +791,55 @@ function inlineSoftmax(device, queue, commandEncoder, rows, cols, inputBuffer) {
   return divResultBuffer;
 }
 
+function maskedInlineSoftmax(device, queue, commandEncoder, rows, cols, inputBuffer) {
+  const dimUniformBuffer = createBuffer(device, 16, GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST);
+  queue.writeBuffer(dimUniformBuffer, 0, new Uint32Array([rows, cols]));
+
+  const maxResultBuffer = createBuffer(device, bufferSizeCalc(rows), GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC);
+  const maxBindGroup = createBindGroup(device, u_s_BindLayout, [dimUniformBuffer, maxResultBuffer]);
+
+  const addExpResultBuffer = createBuffer(device, bufferSizeCalc(rows, cols), GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC);
+  const addExpBindGroup = createBindGroup(device, u_s_BindLayout, [dimUniformBuffer, addExpResultBuffer]);
+
+  const sumResultBuffer = createBuffer(device, bufferSizeCalc(rows), GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC);
+  const sumBindGroup = createBindGroup(device, u_s_BindLayout, [dimUniformBuffer, sumResultBuffer]);
+
+  const divResultBuffer = createBuffer(device, bufferSizeCalc(rows, cols), GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC);
+  const divBindGroup = createBindGroup(device, u_s_BindLayout, [dimUniformBuffer, divResultBuffer]);
+
+  const passEncoder_max = commandEncoder.beginComputePass();
+  passEncoder_max.setPipeline(maskedMaxPipeline);
+  passEncoder_max.setBindGroup(0, maxBindGroup);
+  passEncoder_max.setBindGroup(1, createBindGroup(device, r_BindLayout, [inputBuffer]));
+  passEncoder_max.dispatchWorkgroups(workgroupCalc(rows, workgroup_Y), workgroupCalc(cols, workgroup_X));
+  passEncoder_max.end();
+
+  const passEncoder_addExp = commandEncoder.beginComputePass();
+  passEncoder_addExp.setPipeline(addExpPipeline);
+  passEncoder_addExp.setBindGroup(0, addExpBindGroup);
+  passEncoder_addExp.setBindGroup(1, createBindGroup(device, r_BindLayout, [inputBuffer]));
+  passEncoder_addExp.setBindGroup(2, createBindGroup(device, r_BindLayout, [maxResultBuffer]));
+  passEncoder_addExp.dispatchWorkgroups(workgroupCalc(rows, workgroup_Y), workgroupCalc(cols, workgroup_X));
+  passEncoder_addExp.end();
+
+  const passEncoder_sum = commandEncoder.beginComputePass();
+  passEncoder_sum.setPipeline(sumPipeline);
+  passEncoder_sum.setBindGroup(0, sumBindGroup);
+  passEncoder_sum.setBindGroup(1, createBindGroup(device, r_BindLayout, [addExpResultBuffer]));
+  passEncoder_sum.dispatchWorkgroups(workgroupCalc(rows, workgroup_Y), workgroupCalc(cols, workgroup_X));
+  passEncoder_sum.end();
+
+  const passEncoder_div = commandEncoder.beginComputePass();
+  passEncoder_div.setPipeline(dividePipeline);
+  passEncoder_div.setBindGroup(0, divBindGroup);
+  passEncoder_div.setBindGroup(1, createBindGroup(device, r_BindLayout, [addExpResultBuffer]));
+  passEncoder_div.setBindGroup(2, createBindGroup(device, r_BindLayout, [sumResultBuffer]));
+  passEncoder_div.dispatchWorkgroups(workgroupCalc(rows, workgroup_Y), workgroupCalc(cols, workgroup_X));
+  passEncoder_div.end();
+
+  return divResultBuffer;
+}
+
 function inlineResidual(device, queue, commandEncoder, rows, cols, layerOutputBuffer, residualBuffer) {
   const residualUniformBuffer = createBuffer(device, 16, GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST);
   const residualResultBuffer = createBuffer(device, bufferSizeCalc(rows, cols), GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC);
@@ -842,10 +996,6 @@ function inlineAttention(
   linearWeightsBuffer,
   linearBiasBuffer
 ) {
-  if (n_embd % n_head != 0) {
-    throw new Error("cols must be divisible by n_head");
-  }
-
   const qkvUniformBuffer = createBuffer(device, 16, GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST);
   const qkvResultBuffer = createBuffer(device, bufferSizeCalc(seq_length, 3 * n_embd), GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC);
   const qkvBindGroup = createBindGroup(device, u_r_r_s_BindLayout, [qkvUniformBuffer, qkvBiasBuffer, qkvWeightsBuffer, qkvResultBuffer]);
@@ -858,7 +1008,7 @@ function inlineAttention(
   const splitQKVBindGroup = createBindGroup(device, u_s_s_s_BindLayout, [splitQKVUniformBuffer, splitQResultBuffer, splitKResultBuffer, splitVResultBuffer]);
   queue.writeBuffer(splitQKVUniformBuffer, 0, new Uint32Array([seq_length, n_embd]));
 
-  const attentionWeightsUniformBuffer = createBuffer(device, 16, GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST);
+  const attentionWeightsUniformBuffer = createBuffer(device, 32, GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST);
   const attentionWeightsResultBuffer = createBuffer(device, bufferSizeCalc(seq_length, seq_length * n_head), GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC);
   const attentionWeightsBindGroup = createBindGroup(device, u_s_BindLayout, [attentionWeightsUniformBuffer, attentionWeightsResultBuffer]);
   queue.writeBuffer(attentionWeightsUniformBuffer, 0, new Uint32Array([seq_length, seq_length * n_head, n_embd / n_head, n_embd]));
@@ -939,7 +1089,7 @@ function inlineAttention(
       0,
       bufferSizeCalc(seq_length, seq_length)
     );
-    const softMaxResultBuffer = inlineSoftmax(device, queue, commandEncoder, seq_length, seq_length, softmaxInputBuffer);
+    const softMaxResultBuffer = maskedInlineSoftmax(device, queue, commandEncoder, seq_length, seq_length, softmaxInputBuffer);
     commandEncoder.copyBufferToBuffer(
       softMaxResultBuffer,
       0,

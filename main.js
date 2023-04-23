@@ -233,6 +233,8 @@ async function loadModel(folder) {
   const { hidden_size } = paramsJSON;
   console.log("Params:", paramsJSON);
 
+  if (n_embd % n_head != 0) throw new Error("Model load failed: n_embd must be divisible by n_head.");
+
   console.log("Loading token embeddings...");
   const embeddingWeights = await loadBinaryFile("models/" + folder + "/transformer.wte.weight_gpt.bin");
   const embeddingWeightsBuffer = createBuffer(
