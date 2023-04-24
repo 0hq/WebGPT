@@ -31,11 +31,11 @@ If you want to try out WebGPT, visit the demo website here [KMeans.org](https://
 - [ ] Convert into a package.
 - [ ] Compute pass splitting for larger models *(maxStorageBufferBindingSize)*
 - [ ] Key-value caching!!
-- [ ] Write better comments + make Youtube explainer.
+- [ ] Write better comments + make YouTube explainer.
 
 ## Acknowledgements
 
-When I started this project I had no idea how transformers worked or how to implement them (or GPUs or matmul kernels or WebGPU or tokenization for that matter), so Andrej Karpathy's series on neural networks and building GPT from scratch were invaluable: [Andrej's Youtube](https://www.youtube.com/@AndrejKarpathy). I've also used some code as well from the nanoGPT repository: [nanoGPT](https://github.com/karpathy/nanoGPT).
+When I started this project I had no idea how transformers worked or how to implement them (or GPUs or matmul kernels or WebGPU or tokenization for that matter), so Andrej Karpathy's series on neural networks and building GPT from scratch were invaluable: [Andrej's YouTube](https://www.youtube.com/@AndrejKarpathy). I've also used some code as well from the nanoGPT repository: [nanoGPT](https://github.com/karpathy/nanoGPT).
 
 I copied from LatitudeGames' implementation of OpenAI's GPT-3 tokenizer in Javascript: [GPT-3-Encoder](https://github.com/latitudegames/GPT-3-Encoder).
 
