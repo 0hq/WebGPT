@@ -162,7 +162,7 @@ function bpe(token) {
         )
       ];
 
-    if (!(bigram in tokenizer.bpe_ranks)) {
+    if (!(Object.hasOwn(tokenizer.bpe_ranks, bigram))) {
       break;
     }
 
