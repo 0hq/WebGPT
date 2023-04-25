@@ -73,11 +73,7 @@ async function runGPT(idx) {
   }
 
   // Crop the position embeddings to the correct size.
-  const posEmbdOutputBuffer = createBuffer(
-    device,
-    bufferSizeCalc(seq_length, n_embd),
-    GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST | GPUBufferUsage.COPY_SRC
-  );
+  const posEmbdOutputBuffer = createBuffer(device, bufferSizeCalc(seq_length, n_embd), GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST);
   commandEncoder.copyBufferToBuffer(
     posEmbdBuffer,
     0, // Source offset (starting from the beginning of the buffer)
@@ -171,7 +167,7 @@ async function runGPT(idx) {
 
   */
 
-  const slicedEmbedOutputBuffer = createBuffer(device, bufferSizeCalc(1, n_embd), GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST | GPUBufferUsage.COPY_SRC);
+  const slicedEmbedOutputBuffer = createBuffer(device, bufferSizeCalc(1, n_embd), GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST);
   commandEncoder.copyBufferToBuffer(
     layerNormOutputBuffer, // Source buffer (original position embeddings)
     bufferSizeCalc(seq_length - 1, n_embd), // Source offset (starting from the beginning of the buffer)
@@ -190,11 +186,7 @@ async function runGPT(idx) {
   var vocabChunkSize = vocab_size / numInstances;
 
   for (let i = 0; i < numInstances; i++) {
-    const deEmbedChunkInputBuffer = createBuffer(
-      device,
-      bufferSizeCalc(n_embd, vocabChunkSize),
-      GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST | GPUBufferUsage.COPY_SRC
-    );
+    const deEmbedChunkInputBuffer = createBuffer(device, bufferSizeCalc(n_embd, vocabChunkSize), GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST);
     // Remember that embeddingWeightsBuffer is transposed.
     commandEncoder.copyBufferToBuffer(
       embeddingWeightsBuffer,
@@ -237,16 +229,12 @@ async function loadModel(folder) {
 
   console.log("Loading token embeddings...");
   const embeddingWeights = await loadBinaryFile("models/" + folder + "/transformer.wte.weight_gpt.bin");
-  const embeddingWeightsBuffer = createBuffer(
-    device,
-    bufferSizeCalc(vocab_size, n_embd),
-    GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST | GPUBufferUsage.COPY_SRC
-  );
+  const embeddingWeightsBuffer = createBuffer(device, bufferSizeCalc(vocab_size, n_embd), GPUBufferUsage.COPY_DST | GPUBufferUsage.COPY_SRC);
   queue.writeBuffer(embeddingWeightsBuffer, 0, embeddingWeights);
 
   console.log("Loading positional embeddings...");
   const posEmbeddings = await loadBinaryFile("models/" + folder + "/transformer.wpe.weight_gpt.bin");
-  const posEmbdBuffer = createBuffer(device, bufferSizeCalc(block_size, n_embd), GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST | GPUBufferUsage.COPY_SRC);
+  const posEmbdBuffer = createBuffer(device, bufferSizeCalc(block_size, n_embd), GPUBufferUsage.COPY_DST | GPUBufferUsage.COPY_SRC);
   queue.writeBuffer(posEmbdBuffer, 0, posEmbeddings);
 
   const layer_buffers = [];
@@ -263,12 +251,8 @@ async function loadModel(folder) {
     console.log("\tLoading qkv transform...");
     const qkv_weights = await loadBinaryFile(`models/${folder}/${prefix}attn.c_attn.weight_gpt.bin`);
     const qkv_bias = bias ? await loadBinaryFile(`models/${folder}/${prefix}attn.c_attn.bias_gpt.bin`) : new Array(3 * n_embd).fill(0);
-    const qkvWeightsBuffer = createBuffer(
-      device,
-      bufferSizeCalc(n_embd, 3 * n_embd),
-      GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST | GPUBufferUsage.COPY_SRC
-    );
-    const qkvBiasBuffer = createBuffer(device, bufferSizeCalc(3 * n_embd), GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST | GPUBufferUsage.COPY_SRC);
+    const qkvWeightsBuffer = createBuffer(device, bufferSizeCalc(n_embd, 3 * n_embd), GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST);
+    const qkvBiasBuffer = createBuffer(device, bufferSizeCalc(3 * n_embd), GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST);
     queue.writeBuffer(qkvWeightsBuffer, 0, transposeArray(qkv_weights, 3 * n_embd, n_embd));
     queue.writeBuffer(qkvBiasBuffer, 0, qkv_bias);
 
