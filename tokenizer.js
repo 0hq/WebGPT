@@ -90,7 +90,7 @@ class GPT2Tokenizer extends Tokenizer {
     let bpe_tokens = [];
     const matches = Array.from(text.matchAll(this.pat)).map((x) => x[0]);
     for (let token of matches) {
-      token = Array.from(this.textEncoder.encode(text))
+      token = Array.from(this.textEncoder.encode(token))
         .map((x) => x.toString())
         .map((x) => {
           return this.byte_encoder[x];
