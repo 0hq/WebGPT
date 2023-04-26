@@ -45,6 +45,8 @@ Have you forgotten I built WebGPT?&#13;&#10;</textarea
       const generateButton = document.getElementById("generateButton");
       const promptTextarea = document.getElementById("prompt");
 
+      let GPTModel = null;
+
       // Check for WebGPU support
       if (!navigator.gpu) {
         webgpuSupportMessage.innerHTML =
@@ -64,7 +66,7 @@ Have you forgotten I built WebGPT?&#13;&#10;</textarea
 
         const topK = topKInput.value;
         const temperature = temperatureInput.value;
-        const textStream = generate(prompt, numTokens, topK, temperature);
+        const textStream = GPTModel.generate(prompt, numTokens, topK, temperature);
 
         for await (const text of textStream) {
           promptTextarea.value += text;
@@ -76,8 +78,10 @@ Have you forgotten I built WebGPT?&#13;&#10;</textarea
       async function loadModelHandler() {
         loadModelButton.disabled = true;
         loadGPT2ModelButton.disabled = true;
-        modelParams = await loadModel("better_shakespeare");
-        tokenizer = await loadSimpleTokenizer(); // Sets global tokenizer variable.
+
+        GPTModel = new GPT("better_shakespeare", "char");
+        await GPTModel.initialize();
+
         setTextareaDisabled(false);
         tokensInput.disabled = false;
         topKInput.disabled = false;
@@ -87,8 +91,10 @@ Have you forgotten I built WebGPT?&#13;&#10;</textarea
       async function loadGPT2ModelHandler() {
         loadModelButton.disabled = true;
         loadGPT2ModelButton.disabled = true;
-        modelParams = await loadModel("gpt2");
-        tokenizer = await loadGPT2Tokenizer(); // Sets global tokenizer variable.
+
+        GPTModel = new GPT("gpt2", "bpe");
+        await GPTModel.initialize();
+
         setTextareaDisabled(false);
         tokensInput.disabled = false;
         topKInput.disabled = false;
@@ -98,7 +104,7 @@ Have you forgotten I built WebGPT?&#13;&#10;</textarea
         promptTextarea.value = "What is the answer to life, the universe, and everything?\n";
 
         topKInput.value = 5;
-        tokensInput.value = 30;
+        tokensInput.value = 5;
         temperatureInput.value = 1;
       }
 
