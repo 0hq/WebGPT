@@ -11,8 +11,8 @@ async function loadSimpleTokenizer() {
   });
 
   return {
-    encode: (str) => str.split("").map((x) => encoder[x]),
-    decode: (arr) => arr.map((x) => decoder[x]).join(""),
+    encode: (_, str) => str.split("").map((x) => encoder[x]),
+    decode: (_, arr) => arr.map((x) => decoder[x]).join(""),
   };
 }
 
@@ -132,7 +132,7 @@ function get_pairs(word) {
   return pairs;
 }
 
-function bpe(token) {
+function bpe(tokenizer, token) {
   if (tokenizer.cache.has(token)) {
     return tokenizer.cache.get(token);
   }
@@ -162,7 +162,7 @@ function bpe(token) {
         )
       ];
 
-    if (!(Object.hasOwn(tokenizer.bpe_ranks, bigram))) {
+    if (!Object.hasOwn(tokenizer.bpe_ranks, bigram)) {
       break;
     }
 
@@ -203,7 +203,7 @@ function bpe(token) {
   return word;
 }
 
-function encodeGPT(text) {
+function encodeGPT(tokenizer, text) {
   if (tokenizer.byte_encoder === undefined) {
     throw new Error("Not loaded.");
   }
