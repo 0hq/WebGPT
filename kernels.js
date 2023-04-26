@@ -247,8 +247,8 @@ const fastMatMulShader = `
     alpha: f32,
   }
 
-  @group(0) @binding(3)
-  var<storage,read> cmeta: CMeta;
+  @group(0) @binding(0)
+  var<uniform> cmeta: CMeta;
   @compute @workgroup_size(8,8,1)
   fn main(
     @builtin(global_invocation_id) global_id: vec3<u32>
@@ -335,13 +335,13 @@ const fastMatMulShader = `
 `;
 
 const fastRowAddShader = `
-  @group(0) @binding(0)
+  @group(1) @binding(0)
   var<storage,read> array_matrix: array<vec4<f32>>;
 
-  @group(0) @binding(1)
+  @group(1) @binding(1)
   var<storage,read> array_bias: array<vec4<f32>>;
 
-  @group(0) @binding(2)
+  @group(0) @binding(1)
   var<storage,read_write> array_output: array<vec4<f32>>;
 
   struct BMeta {
@@ -351,10 +351,10 @@ const fastRowAddShader = `
     ND4: u32
   }
 
-  @group(0) @binding(3)
-  var<storage,read> bmeta: BMeta;
+  @group(0) @binding(0)
+  var<uniform> bmeta: BMeta;
 
-  @compute @workgroup_size(32,32,1)
+  @compute @workgroup_size(8,8,1)
   fn main(
     @builtin(global_invocation_id) global_id: vec3<u32>
   ) {
