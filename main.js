@@ -164,6 +164,16 @@ class GPT {
     for (let i = 0; i < max_new_tokens; i++) {
       const idx_cond = history.slice(-this.params.block_size);
 
+      // Pad to divisible of 4
+      // Save offset
+      // let offset = 0;
+      // while (idx_cond.length % 4 !== 0) {
+      //   idx_cond.push(0);
+      //   offset++;
+      // }
+
+      // console.log(idx_cond, offset);
+
       const startTime = performance.now();
       const logits = await this.run(idx_cond);
       const endTime = performance.now();
@@ -182,7 +192,7 @@ class GPT {
     }
   }
 
-  async run(idx) {
+  async run(idx, offset = 0) {
     const { posEmbdBuffer, layer_buffers, normGammaBuffer, normBetaBuffer, embeddingWeightsBuffer } = this.model;
     const { attentionDotProductScale, n_embd, n_head, n_layer, vocab_size, hidden_size } = this.params;
     const seq_length = idx.length;
@@ -249,7 +259,7 @@ class GPT {
         buffers.normLinearBetaBuffer
       );
 
-      const linearOutputBuffer = this.inlineFastFFN(
+      const linearOutputBuffer = this.inlineFFN(
         commandEncoder,
         seq_length,
         n_embd,
@@ -290,7 +300,7 @@ class GPT {
     const slicedEmbedOutputBuffer = createBuffer(this.device, this.bufferSizeCalc(1, n_embd), GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST);
     commandEncoder.copyBufferToBuffer(
       layerNormOutputBuffer, // Source buffer (original position embeddings)
-      this.bufferSizeCalc(seq_length - 1, n_embd), // Source offset (starting from the beginning of the buffer)
+      this.bufferSizeCalc(seq_length - 1 - offset, n_embd), // Source offset (starting from the beginning of the buffer)
       slicedEmbedOutputBuffer, // Destination buffer (cropped buffer)
       0, // Destination offset (starting from the beginning of the cropped buffer)
       this.bufferSizeCalc(1, n_embd) // Number of bytes to copy
