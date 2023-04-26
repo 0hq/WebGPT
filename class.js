@@ -62,29 +62,20 @@ class GPT {
     const adapter = await navigator.gpu.requestAdapter();
     this.device = await adapter.requestDevice();
 
+    [this.model, this.params] = await this.loadModel(this.folder);
+    this.tokenizer = this.loadTokenizer(this.tokenizerType);
+    await this.tokenizer.load();
+
     this.initBindGroups();
     this.initPipelines();
-
-    [this.model, this.params] = await this.loadModel(this.folder);
-    this.tokenizer = await this.loadTokenizer(this.tokenizerType);
 
     this.initialized = true;
   }
 
-  async loadTokenizer(type) {
-    if (this.tokenizer) {
-      console.error("Tokenizer already loaded");
-      return;
-    }
-
-    console.log("Loading tokenizer:", type);
-    if (type == "bpe") {
-      return await loadGPT2Tokenizer();
-    } else if (type == "char") {
-      return await loadSimpleTokenizer();
-    } else {
-      throw new Error("Unknown tokenizer type: " + type);
-    }
+  loadTokenizer(type) {
+    if (type == "bpe") return new GPT2Tokenizer();
+    else if (type == "char") return new SimpleTokenizer();
+    else throw new Error("Unknown tokenizer type: " + type);
   }
 
   async loadModel(folder) {
@@ -208,7 +199,7 @@ class GPT {
     }
 
     console.log("Starting generation with prompt", prompt);
-    let history = this.tokenizer.encode(this.tokenizer, prompt);
+    let history = this.tokenizer.encode(prompt);
 
     for (let i = 0; i < max_new_tokens; i++) {
       const idx_cond = history.slice(-this.params.block_size);
@@ -225,9 +216,9 @@ class GPT {
 
       history = history.concat(idx_next);
 
-      console.log(`Output:\n${this.tokenizer.decode(this.tokenizer, history)}`);
+      console.log(`Output:\n${this.tokenizer.decode(history)}`);
 
-      yield this.tokenizer.decode(this.tokenizer, [idx_next]);
+      yield this.tokenizer.decode([idx_next]);
     }
   }
 

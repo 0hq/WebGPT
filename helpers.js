@@ -163,3 +163,9 @@ function formatAsMatrix(floatArray, dimA, dimB) {
   }
   return resultMatrix;
 }
+
+async function loadBinaryFile(url) {
+  const response = await fetch(url);
+  const buffer = await response.arrayBuffer();
+  return new Float32Array(buffer);
+}
