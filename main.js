@@ -486,30 +486,20 @@ class GPT {
   }
 
   inlineFastMatMul(commandEncoder, Abuffer, Bbuffer, rows, cols, shared) {
-    if (rows % 4 !== 0 || cols % 4 !== 0 || shared % 4 !== 0) {
-      throw new Error(`all dims must be a multiple of 4, temporary! got ${rows}x${cols}x${shared}`);
+    if (cols % 4 !== 0 || shared % 4 !== 0) {
+      throw new Error(`cols and shared must be a multiple of 4, temporary! got ${rows}x${cols}x${shared}`);
     }
 
-    console.log("inlineFastMatMul", rows, cols, shared);
-
-    const rowsPadded = Math.ceil(rows / 4) * 4;
-    const colsPadded = Math.ceil(cols / 4) * 4;
-    const sharedPadded = Math.ceil(shared / 4) * 4;
-
-    const matmulUniformBuffer = createBuffer(this.device, 48, GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST);
+    const matmulUniformBuffer = createBuffer(this.device, 32, GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST);
     const matmulResultBuffer = createBuffer(this.device, this.bufferSizeCalc(rows, cols), GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC);
     const matMulBindGroup = createBindGroup(this.device, this.u_s_BindLayout, [matmulUniformBuffer, matmulResultBuffer]);
-    this.device.queue.writeBuffer(
-      matmulUniformBuffer,
-      0,
-      new Uint32Array([rowsPadded, colsPadded, sharedPadded, Math.ceil(rows / 4), Math.ceil(cols / 4), Math.ceil(shared / 4), rows, cols, shared])
-    );
+    this.device.queue.writeBuffer(matmulUniformBuffer, 0, new Uint32Array([rows, cols, Math.ceil(cols / 4), Math.ceil(shared / 4)]));
 
     const passEncoder = commandEncoder.beginComputePass();
     passEncoder.setPipeline(this.fastMatMulPipeline);
     passEncoder.setBindGroup(0, matMulBindGroup);
     passEncoder.setBindGroup(1, createBindGroup(this.device, this.r_r_BindLayout, [Abuffer, Bbuffer]));
-    passEncoder.dispatchWorkgroups(workgroupCalc(rows, 8), workgroupCalc(cols, 8));
+    passEncoder.dispatchWorkgroups(workgroupCalc(cols, 64), workgroupCalc(rows, 32));
     passEncoder.end();
 
     return matmulResultBuffer;
@@ -1006,7 +996,6 @@ class GPT {
     this.dividePipeline = createPipeline(this.device, divideShader, [this.u_s_BindLayout, this.r_BindLayout, this.r_BindLayout]);
     this.transposePipeline = createPipeline(this.device, transposeShader, [this.u_s_BindLayout, this.r_BindLayout]);
     this.fastMatMulPipeline = createPipeline(this.device, fastMatMulShader, [this.u_s_BindLayout, this.r_r_BindLayout]);
-    this.altFastMatMulPipeline = createPipeline(this.device, altFastMatMulShader, [this.u_s_BindLayout, this.r_r_BindLayout]);
     this.fastRowAddPipeline = createPipeline(this.device, fastRowAddShader, [this.u_s_BindLayout, this.r_r_BindLayout]);
   }
 }
