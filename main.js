@@ -192,28 +192,6 @@ class GPT {
     }
   }
 
-  async testMatmul() {
-    const commandEncoder = this.device.createCommandEncoder();
-
-    const matrixABuffer = createBuffer(this.device, this.bufferSizeCalc(20, 50), GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST);
-    this.device.queue.writeBuffer(matrixABuffer, 0, new Float32Array(20 * 50).fill(1));
-
-    const matrixBBuffer = createBuffer(this.device, this.bufferSizeCalc(50, 20), GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST);
-    this.device.queue.writeBuffer(matrixBBuffer, 0, new Float32Array(50 * 20).fill(1));
-
-    const matmulResultBuffer = this.inlineFastMatMul(commandEncoder, matrixABuffer, matrixBBuffer, 20, 20, 50);
-    // const matmulResultBuffer = this.inlineMatMul(commandEncoder, matrixABuffer, matrixBBuffer, 20, 20, 50);
-
-    const outputBuffer = createOutputBuffer(this.device, commandEncoder, matmulResultBuffer, 20, 20);
-
-    this.device.queue.submit([commandEncoder.finish()]);
-
-    await outputBuffer.mapAsync(GPUMapMode.READ);
-    const output = outputBuffer.getMappedRange();
-
-    return new Float32Array(output);
-  }
-
   async run(idx, offset = 0) {
     const { posEmbdBuffer, layer_buffers, normGammaBuffer, normBetaBuffer, embeddingWeightsBuffer } = this.model;
     const { attentionDotProductScale, n_embd, n_head, n_layer, vocab_size, hidden_size } = this.params;
@@ -281,7 +259,7 @@ class GPT {
         buffers.normLinearBetaBuffer
       );
 
-      const linearOutputBuffer = this.inlineFFN(
+      const linearOutputBuffer = this.inlineFastFFN(
         commandEncoder,
         seq_length,
         n_embd,
@@ -507,34 +485,24 @@ class GPT {
     return matmulResultBuffer;
   }
 
-  /*
-  const request: WebGPURunnerRequest = {
-    pipeline,
-    buffers: [
-      { index: 0, name: 'array_a', length: m * k, input: true, output: false },
-      { index: 1, name: 'array_b', length: k * n, input: true, output: false },
-      { index: 2, name: 'array_c', length: m * n, input: false, output: true },
-      { index: 3, name: 'meta', length: 7, input: true, output: false },
-    ],
-    inputData: { array_a: a, array_b: b, meta: new Float32Array([m, n, k, m / 4, n / 4, k / 4, alpha]) },
-    threadGroups: { x: n / 64, y: m / 32, z: 1 }
-  };
-  */
-
   inlineFastMatMul(commandEncoder, Abuffer, Bbuffer, rows, cols, shared) {
-    // if (rows % 4 !== 0 || cols % 4 !== 0 || shared % 4 !== 0) {
-    //   throw new Error(`all dims must be a multiple of 4, temporary! got ${rows}x${cols}x${shared}`);
-    // }
+    if (rows % 4 !== 0 || cols % 4 !== 0 || shared % 4 !== 0) {
+      throw new Error(`all dims must be a multiple of 4, temporary! got ${rows}x${cols}x${shared}`);
+    }
 
     console.log("inlineFastMatMul", rows, cols, shared);
 
-    const matmulUniformBuffer = createBuffer(this.device, 32, GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST);
+    const rowsPadded = Math.ceil(rows / 4) * 4;
+    const colsPadded = Math.ceil(cols / 4) * 4;
+    const sharedPadded = Math.ceil(shared / 4) * 4;
+
+    const matmulUniformBuffer = createBuffer(this.device, 48, GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST);
     const matmulResultBuffer = createBuffer(this.device, this.bufferSizeCalc(rows, cols), GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC);
     const matMulBindGroup = createBindGroup(this.device, this.u_s_BindLayout, [matmulUniformBuffer, matmulResultBuffer]);
     this.device.queue.writeBuffer(
       matmulUniformBuffer,
       0,
-      new Uint32Array([rows, cols, shared, Math.ceil(rows / 4), Math.ceil(cols / 4), Math.ceil(shared / 4)])
+      new Uint32Array([rowsPadded, colsPadded, sharedPadded, Math.ceil(rows / 4), Math.ceil(cols / 4), Math.ceil(shared / 4), rows, cols, shared])
     );
 
     const passEncoder = commandEncoder.beginComputePass();
@@ -1038,6 +1006,7 @@ class GPT {
     this.dividePipeline = createPipeline(this.device, divideShader, [this.u_s_BindLayout, this.r_BindLayout, this.r_BindLayout]);
     this.transposePipeline = createPipeline(this.device, transposeShader, [this.u_s_BindLayout, this.r_BindLayout]);
     this.fastMatMulPipeline = createPipeline(this.device, fastMatMulShader, [this.u_s_BindLayout, this.r_r_BindLayout]);
+    this.altFastMatMulPipeline = createPipeline(this.device, altFastMatMulShader, [this.u_s_BindLayout, this.r_r_BindLayout]);
     this.fastRowAddPipeline = createPipeline(this.device, fastRowAddShader, [this.u_s_BindLayout, this.r_r_BindLayout]);
   }
 }

@@ -237,6 +237,9 @@ const fastMatMulShader = `
     MD4: u32,
     ND4: u32,
     KD4: u32,
+    origM: u32,
+    origN: u32,
+    origK: u32,
   }
 
   @group(1) @binding(0) var<storage,read> array_a: array<vec4<f32>>;
@@ -244,19 +247,29 @@ const fastMatMulShader = `
 
   @group(0) @binding(0) var<uniform> cmeta: CMeta;
   @group(0) @binding(1) var<storage,read_write> array_c: array<vec4<f32>>;
+
+  fn selectValueFromVec4(v: vec4<f32>, idx: u32) -> f32 {
+    var result: f32;
+    if (idx == 0u) {
+      result = v.x;
+    } else if (idx == 1u) {
+      result = v.y;
+    } else if (idx == 2u) {
+      result = v.z;
+    } else {
+      result = v.w;
+    }
+    return result;
+  }
  
   @compute @workgroup_size(8,8)
   fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
-    var M: u32 = cmeta.M;
-    var N: u32 = cmeta.N;
-    var K: u32 = cmeta.K;
-    var MD4: u32 = cmeta.KD4;
     var ND4: u32 = cmeta.ND4;
     var KD4: u32 = cmeta.KD4;
     var x: u32 = global_id.x;
     var y: u32 = global_id.y;
 
-    if (x >= N || y >= M) {
+    if (x >= cmeta.origN || y >= cmeta.origM) {
       return;
     }
 
@@ -269,65 +282,163 @@ const fastMatMulShader = `
     var sum12: vec4<f32> = vec4<f32>();
     var sum13: vec4<f32> = vec4<f32>();
     for(var k: u32 = 0u; k < KD4; k = k + 1u) {
-      var arow0: vec4<f32> = array_a[(y * 4u + 0u) * KD4 + k];
-      var arow1: vec4<f32> = array_a[(y * 4u + 1u) * KD4 + k];
-      var arow2: vec4<f32> = array_a[(y * 4u + 2u) * KD4 + k];
-      var arow3: vec4<f32> = array_a[(y * 4u + 3u) * KD4 + k];
-      var brow: vec4<f32>;
-      brow = array_b[(k * 4u + 0u) * ND4 + x * 2u + 0u];
-      sum00 = vec4<f32>(arow0.x) * brow + sum00;
-      sum01 = vec4<f32>(arow1.x) * brow + sum01;
-      sum02 = vec4<f32>(arow2.x) * brow + sum02;
-      sum03 = vec4<f32>(arow3.x) * brow + sum03;
-      brow = array_b[(k * 4u + 0u) * ND4 + x * 2u + 1u];
-      sum10 = vec4<f32>(arow0.x) * brow + sum10;
-      sum11 = vec4<f32>(arow1.x) * brow + sum11;
-      sum12 = vec4<f32>(arow2.x) * brow + sum12;
-      sum13 = vec4<f32>(arow3.x) * brow + sum13;
-      
-      brow = array_b[(k * 4u + 1u) * ND4 + x * 2u + 0u];
-      sum00 = vec4<f32>(arow0.y) * brow + sum00;
-      sum01 = vec4<f32>(arow1.y) * brow + sum01;
-      sum02 = vec4<f32>(arow2.y) * brow + sum02;
-      sum03 = vec4<f32>(arow3.y) * brow + sum03;
-      brow = array_b[(k * 4u + 1u) * ND4 + x * 2u + 1u];
-      sum10 = vec4<f32>(arow0.y) * brow + sum10;
-      sum11 = vec4<f32>(arow1.y) * brow + sum11;
-      sum12 = vec4<f32>(arow2.y) * brow + sum12;
-      sum13 = vec4<f32>(arow3.y) * brow + sum13;
-      
-      brow = array_b[(k * 4u + 2u) * ND4 + x * 2u + 0u];
-      sum00 = vec4<f32>(arow0.z) * brow + sum00;
-      sum01 = vec4<f32>(arow1.z) * brow + sum01;
-      sum02 = vec4<f32>(arow2.z) * brow + sum02;
-      sum03 = vec4<f32>(arow3.z) * brow + sum03;
-      brow = array_b[(k * 4u + 2u) * ND4 + x * 2u + 1u];
-      sum10 = vec4<f32>(arow0.z) * brow + sum10;
-      sum11 = vec4<f32>(arow1.z) * brow + sum11;
-      sum12 = vec4<f32>(arow2.z) * brow + sum12;
-      sum13 = vec4<f32>(arow3.z) * brow + sum13;
-      
-      brow = array_b[(k * 4u + 3u) * ND4 + x * 2u + 0u];
-      sum00 = vec4<f32>(arow0.w) * brow + sum00;
-      sum01 = vec4<f32>(arow1.w) * brow + sum01;
-      sum02 = vec4<f32>(arow2.w) * brow + sum02;
-      sum03 = vec4<f32>(arow3.w) * brow + sum03;
-      brow = array_b[(k * 4u + 3u) * ND4 + x * 2u + 1u];
-      sum10 = vec4<f32>(arow0.w) * brow + sum10;
-      sum11 = vec4<f32>(arow1.w) * brow + sum11;
-      sum12 = vec4<f32>(arow2.w) * brow + sum12;
-      sum13 = vec4<f32>(arow3.w) * brow + sum13;
+      let last_iteration = k + 1u == KD4;
+      let remaining_elements = cmeta.origK % 4u;
+
+      var arow0: vec4<f32> = vec4<f32>(0.0);
+      var arow1: vec4<f32> = vec4<f32>(0.0);
+      var arow2: vec4<f32> = vec4<f32>(0.0);
+      var arow3: vec4<f32> = vec4<f32>(0.0);
+      if (y * 4u + 0u < cmeta.origM) {
+        arow0 = array_a[(y * 4u + 0u) * KD4 + k];
+      }
+      if (y * 4u + 1u < cmeta.origM) {
+        arow1 = array_a[(y * 4u + 1u) * KD4 + k];
+      }
+      if (y * 4u + 2u < cmeta.origM) {
+        arow2 = array_a[(y * 4u + 2u) * KD4 + k];
+      }
+      if (y * 4u + 3u < cmeta.origM) {
+        arow3 = array_a[(y * 4u + 3u) * KD4 + k];
+      }
+
+      for (var ki: u32 = 0u; ki < 4u; ki = ki + 1u) {
+        if (last_iteration && ki >= remaining_elements && remaining_elements != 0u) {
+          break;
+        }
+        var brow: vec4<f32> = vec4<f32>(0.0);
+        let arow0_val = selectValueFromVec4(arow0, ki);
+        let arow1_val = selectValueFromVec4(arow1, ki);
+        let arow2_val = selectValueFromVec4(arow2, ki);
+        let arow3_val = selectValueFromVec4(arow3, ki);
+    
+        if (k * 4u + ki < cmeta.origK) {
+          brow = array_b[(k * 4u + ki) * ND4 + x * 2u + 0u];
+        }
+        sum00 = vec4<f32>(arow0_val) * brow + sum00;
+        sum01 = vec4<f32>(arow1_val) * brow + sum01;
+        sum02 = vec4<f32>(arow2_val) * brow + sum02;
+        sum03 = vec4<f32>(arow3_val) * brow + sum03;
+
+        brow = vec4<f32>(0.0); // Add this line to reset the brow variable
+    
+        if (k * 4u + ki < cmeta.origK) {
+          brow = array_b[(k * 4u + ki) * ND4 + x * 2u + 1u];
+        }
+        sum10 = vec4<f32>(arow0_val) * brow + sum10;
+        sum11 = vec4<f32>(arow1_val) * brow + sum11;
+        sum12 = vec4<f32>(arow2_val) * brow + sum12;
+        sum13 = vec4<f32>(arow3_val) * brow + sum13;
+      }
     }
 
-    array_c[x * 2u + 0u + (y * 4u + 0u) * ND4] = sum00;
-    array_c[x * 2u + 0u + (y * 4u + 1u) * ND4] = sum01;
-    array_c[x * 2u + 0u + (y * 4u + 2u) * ND4] = sum02;
-    array_c[x * 2u + 0u + (y * 4u + 3u) * ND4] = sum03;
-    array_c[x * 2u + 1u + (y * 4u + 0u) * ND4] = sum10;
-    array_c[x * 2u + 1u + (y * 4u + 1u) * ND4] = sum11;
-    array_c[x * 2u + 1u + (y * 4u + 2u) * ND4] = sum12;
-    array_c[x * 2u + 1u + (y * 4u + 3u) * ND4] = sum13;
+    if (x * 2u + 0u < cmeta.origN) {
+      array_c[x * 2u + 0u + (y * 4u + 0u) * ND4] = sum00;
+      array_c[x * 2u + 0u + (y * 4u + 1u) * ND4] = sum01;
+      array_c[x * 2u + 0u + (y * 4u + 2u) * ND4] = sum02;
+      array_c[x * 2u + 0u + (y * 4u + 3u) * ND4] = sum03;
+    }
+    if (x * 2u + 1u < cmeta.origN) {
+      array_c[x * 2u + 1u + (y * 4u + 0u) * ND4] = sum10;
+      array_c[x * 2u + 1u + (y * 4u + 1u) * ND4] = sum11;
+      array_c[x * 2u + 1u + (y * 4u + 2u) * ND4] = sum12;
+      array_c[x * 2u + 1u + (y * 4u + 3u) * ND4] = sum13;
+    }
   }
+`;
+
+const altFastMatMulShader = `
+    struct Matrix {
+      data: array<f32>,
+    }
+
+    struct Uniforms {
+      dimY: u32, // row dimension of A and row dimension of C
+      dimX: u32, // col dimension of B and col dimension of C
+      dimS: u32, // shared dimension of A and B
+    };
+
+    @group(1) @binding(0) var<storage, read> A: Matrix;
+    @group(1) @binding(1) var<storage, read> B: Matrix;
+
+    @group(0) @binding(1) var<storage, read_write> C: Matrix;
+    @group(0) @binding(0) var<uniform> dimBuffer: Uniforms;
+
+    @compute @workgroup_size(16, 16)
+    fn main (@builtin(global_invocation_id) global_id: vec3<u32>) {
+      let row: u32 = global_id.x;
+      let col: u32 = global_id.y;
+      let dimX: u32 = dimBuffer.dimX;
+      let dimY: u32 = dimBuffer.dimY;
+      let dimS: u32 = dimBuffer.dimS;
+
+      if (row >= dimY || col >= dimX) {
+        return;
+      }
+
+      var sum: vec4<f32> = vec4<f32>(0.0);
+      for (var i: u32 = 0; i < dimS; i = i + 16) {
+          let a1: vec4<f32> = vec4<f32>(
+              A.data[row * dimS + i],
+              A.data[row * dimS + i + 1],
+              A.data[row * dimS + i + 2],
+              A.data[row * dimS + i + 3]
+          );
+          let b1: vec4<f32> = vec4<f32>(
+              B.data[i * dimX + col],
+              B.data[(i + 1) * dimX + col],
+              B.data[(i + 2) * dimX + col],
+              B.data[(i + 3) * dimX + col]
+          );
+          sum = sum + a1 * b1;
+
+          let a2: vec4<f32> = vec4<f32>(
+              A.data[row * dimS + i + 4],
+              A.data[row * dimS + i + 5],
+              A.data[row * dimS + i + 6],
+              A.data[row * dimS + i + 7]
+          );
+          let b2: vec4<f32> = vec4<f32>(
+              B.data[(i + 4) * dimX + col],
+              B.data[(i + 5) * dimX + col],
+              B.data[(i + 6) * dimX + col],
+              B.data[(i + 7) * dimX + col]
+          );
+          sum = sum + a2 * b2;
+
+          let a3: vec4<f32> = vec4<f32>(
+
+              A.data[row * dimS + i + 8],
+              A.data[row * dimS + i + 9],
+              A.data[row * dimS + i + 10],
+              A.data[row * dimS + i + 11]
+          );
+          let b3: vec4<f32> = vec4<f32>(
+
+              B.data[(i + 8) * dimX + col],
+              B.data[(i + 9) * dimX + col],
+              B.data[(i + 10) * dimX + col],
+              B.data[(i + 11) * dimX + col]
+          );
+          sum = sum + a3 * b3;
+
+          let a4: vec4<f32> = vec4<f32>(
+              A.data[row * dimS + i + 12],
+              A.data[row * dimS + i + 13],
+              A.data[row * dimS + i + 14],
+              A.data[row * dimS + i + 15]
+          );
+          let b4: vec4<f32> = vec4<f32>(
+              B.data[(i + 12) * dimX + col],
+              B.data[(i + 13) * dimX + col],
+              B.data[(i + 14) * dimX + col],
+              B.data[(i + 15) * dimX + col]
+          );
+          sum = sum + a4 * b4;
+      }
+
+      C.data[row * dimX + col] = sum.x + sum.y + sum.z + sum.w;
+    }
 `;
 
 const fastRowAddShader = `
