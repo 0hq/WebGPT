@@ -230,41 +230,36 @@ const divideShader = `
 
 // Lots of code from webgpu-blas.
 const fastMatMulShader = `
-  @group(1) @binding(0)
-  var<storage,read> array_a: array<vec4<f32>>;
-  @group(1) @binding(1)
-  var<storage,read> array_b: array<vec4<f32>>;
-  @group(0) @binding(1)
-  var<storage,read_write> array_c: array<vec4<f32>>;
-
   struct CMeta {
-    M: f32,
-    N: f32,
-    K: f32,
-    MD4: f32,
-    ND4: f32,
-    KD4: f32,
-    alpha: f32,
+    M: u32,
+    N: u32,
+    K: u32,
+    MD4: u32,
+    ND4: u32,
+    KD4: u32,
   }
 
-  @group(0) @binding(0)
-  var<uniform> cmeta: CMeta;
-  @compute @workgroup_size(8,8,1)
-  fn main(
-    @builtin(global_invocation_id) global_id: vec3<u32>
-  ) {
-    var M: u32 = u32(cmeta.M);
-    var N: u32 = u32(cmeta.N);
-    var K: u32 = u32(cmeta.K);
-    var MD4: u32 = u32(cmeta.KD4);
-    var ND4: u32 = u32(cmeta.ND4);
-    var KD4: u32 = u32(cmeta.KD4);
+  @group(1) @binding(0) var<storage,read> array_a: array<vec4<f32>>;
+  @group(1) @binding(1) var<storage,read> array_b: array<vec4<f32>>;
+
+  @group(0) @binding(0) var<uniform> cmeta: CMeta;
+  @group(0) @binding(1) var<storage,read_write> array_c: array<vec4<f32>>;
+ 
+  @compute @workgroup_size(8,8)
+  fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
+    var M: u32 = cmeta.M;
+    var N: u32 = cmeta.N;
+    var K: u32 = cmeta.K;
+    var MD4: u32 = cmeta.KD4;
+    var ND4: u32 = cmeta.ND4;
+    var KD4: u32 = cmeta.KD4;
     var x: u32 = global_id.x;
     var y: u32 = global_id.y;
+
     if (x >= N || y >= M) {
       return;
     }
-    var alpha: f32 = cmeta.alpha;
+
     var sum00: vec4<f32> = vec4<f32>();
     var sum01: vec4<f32> = vec4<f32>();
     var sum02: vec4<f32> = vec4<f32>();
@@ -323,6 +318,7 @@ const fastMatMulShader = `
       sum12 = vec4<f32>(arow2.w) * brow + sum12;
       sum13 = vec4<f32>(arow3.w) * brow + sum13;
     }
+
     array_c[x * 2u + 0u + (y * 4u + 0u) * ND4] = sum00;
     array_c[x * 2u + 0u + (y * 4u + 1u) * ND4] = sum01;
     array_c[x * 2u + 0u + (y * 4u + 2u) * ND4] = sum02;

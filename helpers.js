@@ -61,7 +61,7 @@ function createBuffer(device, size, usage) {
 }
 
 function createOutputBuffer(device, commandEncoder, buffer, rows, cols) {
-  const outputBufferSize = bufferSizeCalc(rows, cols);
+  const outputBufferSize = rows * cols * 4;
   const outputBuffer = createBuffer(device, outputBufferSize, GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ);
   commandEncoder.copyBufferToBuffer(buffer, 0, outputBuffer, 0, outputBufferSize);
   return outputBuffer;
@@ -74,10 +74,6 @@ function alignedSize(size, alignment) {
 }
 
 const workgroupCalc = (dim, size) => Math.min(Math.ceil(dim / size), 256);
-
-let bufferSizeCalc = (dimA, dimB = 1) => {
-  throw new Error("BufferSizeCalc not initialized.");
-};
 
 function sampleFromDistribution(probs) {
   const rand = Math.random();

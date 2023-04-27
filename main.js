@@ -192,6 +192,28 @@ class GPT {
     }
   }
 
+  async testMatmul() {
+    const commandEncoder = this.device.createCommandEncoder();
+
+    const matrixABuffer = createBuffer(this.device, this.bufferSizeCalc(20, 50), GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST);
+    this.device.queue.writeBuffer(matrixABuffer, 0, new Float32Array(20 * 50).fill(1));
+
+    const matrixBBuffer = createBuffer(this.device, this.bufferSizeCalc(50, 20), GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST);
+    this.device.queue.writeBuffer(matrixBBuffer, 0, new Float32Array(50 * 20).fill(1));
+
+    const matmulResultBuffer = this.inlineFastMatMul(commandEncoder, matrixABuffer, matrixBBuffer, 20, 20, 50);
+    // const matmulResultBuffer = this.inlineMatMul(commandEncoder, matrixABuffer, matrixBBuffer, 20, 20, 50);
+
+    const outputBuffer = createOutputBuffer(this.device, commandEncoder, matmulResultBuffer, 20, 20);
+
+    this.device.queue.submit([commandEncoder.finish()]);
+
+    await outputBuffer.mapAsync(GPUMapMode.READ);
+    const output = outputBuffer.getMappedRange();
+
+    return new Float32Array(output);
+  }
+
   async run(idx, offset = 0) {
     const { posEmbdBuffer, layer_buffers, normGammaBuffer, normBetaBuffer, embeddingWeightsBuffer } = this.model;
     const { attentionDotProductScale, n_embd, n_head, n_layer, vocab_size, hidden_size } = this.params;
@@ -500,14 +522,20 @@ class GPT {
   */
 
   inlineFastMatMul(commandEncoder, Abuffer, Bbuffer, rows, cols, shared) {
-    if (rows % 4 !== 0 || cols % 4 !== 0 || shared % 4 !== 0) {
-      throw new Error(`all dims must be a multiple of 4, temporary! got ${rows}x${cols}x${shared}`);
-    }
+    // if (rows % 4 !== 0 || cols % 4 !== 0 || shared % 4 !== 0) {
+    //   throw new Error(`all dims must be a multiple of 4, temporary! got ${rows}x${cols}x${shared}`);
+    // }
+
+    console.log("inlineFastMatMul", rows, cols, shared);
 
     const matmulUniformBuffer = createBuffer(this.device, 32, GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST);
     const matmulResultBuffer = createBuffer(this.device, this.bufferSizeCalc(rows, cols), GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC);
     const matMulBindGroup = createBindGroup(this.device, this.u_s_BindLayout, [matmulUniformBuffer, matmulResultBuffer]);
-    this.device.queue.writeBuffer(matmulUniformBuffer, 0, new Uint32Array([rows, cols, shared, rows / 4, cols / 4, shared / 4]));
+    this.device.queue.writeBuffer(
+      matmulUniformBuffer,
+      0,
+      new Uint32Array([rows, cols, shared, Math.ceil(rows / 4), Math.ceil(cols / 4), Math.ceil(shared / 4)])
+    );
 
     const passEncoder = commandEncoder.beginComputePass();
     passEncoder.setPipeline(this.fastMatMulPipeline);
