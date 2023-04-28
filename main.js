@@ -112,6 +112,40 @@ class GPT {
     return [output, params];
   }
 
+  async profile(prompt, tokens, runs, retries) {
+    if (!this.initialized) return console.error("Model not loaded yet");
+
+    let avgRetryTime = 0;
+    for (let t = 0; t < retries; t++) {
+      let avgRunTime = 0;
+      for (let r = 0; r < runs; r++) {
+        let history = this.tokenizer.encode(prompt);
+        let totalTime = 0;
+        for (let i = 0; i < tokens; i++) {
+          const idx_cond = history.slice(-this.params.block_size);
+
+          const startTime = performance.now();
+          const logits = await this.run(idx_cond);
+          const endTime = performance.now();
+
+          totalTime += endTime - startTime;
+
+          const { topKIndices, topKProbs } = selectTopK(logits, 3);
+          const probs = cpuSoftmax(topKProbs, 1.0);
+          const idx_next = topKIndices[sampleFromDistribution(probs)];
+
+          history = history.concat(idx_next);
+        }
+        const avgTime = totalTime / tokens;
+        console.log(`Run ${r + 1} of ${runs}: Average kernel execution time: ${avgTime} ms`);
+        avgRunTime += avgTime;
+      }
+      console.log(`Average kernel execution time over ${runs} runs: ${avgRunTime / runs} ms`);
+      avgRetryTime += avgRunTime / runs;
+    }
+    console.log(`Average kernel execution time over ${retries} retries: ${avgRetryTime / retries} ms`);
+  }
+
   async *generate(prompt, max_new_tokens, top_k = 10, temperature = 1.0) {
     if (!this.initialized) {
       console.error("Model not loaded yet");
@@ -618,3 +652,10 @@ class GPT {
     this.fastRowAddPipeline = p(fastRowAddShader, [this.u_s_Layout, this.r_r_Layout]);
   }
 }
+
+// (async () => {
+//   const GPTModel = new GPT("gpt2", "bpe");
+//   await GPTModel.initialize();
+//   const prompt = "Hello, my name is";
+//   await GPTModel.profile(prompt, 10, 5, 3);
+// })();
