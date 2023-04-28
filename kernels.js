@@ -521,6 +521,51 @@ const attentionWeightsShader = `
   }
 `;
 
+// Calculates attention weights from Q and K matrices.
+const assymetricAttentionWeightsShader = `
+  struct Matrix {
+    data: array<f32>,
+  }
+
+  struct Dimensions {
+    dimY: u32, // output row dim, Q row dim
+    dimX: u32, // output col dim, seq_length * heads
+    seqLength: u32, // seq_length or K col dim (Q can be different)
+    qkvCols: u32, // head col dim for Q, K or n_embd / n_heads
+    embedDim: u32, // n_embd or total Q col dim & K row dim
+  };
+
+  @group(1) @binding(0) var<storage, read> Queries: Matrix;
+  @group(1) @binding(1) var<storage, read> Keys: Matrix;
+
+  @group(0) @binding(0) var<uniform> DimBuffer: Dimensions;
+  @group(0) @binding(1) var<storage, read_write> Result: Matrix;
+
+  @compute @workgroup_size(16, 16)
+  fn main (@builtin(global_invocation_id) global_id: vec3<u32>) {
+    let row: u32 = global_id.x;
+    let col: u32 = global_id.y;
+    let dimY: u32 = DimBuffer.dimY;
+    let dimX: u32 = DimBuffer.dimX;
+    let seqLength: u32 = DimBuffer.seqLength;
+    let qkvCols: u32 = DimBuffer.qkvCols;
+    let embedDim: u32 = DimBuffer.embedDim;
+
+    if (row >= dimY || col >= dimX) {
+      return;
+    }
+
+    var head: u32 = col / seqLength;
+    var col_r: u32 = col % seqLength;
+    var sum: f32 = 0.0;
+    for (var i: u32 = 0; i < qkvCols; i = i + 1) {
+        sum = sum + Queries.data[row * embedDim + i + head * qkvCols] * Keys.data[col_r * embedDim + i + head * qkvCols];
+    }
+
+    Result.data[row * dimX + col] = sum;
+  }
+`;
+
 // Calculates attention values from attention weights and V matrix.
 const attentionValuesShader = `
   struct Matrix {
