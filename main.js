@@ -75,6 +75,9 @@ class GPT {
       const linearWeights = transpose(await fetchBin(`${prefix}attn.c_proj.weight_gpt.bin`), n_embd, n_embd);
       const linearBias = bias ? await fetchBin(`${prefix}attn.c_proj.bias_gpt.bin`) : zeros(n_embd);
 
+      console.log("\tInitializing attention cache...");
+      const attentionCache = zeros(block_size * n_head * block_size);
+
       console.log("\tLoading MLP layer norm...");
       const normLinearGamma = await fetchBin(`${prefix}ln_2.weight_gpt.bin`);
       const normLinearBeta = bias ? await fetchBin(`${prefix}ln_2.bias_gpt.bin`) : zeros(n_embd);
@@ -100,6 +103,7 @@ class GPT {
         firstLayerBiasBuffer: this.initTensor(firstLayerBias, hidden_size, 1, ["storage"]),
         secondLayerWeightsBuffer: this.initTensor(secondLayerWeights, hidden_size, n_embd, ["storage"]),
         secondLayerBiasBuffer: this.initTensor(secondLayerBias, n_embd, 1, ["storage"]),
+        attentionCacheBuffer: this.initTensor(attentionCache, block_size * n_head, block_size, ["storage", "copy_from"]),
       });
     }
 
@@ -127,7 +131,7 @@ class GPT {
           const idx_cond = history.slice(-this.params.block_size);
 
           const startTime = performance.now();
-          const logits = await this.run(idx_cond);
+          const logits = await this.run(idx_cond, false);
           const endTime = performance.now();
 
           totalTime += endTime - startTime;
@@ -163,7 +167,7 @@ class GPT {
       const idx_cond = history.slice(-this.params.block_size);
 
       const startTime = performance.now();
-      const logits = await this.run(idx_cond);
+      const logits = await this.run(idx_cond, i !== 0 && history.length <= block_size);
       const endTime = performance.now();
 
       console.log(`(Loop ${i}) Kernel execution time: ${endTime - startTime} ms`);
@@ -183,7 +187,7 @@ class GPT {
     console.log(`Average kernel execution time: ${totalTime / max_new_tokens} ms`);
   }
 
-  async run(idx) {
+  async run(idx, useAttCache = false) {
     const { posEmbdBuffer, layer_buffers, normGammaBuffer, normBetaBuffer, embeddingWeightsBuffer } = this.model;
     const { attentionDotProductScale, n_embd, n_head, n_layer, vocab_size, hidden_size } = this.params;
     const seq_length = idx.length;
@@ -220,18 +224,35 @@ class GPT {
       );
 
       let attentionOutputBuffer;
-      attentionOutputBuffer = this.inlineFastAttention(
-        commandEncoder,
-        seq_length,
-        n_embd,
-        attentionDotProductScale,
-        layerNormAttentionOutputBuffer,
-        n_head,
-        buffers.qkvWeightsBuffer,
-        buffers.qkvBiasBuffer,
-        buffers.linearWeightsBuffer,
-        buffers.linearBiasBuffer
-      );
+      if (useAttCache) {
+        attentionOutputBuffer = this.inlineFastAttention(
+          commandEncoder,
+          seq_length,
+          n_embd,
+          attentionDotProductScale,
+          layerNormAttentionOutputBuffer,
+          n_head,
+          buffers.qkvWeightsBuffer,
+          buffers.qkvBiasBuffer,
+          buffers.linearWeightsBuffer,
+          buffers.linearBiasBuffer,
+          buffers.attentionCacheBuffer
+        );
+      } else {
+        attentionOutputBuffer = this.inlineFastAttention(
+          commandEncoder,
+          seq_length,
+          n_embd,
+          attentionDotProductScale,
+          layerNormAttentionOutputBuffer,
+          n_head,
+          buffers.qkvWeightsBuffer,
+          buffers.qkvBiasBuffer,
+          buffers.linearWeightsBuffer,
+          buffers.linearBiasBuffer,
+          buffers.attentionCacheBuffer
+        );
+      }
 
       const residualAttentionOutputBuffer = this.inlineResidual(commandEncoder, seq_length, n_embd, attentionOutputBuffer, layerOutputBuffer);
 
@@ -508,7 +529,8 @@ class GPT {
     qkvWeightsBuffer,
     qkvBiasBuffer,
     linearWeightsBuffer,
-    linearBiasBuffer
+    linearBiasBuffer,
+    attentionCacheBuffer
   ) {
     const splitQKVUniformBuffer = this.initBuffer(["uniform", "copy_to"], 4);
     const splitQResultBuffer = this.initBuffer(["storage", "copy_from"], seq_length, n_embd);
@@ -569,6 +591,9 @@ class GPT {
     passEncoder_causalMask.dispatchWorkgroups(wgSize(seq_length * n_head, 16), wgSize(seq_length, 16));
     passEncoder_causalMask.end();
 
+    // Save attention weights for next iteration's key value cache.
+    commandEncoder.copyBufferToBuffer(causalMaskResultBuffer, 0, attentionCacheBuffer, 0, bufferSizeCalc(seq_length * n_head, seq_length));
+
     const softmaxOutputBuffer = this.maskedInlineSoftmax(commandEncoder, seq_length * n_head, seq_length, causalMaskResultBuffer);
 
     const passEncoder_attentionValues = commandEncoder.beginComputePass();
@@ -580,6 +605,142 @@ class GPT {
 
     const linearMatmulBuffer = this.inlineFastMatMul(commandEncoder, attentionValuesResultBuffer, linearWeightsBuffer, seq_length, n_embd, n_embd);
     const linearResultBuffer = this.inlineFastRowAdd(commandEncoder, linearMatmulBuffer, linearBiasBuffer, seq_length, n_embd);
+
+    return linearResultBuffer;
+  }
+
+  // Old code, needs to be updated with fast matmul and verified.
+  cachedInlineAttention(
+    device,
+    queue,
+    commandEncoder,
+    seq_length,
+    n_embd,
+    attentionDotProductScale,
+    inputBuffer,
+    n_head,
+    qkvWeightsBuffer,
+    qkvBiasBuffer,
+    linearWeightsBuffer,
+    linearBiasBuffer,
+    attentionCacheBuffer
+  ) {
+    // This could be cached as well.
+    const qkvUniformBuffer = createBuffer(device, 16, GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST);
+    const qkvResultBuffer = createBuffer(device, bufferSizeCalc(seq_length, 3 * n_embd), GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC);
+    const qkvBindGroup = createBindGroup(device, u_r_r_s_BindLayout, [qkvUniformBuffer, qkvBiasBuffer, qkvWeightsBuffer, qkvResultBuffer]);
+    queue.writeBuffer(qkvUniformBuffer, 0, new Uint32Array([seq_length, 3 * n_embd, n_embd]));
+
+    const splitQKVUniformBuffer = createBuffer(device, 16, GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST);
+    const splitQResultBuffer = createBuffer(device, bufferSizeCalc(seq_length, n_embd), GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC);
+    const splitKResultBuffer = createBuffer(device, bufferSizeCalc(seq_length, n_embd), GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC);
+    const splitVResultBuffer = createBuffer(device, bufferSizeCalc(seq_length, n_embd), GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC);
+    const splitQKVBindGroup = createBindGroup(device, u_s_s_s_BindLayout, [splitQKVUniformBuffer, splitQResultBuffer, splitKResultBuffer, splitVResultBuffer]);
+    queue.writeBuffer(splitQKVUniformBuffer, 0, new Uint32Array([seq_length, n_embd]));
+
+    const singleQResultBuffer = createBuffer(device, bufferSizeCalc(n_embd), GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC | GPUBufferUsage.COPY_DST);
+
+    const attentionWeightsUniformBuffer = createBuffer(device, 32, GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST);
+    const attentionWeightsResultBuffer = createBuffer(
+      device,
+      bufferSizeCalc(1, seq_length * n_head),
+      GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC | GPUBufferUsage.COPY_DST
+    );
+    const attentionWeightsBindGroup = createBindGroup(device, u_s_BindLayout, [attentionWeightsUniformBuffer, attentionWeightsResultBuffer]);
+    queue.writeBuffer(attentionWeightsUniformBuffer, 0, new Uint32Array([1, seq_length * n_head, seq_length, n_embd / n_head, n_embd]));
+
+    const multiplyUniformBuffer = createBuffer(device, 16, GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST);
+    const multiplyResultBuffer = createBuffer(device, bufferSizeCalc(1, seq_length * n_head), GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC);
+    const multiplyBindGroup = createBindGroup(device, u_s_BindLayout, [multiplyUniformBuffer, multiplyResultBuffer]);
+    queue.writeBuffer(multiplyUniformBuffer, 0, new Uint32Array([1, seq_length * n_head]));
+    queue.writeBuffer(multiplyUniformBuffer, 8, new Float32Array([attentionDotProductScale]));
+
+    const causalMaskCachedResultBuffer = createBuffer(
+      device,
+      bufferSizeCalc(seq_length * n_head, seq_length),
+      GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC | GPUBufferUsage.COPY_DST
+    );
+
+    const attentionValuesUniformBuffer = createBuffer(device, 32, GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST);
+    const attentionValuesResultBuffer = createBuffer(device, bufferSizeCalc(seq_length, n_embd), GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC);
+    const attentionValuesBindGroup = createBindGroup(device, u_s_BindLayout, [attentionValuesUniformBuffer, attentionValuesResultBuffer]);
+    queue.writeBuffer(attentionValuesUniformBuffer, 0, new Uint32Array([seq_length, n_embd, n_head, n_embd / n_head]));
+
+    const linearUniformBuffer = createBuffer(device, 16, GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST);
+
+    const linearResultBuffer = createBuffer(device, bufferSizeCalc(seq_length, n_embd), GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC);
+    const linearBindGroup = createBindGroup(device, u_r_r_s_BindLayout, [linearUniformBuffer, linearBiasBuffer, linearWeightsBuffer, linearResultBuffer]);
+    queue.writeBuffer(linearUniformBuffer, 0, new Uint32Array([seq_length, n_embd, n_embd]));
+
+    const passEncoder_qkv = commandEncoder.beginComputePass();
+    passEncoder_qkv.setPipeline(FFNpipeline);
+    passEncoder_qkv.setBindGroup(0, qkvBindGroup);
+    passEncoder_qkv.setBindGroup(1, createBindGroup(device, r_BindLayout, [inputBuffer]));
+    passEncoder_qkv.dispatchWorkgroups(workgroupCalc(seq_length, workgroup_Y), workgroupCalc(3 * n_embd, workgroup_X));
+    passEncoder_qkv.end();
+
+    const passEncoder_splitQKV = commandEncoder.beginComputePass();
+    passEncoder_splitQKV.setPipeline(splitQKVpipeline);
+    passEncoder_splitQKV.setBindGroup(0, splitQKVBindGroup);
+    passEncoder_splitQKV.setBindGroup(1, createBindGroup(device, r_BindLayout, [qkvResultBuffer]));
+    passEncoder_splitQKV.dispatchWorkgroups(workgroupCalc(seq_length, workgroup_Y), workgroupCalc(n_embd, workgroup_X));
+    passEncoder_splitQKV.end();
+
+    commandEncoder.copyBufferToBuffer(splitQResultBuffer, bufferSizeCalc(n_embd) * (seq_length - 1), singleQResultBuffer, 0, bufferSizeCalc(n_embd));
+
+    const passEncoder_attentionWeights = commandEncoder.beginComputePass();
+    passEncoder_attentionWeights.setPipeline(attentionWeightsNewPipeline);
+    passEncoder_attentionWeights.setBindGroup(0, attentionWeightsBindGroup);
+    passEncoder_attentionWeights.setBindGroup(1, createBindGroup(device, r_r_BindLayout, [singleQResultBuffer, splitKResultBuffer]));
+    passEncoder_attentionWeights.dispatchWorkgroups(workgroupCalc(1, workgroup_Y), workgroupCalc(seq_length * n_head, workgroup_X));
+    passEncoder_attentionWeights.end();
+
+    const passEncoder_multiply = commandEncoder.beginComputePass();
+    passEncoder_multiply.setPipeline(multiplyPipeline);
+    passEncoder_multiply.setBindGroup(0, multiplyBindGroup);
+    passEncoder_multiply.setBindGroup(1, createBindGroup(device, r_BindLayout, [attentionWeightsResultBuffer]));
+    passEncoder_multiply.dispatchWorkgroups(workgroupCalc(1, workgroup_Y), workgroupCalc(seq_length * n_head, workgroup_X));
+    passEncoder_multiply.end();
+
+    for (let i = 0; i < n_head; i++) {
+      commandEncoder.copyBufferToBuffer(
+        multiplyResultBuffer,
+        bufferSizeCalc(seq_length) * i,
+        causalMaskCachedResultBuffer,
+        bufferSizeCalc(seq_length, seq_length) * (i + 1) - bufferSizeCalc(seq_length),
+        bufferSizeCalc(seq_length)
+      );
+    }
+    for (let i = 0; i < n_head; i++) {
+      for (let j = 0; j < seq_length - 1; j++) {
+        commandEncoder.copyBufferToBuffer(
+          attentionCacheBuffer,
+          bufferSizeCalc(seq_length - 1) * j + bufferSizeCalc(seq_length - 1, seq_length - 1) * i,
+          causalMaskCachedResultBuffer,
+          bufferSizeCalc(seq_length) * j + bufferSizeCalc(seq_length, seq_length) * i,
+          bufferSizeCalc(seq_length - 1)
+        );
+      }
+    }
+
+    // Save for next iteration.
+    commandEncoder.copyBufferToBuffer(causalMaskCachedResultBuffer, 0, attentionCacheBuffer, 0, bufferSizeCalc(seq_length * n_head, seq_length));
+
+    const softmaxOutputBuffer = maskedInlineSoftmax(device, queue, commandEncoder, seq_length * n_head, seq_length, causalMaskCachedResultBuffer);
+
+    const passEncoder_attentionValues = commandEncoder.beginComputePass();
+    passEncoder_attentionValues.setPipeline(attentionValuesPipeline);
+    passEncoder_attentionValues.setBindGroup(0, attentionValuesBindGroup);
+    passEncoder_attentionValues.setBindGroup(1, createBindGroup(device, r_r_BindLayout, [softmaxOutputBuffer, splitVResultBuffer]));
+    passEncoder_attentionValues.dispatchWorkgroups(workgroupCalc(seq_length, workgroup_Y), workgroupCalc(n_embd, workgroup_X));
+    passEncoder_attentionValues.end();
+
+    const passEncoder_linear = commandEncoder.beginComputePass();
+    passEncoder_linear.setPipeline(FFNpipeline);
+    passEncoder_linear.setBindGroup(0, linearBindGroup);
+    passEncoder_linear.setBindGroup(1, createBindGroup(device, r_BindLayout, [attentionValuesResultBuffer]));
+    passEncoder_linear.dispatchWorkgroups(workgroupCalc(seq_length, workgroup_Y), workgroupCalc(n_embd, workgroup_X));
+    passEncoder_linear.end();
 
     return linearResultBuffer;
   }
