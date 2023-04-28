@@ -60,10 +60,16 @@ function createBuffer(device, size, usage) {
   });
 }
 
+<<<<<<< HEAD
+function createOutputBuffer(device, commandEncoder, buffer, bufferSize) {
+  const outputBuffer = createBuffer(device, bufferSize, GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ);
+  commandEncoder.copyBufferToBuffer(buffer, 0, outputBuffer, 0, bufferSize);
+=======
 function createOutputBuffer(device, commandEncoder, buffer, rows, cols) {
   const outputBufferSize = rows * cols * 4;
   const outputBuffer = createBuffer(device, outputBufferSize, GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ);
   commandEncoder.copyBufferToBuffer(buffer, 0, outputBuffer, 0, outputBufferSize);
+>>>>>>> main
   return outputBuffer;
 }
 

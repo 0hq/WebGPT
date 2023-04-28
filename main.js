@@ -30,14 +30,8 @@ class GPT {
     this.initBindGroups();
     this.initPipelines();
 
-    // Set fast matmul if all params are divisible by 4.
-    this.doFastMatMul = this.params.n_embd % 4 === 0 && this.params.n_head % 4 === 0;
-    // && this.tokenizer.getVocabSize() % 4 === 0;
-
-    if (!this.doFastMatMul) {
-      console.warn("Warning: Fast matmul not enabled. Model will run slower.");
-    } else {
-      console.log("Fast matmul enabled.");
+    if (this.params.n_embd % 4 !== 0 || this.params.n_head % 4 !== 0) {
+      throw new Error("Model incompatible. n_embd and n_head must be divisible by 4 for fast matmul.");
     }
 
     this.initialized = true;
@@ -241,7 +235,8 @@ class GPT {
         buffers.normAttentionBetaBuffer
       );
 
-      const attentionOutputBuffer = this.inlineAttention(
+      let attentionOutputBuffer;
+      attentionOutputBuffer = this.inlineFastAttention(
         commandEncoder,
         seq_length,
         n_embd,
@@ -266,31 +261,17 @@ class GPT {
       );
 
       let linearOutputBuffer;
-      if (this.doFastMatMul) {
-        linearOutputBuffer = this.inlineFastFFN(
-          commandEncoder,
-          seq_length,
-          n_embd,
-          hidden_size,
-          layerNormLinearOutputBuffer,
-          buffers.firstLayerWeightsBuffer,
-          buffers.firstLayerBiasBuffer,
-          buffers.secondLayerWeightsBuffer,
-          buffers.secondLayerBiasBuffer
-        );
-      } else {
-        linearOutputBuffer = this.inlineFFN(
-          commandEncoder,
-          seq_length,
-          n_embd,
-          hidden_size,
-          layerNormLinearOutputBuffer,
-          buffers.firstLayerWeightsBuffer,
-          buffers.firstLayerBiasBuffer,
-          buffers.secondLayerWeightsBuffer,
-          buffers.secondLayerBiasBuffer
-        );
-      }
+      linearOutputBuffer = this.inlineFastFFN(
+        commandEncoder,
+        seq_length,
+        n_embd,
+        hidden_size,
+        layerNormLinearOutputBuffer,
+        buffers.firstLayerWeightsBuffer,
+        buffers.firstLayerBiasBuffer,
+        buffers.secondLayerWeightsBuffer,
+        buffers.secondLayerBiasBuffer
+      );
 
       const residualLinearOutputBuffer = this.inlineResidual(commandEncoder, seq_length, n_embd, linearOutputBuffer, residualAttentionOutputBuffer);
 
@@ -623,66 +604,6 @@ class GPT {
     return resultBuffer;
   }
 
-  inlineFFN(
-    commandEncoder,
-    context,
-    n_embed,
-    hidden_size,
-    inputBuffer,
-    firstLayerWeightsBuffer,
-    firstLayerBiasBuffer,
-    secondLayerWeightsBuffer,
-    secondLayerBiasBuffer
-  ) {
-    const firstLayerUniformBuffer = createBuffer(this.device, 16, GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST);
-    const firstLayerResultBuffer = createBuffer(this.device, this.bufferSizeCalc(context, hidden_size), GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC);
-    const firstLayerBindGroup = createBindGroup(this.device, this.u_r_r_s_BindLayout, [
-      firstLayerUniformBuffer,
-      firstLayerBiasBuffer,
-      firstLayerWeightsBuffer,
-      firstLayerResultBuffer,
-    ]);
-    this.device.queue.writeBuffer(firstLayerUniformBuffer, 0, new Uint32Array([context, hidden_size, n_embed]));
-
-    const geluUniformBuffer = createBuffer(this.device, 16, GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST);
-    const geluResultBuffer = createBuffer(this.device, this.bufferSizeCalc(context, hidden_size), GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC);
-    const geluBindGroup = createBindGroup(this.device, this.u_s_BindLayout, [geluUniformBuffer, geluResultBuffer]);
-    this.device.queue.writeBuffer(geluUniformBuffer, 0, new Uint32Array([context, hidden_size]));
-
-    const secondLayerUniformBuffer = createBuffer(this.device, 16, GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST);
-    const secondLayerResultBuffer = createBuffer(this.device, this.bufferSizeCalc(context, n_embed), GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC);
-    const secondLayerBindGroup = createBindGroup(this.device, this.u_r_r_s_BindLayout, [
-      secondLayerUniformBuffer,
-      secondLayerBiasBuffer,
-      secondLayerWeightsBuffer,
-      secondLayerResultBuffer,
-    ]);
-    this.device.queue.writeBuffer(secondLayerUniformBuffer, 0, new Uint32Array([context, n_embed, hidden_size]));
-
-    const passEncoder_first = commandEncoder.beginComputePass();
-    passEncoder_first.setPipeline(this.FFNpipeline);
-    passEncoder_first.setBindGroup(0, firstLayerBindGroup);
-    passEncoder_first.setBindGroup(1, createBindGroup(this.device, this.r_BindLayout, [inputBuffer]));
-    passEncoder_first.dispatchWorkgroups(workgroupCalc(context, workgroup_Y), workgroupCalc(hidden_size, workgroup_X));
-    passEncoder_first.end();
-
-    const passEncoder_gelu = commandEncoder.beginComputePass();
-    passEncoder_gelu.setPipeline(this.GELUpipeline);
-    passEncoder_gelu.setBindGroup(0, geluBindGroup);
-    passEncoder_gelu.setBindGroup(1, createBindGroup(this.device, this.r_BindLayout, [firstLayerResultBuffer]));
-    passEncoder_gelu.dispatchWorkgroups(workgroupCalc(context, workgroup_Y), workgroupCalc(hidden_size, workgroup_X));
-    passEncoder_gelu.end();
-
-    const passEncoder_second = commandEncoder.beginComputePass();
-    passEncoder_second.setPipeline(this.FFNpipeline);
-    passEncoder_second.setBindGroup(0, secondLayerBindGroup);
-    passEncoder_second.setBindGroup(1, createBindGroup(this.device, this.r_BindLayout, [geluResultBuffer]));
-    passEncoder_second.dispatchWorkgroups(workgroupCalc(context, workgroup_Y), workgroupCalc(n_embed, workgroup_X));
-    passEncoder_second.end();
-
-    return secondLayerResultBuffer;
-  }
-
   inlineFastAttention(
     commandEncoder,
     seq_length,
@@ -740,17 +661,6 @@ class GPT {
     const attentionValuesBindGroup = createBindGroup(this.device, this.u_s_BindLayout, [attentionValuesUniformBuffer, attentionValuesResultBuffer]);
     this.device.queue.writeBuffer(attentionValuesUniformBuffer, 0, new Uint32Array([seq_length, n_embd, n_head, n_embd / n_head]));
 
-    const linearUniformBuffer = createBuffer(this.device, 16, GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST);
-
-    const linearResultBuffer = createBuffer(this.device, this.bufferSizeCalc(seq_length, n_embd), GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC);
-    const linearBindGroup = createBindGroup(this.device, this.u_r_r_s_BindLayout, [
-      linearUniformBuffer,
-      linearBiasBuffer,
-      linearWeightsBuffer,
-      linearResultBuffer,
-    ]);
-    this.device.queue.writeBuffer(linearUniformBuffer, 0, new Uint32Array([seq_length, n_embd, n_embd]));
-
     const qkvMatmulBuffer = this.inlineFastMatMul(commandEncoder, inputBuffer, qkvWeightsBuffer, seq_length, 3 * n_embd, n_embd);
     const qkvResultBuffer = this.inlineFastRowAdd(commandEncoder, qkvMatmulBuffer, qkvBiasBuffer, seq_length, 3 * n_embd);
 
@@ -782,34 +692,7 @@ class GPT {
     passEncoder_causalMask.dispatchWorkgroups(workgroupCalc(seq_length * n_head, workgroup_Y), workgroupCalc(seq_length, workgroup_X));
     passEncoder_causalMask.end();
 
-    // This is a sloppy-ish solution to the casual mask buffer being processed with every head at once. Obviously, this could be fixed if we just did this in a smarter way but I only realized you could do this at the end. Still learning WebGPU!
-    const softmaxOutputBuffer = createBuffer(
-      this.device,
-      this.bufferSizeCalc(seq_length, seq_length * n_head),
-      GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST | GPUBufferUsage.COPY_SRC
-    );
-    for (let i = 0; i < n_head; i++) {
-      const softmaxInputBuffer = createBuffer(
-        this.device,
-        this.bufferSizeCalc(seq_length, seq_length),
-        GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST | GPUBufferUsage.COPY_SRC
-      );
-      commandEncoder.copyBufferToBuffer(
-        causalMaskResultBuffer,
-        i * this.bufferSizeCalc(seq_length, seq_length),
-        softmaxInputBuffer,
-        0,
-        this.bufferSizeCalc(seq_length, seq_length)
-      );
-      const softMaxResultBuffer = this.maskedInlineSoftmax(commandEncoder, seq_length, seq_length, softmaxInputBuffer);
-      commandEncoder.copyBufferToBuffer(
-        softMaxResultBuffer,
-        0,
-        softmaxOutputBuffer,
-        i * this.bufferSizeCalc(seq_length, seq_length),
-        this.bufferSizeCalc(seq_length, seq_length)
-      );
-    }
+    const softmaxOutputBuffer = this.maskedInlineSoftmax(commandEncoder, seq_length * n_head, seq_length, causalMaskResultBuffer);
 
     const passEncoder_attentionValues = commandEncoder.beginComputePass();
     passEncoder_attentionValues.setPipeline(this.attentionValuesPipeline);
@@ -818,12 +701,8 @@ class GPT {
     passEncoder_attentionValues.dispatchWorkgroups(workgroupCalc(seq_length, workgroup_Y), workgroupCalc(n_embd, workgroup_X));
     passEncoder_attentionValues.end();
 
-    const passEncoder_linear = commandEncoder.beginComputePass();
-    passEncoder_linear.setPipeline(this.FFNpipeline);
-    passEncoder_linear.setBindGroup(0, linearBindGroup);
-    passEncoder_linear.setBindGroup(1, createBindGroup(this.device, this.r_BindLayout, [attentionValuesResultBuffer]));
-    passEncoder_linear.dispatchWorkgroups(workgroupCalc(seq_length, workgroup_Y), workgroupCalc(n_embd, workgroup_X));
-    passEncoder_linear.end();
+    const linearMatmulBuffer = this.inlineFastMatMul(commandEncoder, attentionValuesResultBuffer, linearWeightsBuffer, seq_length, n_embd, n_embd);
+    const linearResultBuffer = this.inlineFastRowAdd(commandEncoder, linearMatmulBuffer, linearBiasBuffer, seq_length, n_embd);
 
     return linearResultBuffer;
   }
@@ -936,34 +815,7 @@ class GPT {
     passEncoder_causalMask.dispatchWorkgroups(workgroupCalc(seq_length * n_head, workgroup_Y), workgroupCalc(seq_length, workgroup_X));
     passEncoder_causalMask.end();
 
-    // This is a sloppy-ish solution to the casual mask buffer being processed with every head at once. Obviously, this could be fixed if we just did this in a smarter way but I only realized you could do this at the end. Still learning WebGPU!
-    const softmaxOutputBuffer = createBuffer(
-      this.device,
-      this.bufferSizeCalc(seq_length, seq_length * n_head),
-      GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST | GPUBufferUsage.COPY_SRC
-    );
-    for (let i = 0; i < n_head; i++) {
-      const softmaxInputBuffer = createBuffer(
-        this.device,
-        this.bufferSizeCalc(seq_length, seq_length),
-        GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST | GPUBufferUsage.COPY_SRC
-      );
-      commandEncoder.copyBufferToBuffer(
-        causalMaskResultBuffer,
-        i * this.bufferSizeCalc(seq_length, seq_length),
-        softmaxInputBuffer,
-        0,
-        this.bufferSizeCalc(seq_length, seq_length)
-      );
-      const softMaxResultBuffer = this.maskedInlineSoftmax(commandEncoder, seq_length, seq_length, softmaxInputBuffer);
-      commandEncoder.copyBufferToBuffer(
-        softMaxResultBuffer,
-        0,
-        softmaxOutputBuffer,
-        i * this.bufferSizeCalc(seq_length, seq_length),
-        this.bufferSizeCalc(seq_length, seq_length)
-      );
-    }
+    const softmaxOutputBuffer = this.maskedInlineSoftmax(commandEncoder, seq_length * n_head, seq_length, causalMaskResultBuffer);
 
     const passEncoder_attentionValues = commandEncoder.beginComputePass();
     passEncoder_attentionValues.setPipeline(this.attentionValuesPipeline);

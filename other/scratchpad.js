@@ -365,3 +365,10 @@ class TestGPU {
   // await GPU.testMatmul();
   await GPU.testFastRowAdd();
 })();
+
+function createOutputBuffer(device, commandEncoder, buffer, rows, cols) {
+  const outputBufferSize = rows * cols * 4;
+  const outputBuffer = createBuffer(device, outputBufferSize, GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ);
+  commandEncoder.copyBufferToBuffer(buffer, 0, outputBuffer, 0, outputBufferSize);
+  return outputBuffer;
+}
