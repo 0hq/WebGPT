@@ -188,6 +188,71 @@ class TestGPU {
     console.log(new Float32Array(output));
   }
 
+  async testFastRowAdd() {
+    const commandEncoder = this.device.createCommandEncoder();
+
+    const dimM = 32;
+    const dimN = 32;
+    const matrixA = new Float32Array(dimM * dimN);
+    const matrixB = new Float32Array(dimN);
+    for (let i = 0; i < dimM * dimN; i++) {
+      matrixA[i] = i + 1;
+    }
+    for (let i = 0; i < dimN; i++) {
+      matrixB[i] = i + 1;
+    }
+
+    const matrixABuffer = createBuffer(this.device, dimM * dimN * 4, GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST);
+    this.device.queue.writeBuffer(matrixABuffer, 0, matrixA);
+
+    const matrixBBuffer = createBuffer(this.device, dimN * dimN * 4, GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST);
+    this.device.queue.writeBuffer(matrixBBuffer, 0, matrixB);
+
+    const fastRowAddResult = this.inlineFastRowAdd(commandEncoder, matrixABuffer, matrixBBuffer, dimM, dimN);
+
+    const outputBuffer = createOutputBuffer(this.device, commandEncoder, fastRowAddResult, dimM, dimN);
+
+    this.device.queue.submit([commandEncoder.finish()]);
+
+    await outputBuffer.mapAsync(GPUMapMode.READ);
+    const output = outputBuffer.getMappedRange();
+
+    console.log("A", formatAsMatrix(matrixA, dimM, dimN));
+    console.log("B", formatAsMatrix(matrixB, 1, dimN));
+    console.log("Output:", formatAsMatrix(new Float32Array(output), dimM, dimN));
+    const validation = new Float32Array(dimM * dimN);
+    for (let i = 0; i < dimM; i++) {
+      for (let j = 0; j < dimN; j++) {
+        validation[i * dimN + j] = matrixA[i * dimN + j] + matrixB[j];
+      }
+    }
+    console.log("Validation:", formatAsMatrix(validation, dimM, dimN));
+    console.log(new Float32Array(output));
+  }
+
+  inlineFastRowAdd(commandEncoder, inputBuffer, biasBuffer, rows, cols) {
+    if (cols % 4 !== 0) {
+      throw new Error(`cols must be a multiple of 4, got ${rows}x${cols}`);
+    }
+
+    console.log(`inlineFastRowAdd ${rows}x${cols}`);
+    console.log(cols / 8);
+
+    const uniformBuffer = createBuffer(this.device, 16, GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST);
+    const resultBuffer = createBuffer(this.device, this.bufferSizeCalc(rows, cols), GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC);
+    const bindGroup = createBindGroup(this.device, this.u_s_BindLayout, [uniformBuffer, resultBuffer]);
+    this.device.queue.writeBuffer(uniformBuffer, 0, new Uint32Array([rows, cols, cols / 4]));
+
+    const passEncoder = commandEncoder.beginComputePass();
+    passEncoder.setPipeline(this.fastRowAddPipeline);
+    passEncoder.setBindGroup(0, bindGroup);
+    passEncoder.setBindGroup(1, createBindGroup(this.device, this.r_r_BindLayout, [inputBuffer, biasBuffer]));
+    passEncoder.dispatchWorkgroups(workgroupCalc(rows, 8), workgroupCalc(cols, 32));
+    passEncoder.end();
+
+    return resultBuffer;
+  }
+
   inlineMainMatMul(commandEncoder, Abuffer, Bbuffer, rows, cols, shared) {
     console.log("inlineFastMatMul", rows, cols, shared);
 
@@ -289,14 +354,14 @@ class TestGPU {
 
   initPipelines() {
     this.matmulPipeline = createPipeline(this.device, matMulShader, [this.u_s_BindLayout, this.r_r_BindLayout]);
-    // this.fastMatMulPipeline = createPipeline(this.device, fastMatMulShader, [this.u_s_BindLayout, this.r_r_BindLayout]);
-    // this.altFastMatMulPipeline = createPipeline(this.device, altFastMatMulShader, [this.u_s_BindLayout, this.r_r_BindLayout]);
     this.mainPipeline = createPipeline(this.device, mainShader, [this.u_s_BindLayout, this.r_r_BindLayout]);
+    this.fastRowAddPipeline = createPipeline(this.device, fastRowAddShader, [this.u_s_BindLayout, this.r_r_BindLayout]);
   }
 }
 
 (async () => {
   const GPU = new TestGPU();
   await GPU.initialize();
-  await GPU.testMatmul();
+  // await GPU.testMatmul();
+  await GPU.testFastRowAdd();
 })();

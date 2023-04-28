@@ -341,41 +341,29 @@ const fastMatMulShader = `
 `;
 
 const fastRowAddShader = `
-  @group(1) @binding(0)
-  var<storage,read> array_matrix: array<vec4<f32>>;
-
-  @group(1) @binding(1)
-  var<storage,read> array_bias: array<vec4<f32>>;
-
-  @group(0) @binding(1)
-  var<storage,read_write> array_output: array<vec4<f32>>;
-
   struct BMeta {
     M: u32,
     N: u32,
-    MD4: u32,
-    ND4: u32
+    ND4: u32,
   }
 
-  @group(0) @binding(0)
-  var<uniform> bmeta: BMeta;
+  @group(1) @binding(0) var<storage,read> array_matrix: array<vec4<f32>>;
+  @group(1) @binding(1) var<storage,read> array_bias: array<vec4<f32>>;
+  @group(0) @binding(0) var<uniform> bmeta: BMeta;
+  @group(0) @binding(1) var<storage,read_write> array_output: array<vec4<f32>>;
 
-  @compute @workgroup_size(8,8,1)
-  fn main(
-    @builtin(global_invocation_id) global_id: vec3<u32>
-  ) {
-    var x: u32 = global_id.x;
-    var y: u32 = global_id.y;
+  @compute @workgroup_size(8,8)
+  fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
+    var row: u32 = global_id.x;
+    var col: u32 = global_id.y;
+    var ND4: u32 = bmeta.ND4;
+    var M: u32 = bmeta.M;
     
-    if (x >= bmeta.N || y >= bmeta.M) {
+    if (row >= M || col >= ND4) {
       return;
     }
 
-    var matrix_element: vec4<f32> = array_matrix[y * bmeta.ND4 + x];
-    var bias_element: vec4<f32> = array_bias[x];
-    var result_element: vec4<f32> = matrix_element + bias_element;
-
-    array_output[y * bmeta.ND4 + x] = result_element;
+    array_output[row * ND4 + col] = array_matrix[row * ND4 + col] + array_bias[col];
   }
 `;
 

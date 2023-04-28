@@ -583,20 +583,20 @@ class GPT {
   }
 
   inlineFastRowAdd(commandEncoder, inputBuffer, biasBuffer, rows, cols) {
-    if (rows % 4 !== 0 || cols % 4 !== 0) {
-      throw new Error(`all dims must be a multiple of 4, temporary! got ${rows}x${cols}`);
+    if (cols % 4 !== 0) {
+      throw new Error(`cols must be a multiple of 4, got ${rows}x${cols}`);
     }
 
     const uniformBuffer = createBuffer(this.device, 16, GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST);
     const resultBuffer = createBuffer(this.device, this.bufferSizeCalc(rows, cols), GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC);
     const bindGroup = createBindGroup(this.device, this.u_s_BindLayout, [uniformBuffer, resultBuffer]);
-    this.device.queue.writeBuffer(uniformBuffer, 0, new Uint32Array([rows, cols, rows / 4, cols / 4]));
+    this.device.queue.writeBuffer(uniformBuffer, 0, new Uint32Array([rows, cols, cols / 4]));
 
     const passEncoder = commandEncoder.beginComputePass();
     passEncoder.setPipeline(this.fastRowAddPipeline);
     passEncoder.setBindGroup(0, bindGroup);
     passEncoder.setBindGroup(1, createBindGroup(this.device, this.r_r_BindLayout, [inputBuffer, biasBuffer]));
-    passEncoder.dispatchWorkgroups(workgroupCalc(rows, 8), workgroupCalc(cols, 8));
+    passEncoder.dispatchWorkgroups(workgroupCalc(rows, 8), workgroupCalc(cols, 32));
     passEncoder.end();
 
     return resultBuffer;
