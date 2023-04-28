@@ -12,6 +12,7 @@ class GPT {
     this.model = null;
     this.tokenizer = null;
     this.params = null;
+    this.doFastMatMul = false;
     this.minStorageBufferOffsetAlignment = 1;
   }
 
