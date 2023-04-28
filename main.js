@@ -17,6 +17,13 @@ class GPT {
     this.defaultTokens;
 
     this.bufferDeletionStack = [];
+    this.unloadDeletionStack = [];
+  }
+
+  unload() {
+    for (let i = 0; i < this.unloadDeletionStack.length; i++) {
+      this.unloadDeletionStack[i].destroy();
+    }
   }
 
   async initialize() {
@@ -139,6 +146,8 @@ class GPT {
 
   async profile(prompt, tokens, runs, retries) {
     if (!this.initialized) return console.error("Model not loaded yet");
+
+    console.log("Profiling model at prompt length", this.tokenizer.encode(prompt).length);
 
     let avgRetryTime = 0;
     for (let t = 0; t < retries; t++) {
@@ -758,7 +767,11 @@ class GPT {
       size: this.bufferSize(row, col),
       usage: ops.map((u) => bufferUsageDict[u]).reduce((a, b) => a | b),
     });
-    if (!noDelete) this.bufferDeletionStack.push(buffer);
+    if (!noDelete) {
+      this.bufferDeletionStack.push(buffer);
+    } else {
+      this.unloadDeletionStack.push(buffer);
+    }
     return buffer;
   }
 
@@ -825,8 +838,7 @@ class GPT {
 
 const test = async () => {
   const prompt = `The following is a conversation with an AI assistant. The assistant is helpful, creative, clever, and very friendly.\n
-  Human: Hello, who are you?\n
-  AI: I am an AI created by OpenAI. How can I help you today?\n`;
+  Human: Hello, who are you?\n`;
   const tokens = 15;
   const runs = 5;
   const retries = 3;
