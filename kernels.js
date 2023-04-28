@@ -635,6 +635,7 @@ const attentionValuesShader = `
 `;
 
 // Multiplies every value in a matrix by a single constant.
+// Can be vectorized.
 const multiplyShader = `
   struct Matrix {
       data: array<f32>,
