@@ -282,15 +282,6 @@ const fastMatMulShader = `
       }
     }
 
-    array_c[x * 2u + 0u + (y * 4u + 0u) * ND4] = sum00;
-    array_c[x * 2u + 0u + (y * 4u + 1u) * ND4] = sum01;
-    array_c[x * 2u + 0u + (y * 4u + 2u) * ND4] = sum02;
-    array_c[x * 2u + 0u + (y * 4u + 3u) * ND4] = sum03;
-    array_c[x * 2u + 1u + (y * 4u + 0u) * ND4] = sum10;
-    array_c[x * 2u + 1u + (y * 4u + 1u) * ND4] = sum11;
-    array_c[x * 2u + 1u + (y * 4u + 2u) * ND4] = sum12;
-    array_c[x * 2u + 1u + (y * 4u + 3u) * ND4] = sum13;
-
     if (y * 4u + 0u < M) {
       array_c[x * 2u + 0u + (y * 4u + 0u) * ND4] = sum00;
       array_c[x * 2u + 1u + (y * 4u + 0u) * ND4] = sum10;
