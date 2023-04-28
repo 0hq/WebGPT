@@ -4,7 +4,7 @@ function alignedSize(size, alignment) {
   return Math.ceil(size / alignment) * alignment;
 }
 
-const workgroupCalc = (dim, size) => Math.min(Math.ceil(dim / size), 256);
+const wgSize = (dim, size) => Math.min(Math.ceil(dim / size), 256);
 
 function sampleFromDistribution(probs) {
   const rand = Math.random();
