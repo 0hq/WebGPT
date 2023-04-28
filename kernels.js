@@ -303,45 +303,6 @@ const fastRowAddShader = `
   }
 `;
 
-// Masks all values in the matrix that are not causal to -1 bil.
-// Currently also transposes the matrix for copying.
-const causalMaskShader = `
-  struct Matrix {
-      data: array<f32>,
-  }
-
-  struct Dimensions {
-    dimY: u32, // row dimension of input matrix
-    dimX: u32, // col dimension of input matrix
-  };
-
-  @group(0) @binding(0) var<uniform> DimBuffer: Dimensions;
-  @group(0) @binding(1) var<storage, read_write> Result: Matrix;
-
-  @group(1) @binding(0) var<storage, read> Input: Matrix;
-
-  @compute @workgroup_size(16, 16)
-  fn main (@builtin(global_invocation_id) global_id: vec3<u32>) {
-      let row: u32 = global_id.x;
-      let col: u32 = global_id.y;
-      let dimX: u32 = DimBuffer.dimX;
-      let dimY: u32 = DimBuffer.dimY;
-
-      if (row >= dimY || col >= dimX) {
-        return;
-      }
-
-      let rowMask: u32 = row % dimX;
-      let rowNum: u32 = row / dimX;
-      if (col > rowMask) {
-        Result.data[row * dimX + col] = -1e9;
-      } else {
-        Result.data[row * dimX + col] = Input.data[rowMask * dimY + col + rowNum * dimX];
-      }
-
-    }
-`;
-
 // Masks all values in the matrix that are not causal to 0.
 // Currently also transposes the matrix for copying.
 const simpleCausalMaskShader = `
@@ -447,49 +408,6 @@ const splitQKVShader = `
 
 // Calculates attention weights from Q and K matrices.
 const attentionWeightsShader = `
-  struct Matrix {
-    data: array<f32>,
-  }
-
-  struct Dimensions {
-    dimY: u32, // output row and col dimension, Q & K row dimension (context)
-    dimX: u32, // context * heads
-    qkvCols: u32, // col dim of Q, K heads
-    embedDim: u32, // embedding dimension
-  };
-
-  @group(1) @binding(0) var<storage, read> Queries: Matrix;
-  @group(1) @binding(1) var<storage, read> Keys: Matrix;
-
-  @group(0) @binding(0) var<uniform> DimBuffer: Dimensions;
-  @group(0) @binding(1) var<storage, read_write> Result: Matrix;
-
-  @compute @workgroup_size(16, 16)
-  fn main (@builtin(global_invocation_id) global_id: vec3<u32>) {
-    let row: u32 = global_id.x;
-    let col: u32 = global_id.y;
-    let dimY: u32 = DimBuffer.dimY;
-    let dimX: u32 = DimBuffer.dimX;
-    let qkvCols: u32 = DimBuffer.qkvCols;
-    let embedDim: u32 = DimBuffer.embedDim;
-
-    if (row >= dimY || col >= dimX) {
-      return;
-    }
-
-    var head: u32 = col / dimY;
-    var col_r: u32 = col % dimY;
-    var sum: f32 = 0.0;
-    for (var i: u32 = 0; i < qkvCols; i = i + 1) {
-        sum = sum + Queries.data[row * embedDim + i + head * qkvCols] * Keys.data[col_r * embedDim + i + head * qkvCols];
-    }
-
-    Result.data[row * dimX + col] = sum;
-  }
-`;
-
-// Calculates attention weights from Q and K matrices.
-const assymetricAttentionWeightsShader = `
   struct Matrix {
     data: array<f32>,
   }
