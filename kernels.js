@@ -228,6 +228,145 @@ const divideShader = `
     }
 `;
 
+// Lots of code from webgpu-blas.
+const fastMatMulShader = `
+  struct CMeta {
+    M: u32,
+    N: u32,
+    ND4: u32,
+    KD4: u32,
+  }
+
+  @group(1) @binding(0) var<storage,read> array_a: array<vec4<f32>>;
+  @group(1) @binding(1) var<storage,read> array_b: array<vec4<f32>>;
+
+  @group(0) @binding(0) var<uniform> cmeta: CMeta;
+  @group(0) @binding(1) var<storage,read_write> array_c: array<vec4<f32>>;
+
+  fn selectValueFromVec4(v: vec4<f32>, idx: u32) -> f32 {
+    var result: f32;
+    if (idx == 0u) {
+      result = v.x;
+    } else if (idx == 1u) {
+      result = v.y;
+    } else if (idx == 2u) {
+      result = v.z;
+    } else {
+      result = v.w;
+    }
+    return result;
+  }
+
+  @compute @workgroup_size(8, 8)
+  fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
+    var M: u32 = cmeta.M;
+    var N: u32 = cmeta.N;
+    var ND4: u32 = cmeta.ND4;
+    var KD4: u32 = cmeta.KD4;
+    var x: u32 = global_id.x;
+    var y: u32 = global_id.y;
+
+    if (x * 8 >= N || y * 4 >= M) {
+      return;
+    }
+
+    var sum00: vec4<f32> = vec4<f32>();
+    var sum01: vec4<f32> = vec4<f32>();
+    var sum02: vec4<f32> = vec4<f32>();
+    var sum03: vec4<f32> = vec4<f32>();
+    var sum10: vec4<f32> = vec4<f32>();
+    var sum11: vec4<f32> = vec4<f32>();
+    var sum12: vec4<f32> = vec4<f32>();
+    var sum13: vec4<f32> = vec4<f32>();
+
+    for(var k: u32 = 0u; k < KD4; k = k + 1u) {
+      var arow0: vec4<f32> = vec4<f32>();
+      var arow1: vec4<f32> = vec4<f32>();
+      var arow2: vec4<f32> = vec4<f32>();
+      var arow3: vec4<f32> = vec4<f32>();
+      
+      arow0 = array_a[(y * 4u + 0u) * KD4 + k];
+      arow1 = array_a[(y * 4u + 1u) * KD4 + k];
+      arow2 = array_a[(y * 4u + 2u) * KD4 + k];
+      arow3 = array_a[(y * 4u + 3u) * KD4 + k];
+
+      for (var ki: u32 = 0u; ki < 4u; ki = ki + 1u) {
+        var brow: vec4<f32>;
+    
+        let arow0_val = selectValueFromVec4(arow0, ki);
+        let arow1_val = selectValueFromVec4(arow1, ki);
+        let arow2_val = selectValueFromVec4(arow2, ki);
+        let arow3_val = selectValueFromVec4(arow3, ki);
+    
+        brow = array_b[(k * 4u + ki) * ND4 + x * 2u + 0u];
+        sum00 = vec4<f32>(arow0_val) * brow + sum00;
+        sum01 = vec4<f32>(arow1_val) * brow + sum01;
+        sum02 = vec4<f32>(arow2_val) * brow + sum02;
+        sum03 = vec4<f32>(arow3_val) * brow + sum03;
+    
+        brow = array_b[(k * 4u + ki) * ND4 + x * 2u + 1u];
+        sum10 = vec4<f32>(arow0_val) * brow + sum10;
+        sum11 = vec4<f32>(arow1_val) * brow + sum11;
+        sum12 = vec4<f32>(arow2_val) * brow + sum12;
+        sum13 = vec4<f32>(arow3_val) * brow + sum13;
+      }
+    }
+
+    array_c[x * 2u + 0u + (y * 4u + 0u) * ND4] = sum00;
+    array_c[x * 2u + 0u + (y * 4u + 1u) * ND4] = sum01;
+    array_c[x * 2u + 0u + (y * 4u + 2u) * ND4] = sum02;
+    array_c[x * 2u + 0u + (y * 4u + 3u) * ND4] = sum03;
+    array_c[x * 2u + 1u + (y * 4u + 0u) * ND4] = sum10;
+    array_c[x * 2u + 1u + (y * 4u + 1u) * ND4] = sum11;
+    array_c[x * 2u + 1u + (y * 4u + 2u) * ND4] = sum12;
+    array_c[x * 2u + 1u + (y * 4u + 3u) * ND4] = sum13;
+
+    if (y * 4u + 0u < M) {
+      array_c[x * 2u + 0u + (y * 4u + 0u) * ND4] = sum00;
+      array_c[x * 2u + 1u + (y * 4u + 0u) * ND4] = sum10;
+    }
+    if (y * 4u + 1u < M) {
+      array_c[x * 2u + 0u + (y * 4u + 1u) * ND4] = sum01;
+      array_c[x * 2u + 1u + (y * 4u + 1u) * ND4] = sum11;
+    }
+    if (y * 4u + 2u < M) {
+      array_c[x * 2u + 0u + (y * 4u + 2u) * ND4] = sum02;
+      array_c[x * 2u + 1u + (y * 4u + 2u) * ND4] = sum12;
+    }
+    if (y * 4u + 3u < M) {
+      array_c[x * 2u + 0u + (y * 4u + 3u) * ND4] = sum03;
+      array_c[x * 2u + 1u + (y * 4u + 3u) * ND4] = sum13;
+    }
+  }
+`;
+
+const fastRowAddShader = `
+  struct BMeta {
+    M: u32,
+    N: u32,
+    ND4: u32,
+  }
+
+  @group(1) @binding(0) var<storage,read> array_matrix: array<vec4<f32>>;
+  @group(1) @binding(1) var<storage,read> array_bias: array<vec4<f32>>;
+  @group(0) @binding(0) var<uniform> bmeta: BMeta;
+  @group(0) @binding(1) var<storage,read_write> array_output: array<vec4<f32>>;
+
+  @compute @workgroup_size(8,8)
+  fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
+    var row: u32 = global_id.x;
+    var col: u32 = global_id.y;
+    var ND4: u32 = bmeta.ND4;
+    var M: u32 = bmeta.M;
+    
+    if (row >= M || col >= ND4) {
+      return;
+    }
+
+    array_output[row * ND4 + col] = array_matrix[row * ND4 + col] + array_bias[col];
+  }
+`;
+
 // Multiplies matrix times weights and adds bias.
 const FFNShader = `
   struct Matrix {
