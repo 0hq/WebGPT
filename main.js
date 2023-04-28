@@ -1,5 +1,5 @@
 class GPT {
-  constructor(folder, type, doAttentionCache = true) {
+  constructor(folder, type, doAttentionCache = false) {
     this.folder = folder;
     this.tokenizerType = type;
     this.initialized = false;
@@ -86,33 +86,26 @@ class GPT {
 
     const layer_buffers = [];
     for (let i = 0; i < n_layer; i++) {
-      console.log("Loading layer", i);
+      console.log("Loading layer...", i);
       const prefix = `${fldr}transformer.h.${i}.`;
 
-      console.log("\tLoading attention layer norm...");
       const normAttentionGamma = await fetchBin(`${prefix}ln_1.weight_gpt.bin`);
       const normAttentionBeta = bias ? await fetchBin(`${prefix}ln_1.bias_gpt.bin`) : zeros(n_embd);
 
-      console.log("\tLoading qkv transform...");
       const qkvWeights = transpose(await fetchBin(`${prefix}attn.c_attn.weight_gpt.bin`), 3 * n_embd, n_embd);
       const qkvBias = bias ? await fetchBin(`${prefix}attn.c_attn.bias_gpt.bin`) : zeros(3 * n_embd);
 
-      console.log("\tLoading attention c_proj...");
       const linearWeights = transpose(await fetchBin(`${prefix}attn.c_proj.weight_gpt.bin`), n_embd, n_embd);
       const linearBias = bias ? await fetchBin(`${prefix}attn.c_proj.bias_gpt.bin`) : zeros(n_embd);
 
-      console.log("\tInitializing attention cache...");
       const attentionCache = zeros(block_size * n_head * block_size);
 
-      console.log("\tLoading MLP layer norm...");
       const normLinearGamma = await fetchBin(`${prefix}ln_2.weight_gpt.bin`);
       const normLinearBeta = bias ? await fetchBin(`${prefix}ln_2.bias_gpt.bin`) : zeros(n_embd);
 
-      console.log("\tLoading MLP first layer...");
       const firstLayerWeights = transpose(await fetchBin(`${prefix}mlp.c_fc.weight_gpt.bin`), hidden_size, n_embd);
       const firstLayerBias = bias ? await fetchBin(`${prefix}mlp.c_fc.bias_gpt.bin`) : zeros(hidden_size);
 
-      console.log("\tLoading MLP second layer...");
       const secondLayerWeights = transpose(await fetchBin(`${prefix}mlp.c_proj.weight_gpt.bin`), n_embd, hidden_size);
       const secondLayerBias = bias ? await fetchBin(`${prefix}mlp.c_proj.bias_gpt.bin`) : zeros(n_embd);
 
@@ -156,10 +149,11 @@ class GPT {
         let history = this.tokenizer.encode(prompt);
         let totalTime = 0;
         for (let i = 0; i < tokens; i++) {
+          const useAttCache = i !== 0 && history.length <= this.params.block_size && this.doAttentionCache;
           const idx_cond = history.slice(-this.params.block_size);
 
           const startTime = performance.now();
-          const logits = await this.run(idx_cond, false);
+          const logits = await this.run(idx_cond, useAttCache);
           const endTime = performance.now();
 
           totalTime += endTime - startTime;
@@ -838,18 +832,24 @@ class GPT {
 
 const test = async () => {
   const prompt = `The following is a conversation with an AI assistant. The assistant is helpful, creative, clever, and very friendly.\n
+  Human: Hello, who are you?\nThe following is a conversation with an AI assistant. The assistant is helpful, creative, clever, and very friendly.\n
+  Human: Hello, who are you?\nThe following is a conversation with an AI assistant. The assistant is helpful, creative, clever, and very friendly.\n
+  Human: Hello, who are you?\nThe following is a conversation with an AI assistant. The assistant is helpful, creative, clever, and very friendly.\n
+  Human: Hello, who are you?\nThe following is a conversation with an AI assistant. The assistant is helpful, creative, clever, and very friendly.\n
   Human: Hello, who are you?\n`;
   const tokens = 15;
   const runs = 5;
   const retries = 3;
 
-  const GPTModel = new GPT("gpt2", "bpe", true);
-  await GPTModel.initialize();
-
-  await GPTModel.profile(prompt, tokens, runs, retries);
-
   const GPTModel2 = new GPT("gpt2", "bpe", false);
   await GPTModel2.initialize();
 
   await GPTModel2.profile(prompt, tokens, runs, retries);
+  GPTModel2.unload();
+
+  const GPTModel = new GPT("gpt2", "bpe", true);
+  await GPTModel.initialize();
+
+  await GPTModel.profile(prompt, tokens, runs, retries);
+  GPTModel.unload();
 };
