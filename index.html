@@ -83,6 +83,11 @@ Have you forgotten I built WebGPT?&#13;&#10;</textarea
         GPTModel = new GPT("better_shakespeare", "char");
         await GPTModel.initialize();
 
+        promptTextarea.value = GPTModel.defaultPrompt;
+        topKInput.value = GPTModel.defaultTopK;
+        tokensInput.value = GPTModel.defaultTokens;
+        temperatureInput.value = GPTModel.defaultTemperature;
+
         setTextareaDisabled(false);
         tokensInput.disabled = false;
         topKInput.disabled = false;
@@ -104,9 +109,10 @@ Have you forgotten I built WebGPT?&#13;&#10;</textarea
         // Set the default prompt for GPT2 model
         promptTextarea.value = "What is the answer to life, the universe, and everything?\n";
 
-        topKInput.value = 3;
-        tokensInput.value = 30;
-        temperatureInput.value = 1;
+        promptTextarea.value = GPTModel.defaultPrompt;
+        topKInput.value = GPTModel.defaultTopK;
+        tokensInput.value = GPTModel.defaultTokens;
+        temperatureInput.value = GPTModel.defaultTemperature;
       }
 
       function setTextareaDisabled(bool) {

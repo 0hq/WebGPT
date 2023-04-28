@@ -4,12 +4,17 @@ class GPT {
     this.tokenizerType = type;
     this.initialized = false;
 
-    this.device = null;
-    this.model = null;
-    this.tokenizer = null;
-    this.params = null;
-    this.doFastMatMul = false;
+    this.device;
+    this.model;
+    this.tokenizer;
+    this.params;
     this.minBufferOffset = 1;
+    this.doAttentionCache = false;
+
+    this.defaultPrompt;
+    this.defaultTopK;
+    this.defaultTemperature;
+    this.defaultTokens;
 
     this.bufferDeletionStack = [];
   }
@@ -30,6 +35,18 @@ class GPT {
 
     if (this.params.n_embd % 4 !== 0 || this.params.n_head % 4 !== 0) {
       throw new Error("Model incompatible. n_embd and n_head must be divisible by 4 for fast matmul.");
+    }
+
+    if (this.folder == "gpt2") {
+      this.defaultPrompt = `What is the answer to life, the universe, and everything?\n`;
+      this.defaultTopK = 3;
+      this.defaultTemperature = 1;
+      this.defaultTokens = 30;
+    } else {
+      this.defaultPrompt = `WILL:\nAh, how dare you challenge me?\nHave you forgotten I built WebGPT?\n`;
+      this.defaultTopK = 1;
+      this.defaultTemperature = 1;
+      this.defaultTokens = 100;
     }
 
     this.initialized = true;
@@ -167,7 +184,7 @@ class GPT {
       const idx_cond = history.slice(-this.params.block_size);
 
       const startTime = performance.now();
-      const logits = await this.run(idx_cond, i !== 0 && history.length <= this.params.block_size);
+      const logits = await this.run(idx_cond, i !== 0 && history.length <= this.params.block_size && this.doAttentionCache);
       const endTime = performance.now();
 
       console.log(`(Loop ${i}) Kernel execution time: ${endTime - startTime} ms`);
@@ -321,7 +338,7 @@ class GPT {
 
     await attentionCacheOutputBuffer.mapAsync(GPUMapMode.READ);
     const cache = attentionCacheOutputBuffer.getMappedRange();
-    console.log(formatAsMatrix(new Float32Array(cache), block_size * n_head, block_size));
+    console.log(formatAsMatrix(new Float32Array(cache), seq_length * n_head, seq_length));
 
     for (let i = 0; i < this.bufferDeletionStack.length; i++) {
       this.bufferDeletionStack[i].destroy();
@@ -793,7 +810,7 @@ class GPT {
     this.assymetricAttentionWeightsPipeline = p(assymetricAttentionWeightsShader, [this.u_s_Layout, this.r_r_Layout]);
     this.attentionValuesPipeline = p(attentionValuesShader, [this.u_s_Layout, this.r_r_Layout]);
     this.multiplyPipeline = p(multiplyShader, [this.u_s_Layout, this.r_Layout]);
-    this.causalMaskPipeline = p(causalMaskShader, [this.u_s_Layout, this.r_Layout]);
+    this.causalMaskPipeline = p(simpleCausalMaskShader, [this.u_s_Layout, this.r_Layout]);
     this.matmulPipeline = p(matMulShader, [this.u_s_Layout, this.r_r_Layout]);
     this.elementAddPipeline = p(elementWiseAdditionShader, [this.u_s_Layout, this.r_Layout, this.r_Layout]);
     this.maskedMaxPipeline = p(maskedNegMaxShader, [this.u_s_Layout, this.r_Layout]);

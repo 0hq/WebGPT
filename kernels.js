@@ -1,39 +1,6 @@
 // --------------------- SHADER CODE --------------------- //
 
 // Return maximum value of each row in a matrix times -1.
-const negMaxShader = `
-  struct Matrix {
-    data: array<f32>,
-  }
-
-  struct Dimensions {
-    dimY: u32, // row dimension
-    dimX: u32, // col dimension
-  };
-
-  @group(0) @binding(0) var<uniform> DimBuffer: Dimensions;
-  @group(0) @binding(1) var<storage, read_write> Result: Matrix;
-  @group(1) @binding(0) var<storage, read> Input: Matrix;
-
-  @compute @workgroup_size(16, 16)
-  fn main (@builtin(global_invocation_id) global_id: vec3<u32>) {
-    let row: u32 = global_id.x;
-    let dimX: u32 = DimBuffer.dimX;
-
-    if (row >= DimBuffer.dimY) {
-      return;
-    }
-
-    var max_buffer: f32 = 0.0;
-    for (var i: u32 = 0; i < dimX; i = i + 1) {
-      max_buffer = max(max_buffer, Input.data[row * dimX + i]);
-    }
-
-    Result.data[row] = -max_buffer;
-  }
-`;
-
-// Return maximum value of each row in a matrix times -1.
 const maskedNegMaxShader = `
   struct Matrix {
     data: array<f32>,
