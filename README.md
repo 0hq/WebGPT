@@ -25,12 +25,14 @@ If you want to try out WebGPT, visit the demo website here [KMeans.org](https://
 
 - [X] Embeddings / de-embeddings on GPU.
 - [X] Initializing pipelines on every step is incredibly inefficient.
+- [X] Key-value caching (testing).
+- [X] Reuse buffers.
+- [X] Kernel shared memory for matmul!
+- [ ] Make simple instructional version without special stuff.
 - [ ] Optimize workgroup sizes, specifically for single row/col operations.
-- [ ] Reuse buffers as well!
-- [ ] Kernel shared memory!
+- [ ] Optimize all other kernels.
 - [ ] Convert into a package.
 - [ ] Compute pass splitting for larger models *(maxStorageBufferBindingSize)*
-- [ ] Key-value caching!!
 - [ ] Write better comments + make Youtube explainer.
 
 ## Acknowledgements
