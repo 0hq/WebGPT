@@ -10,6 +10,8 @@ class GPT {
     this.params = null;
     this.doFastMatMul = false;
     this.minStorageBufferOffsetAlignment = 1;
+
+    this.bufferDeletionStack = [];
   }
 
   async initialize() {
@@ -265,7 +267,7 @@ class GPT {
     const slicedEmbedOutputBuffer = this.initBuffer(["storage", "copy_to"], 1, n_embd);
     commandEncoder.copyBufferToBuffer(layerNormOutputBuffer, this.bufferSize(seq_length - 1, n_embd), slicedEmbedOutputBuffer, 0, this.bufferSize(1, n_embd));
 
-    const deEmbedOutputBuffer = this.initBuffer(["map_read", "copy_to"], 1, vocab_size);
+    const deEmbedOutputBuffer = this.initBuffer(["map_read", "copy_to"], 1, vocab_size, true);
 
     // Assumes that vocab_size has a decent least prime factor.
     const maxStorageBufferSize = this.device.limits.maxStorageBufferBindingSize;
@@ -292,8 +294,13 @@ class GPT {
 
     await deEmbedOutputBuffer.mapAsync(GPUMapMode.READ);
     const output = deEmbedOutputBuffer.getMappedRange();
+    const outputArray = new Float32Array(output);
 
-    return new Float32Array(output);
+    for (let i = 0; i < this.bufferDeletionStack.length; i++) {
+      this.bufferDeletionStack[i].destroy();
+    }
+
+    return outputArray;
   }
 
   maskedInlineSoftmax(commandEncoder, rows, cols, inputBuffer) {
@@ -587,15 +594,17 @@ class GPT {
     });
   }
 
-  initBuffer(ops, row, col = 1) {
-    return this.device.createBuffer({
+  initBuffer(ops, row, col = 1, noDelete = false) {
+    const buffer = this.device.createBuffer({
       size: this.bufferSize(row, col),
       usage: ops.map((u) => bufferUsageDict[u]).reduce((a, b) => a | b),
     });
+    if (!noDelete) this.bufferDeletionStack.push(buffer);
+    return buffer;
   }
 
   initTensor(data, sizeA, sizeB, ops) {
-    const buffer = this.initBuffer([...ops, "copy_to"], sizeA, sizeB);
+    const buffer = this.initBuffer([...ops, "copy_to"], sizeA, sizeB, true);
     this.device.queue.writeBuffer(buffer, 0, data);
     return buffer;
   }
