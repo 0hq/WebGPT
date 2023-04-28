@@ -23,6 +23,10 @@ class Tokenizer {
 }
 
 class SimpleTokenizer extends Tokenizer {
+  constructor() {
+    super();
+  }
+
   async load() {
     console.log("Loading simple tokenizer...");
 

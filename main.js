@@ -198,7 +198,7 @@ class GPT {
     console.log(`Average kernel execution time: ${totalTime / max_new_tokens} ms`);
   }
 
-  async run(idx, offset = 0) {
+  async run(idx) {
     const { posEmbdBuffer, layer_buffers, normGammaBuffer, normBetaBuffer, embeddingWeightsBuffer } = this.model;
     const { attentionDotProductScale, n_embd, n_head, n_layer, vocab_size, hidden_size } = this.params;
     const seq_length = idx.length;
@@ -321,7 +321,7 @@ class GPT {
     const slicedEmbedOutputBuffer = createBuffer(this.device, this.bufferSizeCalc(1, n_embd), GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST);
     commandEncoder.copyBufferToBuffer(
       layerNormOutputBuffer, // Source buffer (original position embeddings)
-      this.bufferSizeCalc(seq_length - 1 - offset, n_embd), // Source offset (starting from the beginning of the buffer)
+      this.bufferSizeCalc(seq_length - 1, n_embd), // Source offset (starting from the beginning of the buffer)
       slicedEmbedOutputBuffer, // Destination buffer (cropped buffer)
       0, // Destination offset (starting from the beginning of the cropped buffer)
       this.bufferSizeCalc(1, n_embd) // Number of bytes to copy
