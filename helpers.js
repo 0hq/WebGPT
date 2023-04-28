@@ -1,72 +1,4 @@
-// ---------------- WebGPU Helper Functions ----------------
-
-function createShader(device, code) {
-  return device.createShaderModule({
-    code,
-  });
-}
-
-function createBindGroupLayout(device, string_entries) {
-  const entries = string_entries.map((entry, i) => ({
-    binding: i,
-    visibility: GPUShaderStage.COMPUTE,
-    buffer: { type: entry },
-  }));
-  return device.createBindGroupLayout({
-    entries,
-  });
-}
-
-function createPipelineLayout(device, bindGroupLayouts) {
-  return device.createPipelineLayout({
-    bindGroupLayouts,
-  });
-}
-
-function createComputePipeline(device, shaderModule, pipelineLayout) {
-  return device.createComputePipeline({
-    layout: pipelineLayout,
-    compute: {
-      module: shaderModule,
-      entryPoint: "main",
-    },
-  });
-}
-
-function createPipeline(device, shaderString, bindGroupLayouts) {
-  const shaderModule = createShader(device, shaderString);
-  const pipelineLayout = createPipelineLayout(device, bindGroupLayouts);
-  const pipeline = createComputePipeline(device, shaderModule, pipelineLayout);
-  return pipeline;
-}
-
-function createBindGroup(device, bindGroupLayout, buffers) {
-  const entries = buffers.map((buffer, i) => ({
-    binding: i,
-    resource: {
-      buffer,
-    },
-  }));
-  return device.createBindGroup({
-    layout: bindGroupLayout,
-    entries,
-  });
-}
-
-function createBuffer(device, size, usage) {
-  return device.createBuffer({
-    size: size,
-    usage: usage,
-  });
-}
-
-function createOutputBuffer(device, commandEncoder, buffer, bufferSize) {
-  const outputBuffer = createBuffer(device, bufferSize, GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ);
-  commandEncoder.copyBufferToBuffer(buffer, 0, outputBuffer, 0, bufferSize);
-  return outputBuffer;
-}
-
-// ---------------- Other Helper Functions ----------------
+// ---------------- Helper Functions ----------------
 
 function alignedSize(size, alignment) {
   return Math.ceil(size / alignment) * alignment;
@@ -123,7 +55,7 @@ function transpose(array, input_rows, input_cols) {
 }
 
 function deEmbedCPU(embeddings, embeddingWeights, seq_length, n_embd, vocab_size) {
-  // console.warn("I'm sorry for cheating... De-embedding output with CPU.");
+  console.warn("I'm cheating... De-embedding output with CPU.");
 
   const predictionEmbeddings = new Float32Array(embeddings).slice((seq_length - 1) * n_embd);
   const logits = [];

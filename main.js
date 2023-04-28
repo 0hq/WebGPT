@@ -277,44 +277,44 @@ class GPT {
     this.device.queue.writeBuffer(dimUniformBuffer, 0, new Uint32Array([rows, cols]));
 
     const maxResultBuffer = this.initBuffer(["storage", "copy_from"], rows);
-    const maxBindGroup = createBindGroup(this.device, this.u_s_BindLayout, [dimUniformBuffer, maxResultBuffer]);
+    const maxBindGroup = this.initBindGroup(this.u_s_Layout, [dimUniformBuffer, maxResultBuffer]);
 
     const addExpResultBuffer = this.initBuffer(["storage", "copy_from"], rows, cols);
-    const addExpBindGroup = createBindGroup(this.device, this.u_s_BindLayout, [dimUniformBuffer, addExpResultBuffer]);
+    const addExpBindGroup = this.initBindGroup(this.u_s_Layout, [dimUniformBuffer, addExpResultBuffer]);
 
     const sumResultBuffer = this.initBuffer(["storage", "copy_from"], rows);
-    const sumBindGroup = createBindGroup(this.device, this.u_s_BindLayout, [dimUniformBuffer, sumResultBuffer]);
+    const sumBindGroup = this.initBindGroup(this.u_s_Layout, [dimUniformBuffer, sumResultBuffer]);
 
     const divResultBuffer = this.initBuffer(["storage", "copy_from"], rows, cols);
-    const divBindGroup = createBindGroup(this.device, this.u_s_BindLayout, [dimUniformBuffer, divResultBuffer]);
+    const divBindGroup = this.initBindGroup(this.u_s_Layout, [dimUniformBuffer, divResultBuffer]);
 
     const passEncoder_max = commandEncoder.beginComputePass();
     passEncoder_max.setPipeline(this.maskedMaxPipeline);
     passEncoder_max.setBindGroup(0, maxBindGroup);
-    passEncoder_max.setBindGroup(1, createBindGroup(this.device, this.r_BindLayout, [inputBuffer]));
+    passEncoder_max.setBindGroup(1, this.initBindGroup(this.r_Layout, [inputBuffer]));
     passEncoder_max.dispatchWorkgroups(workgroupCalc(rows, workgroup_Y), workgroupCalc(cols, workgroup_X));
     passEncoder_max.end();
 
     const passEncoder_addExp = commandEncoder.beginComputePass();
     passEncoder_addExp.setPipeline(this.addExpPipeline);
     passEncoder_addExp.setBindGroup(0, addExpBindGroup);
-    passEncoder_addExp.setBindGroup(1, createBindGroup(this.device, this.r_BindLayout, [inputBuffer]));
-    passEncoder_addExp.setBindGroup(2, createBindGroup(this.device, this.r_BindLayout, [maxResultBuffer]));
+    passEncoder_addExp.setBindGroup(1, this.initBindGroup(this.r_Layout, [inputBuffer]));
+    passEncoder_addExp.setBindGroup(2, this.initBindGroup(this.r_Layout, [maxResultBuffer]));
     passEncoder_addExp.dispatchWorkgroups(workgroupCalc(rows, workgroup_Y), workgroupCalc(cols, workgroup_X));
     passEncoder_addExp.end();
 
     const passEncoder_sum = commandEncoder.beginComputePass();
     passEncoder_sum.setPipeline(this.sumPipeline);
     passEncoder_sum.setBindGroup(0, sumBindGroup);
-    passEncoder_sum.setBindGroup(1, createBindGroup(this.device, this.r_BindLayout, [addExpResultBuffer]));
+    passEncoder_sum.setBindGroup(1, this.initBindGroup(this.r_Layout, [addExpResultBuffer]));
     passEncoder_sum.dispatchWorkgroups(workgroupCalc(rows, workgroup_Y), workgroupCalc(cols, workgroup_X));
     passEncoder_sum.end();
 
     const passEncoder_div = commandEncoder.beginComputePass();
     passEncoder_div.setPipeline(this.dividePipeline);
     passEncoder_div.setBindGroup(0, divBindGroup);
-    passEncoder_div.setBindGroup(1, createBindGroup(this.device, this.r_BindLayout, [addExpResultBuffer]));
-    passEncoder_div.setBindGroup(2, createBindGroup(this.device, this.r_BindLayout, [sumResultBuffer]));
+    passEncoder_div.setBindGroup(1, this.initBindGroup(this.r_Layout, [addExpResultBuffer]));
+    passEncoder_div.setBindGroup(2, this.initBindGroup(this.r_Layout, [sumResultBuffer]));
     passEncoder_div.dispatchWorkgroups(workgroupCalc(rows, workgroup_Y), workgroupCalc(cols, workgroup_X));
     passEncoder_div.end();
 
@@ -324,14 +324,14 @@ class GPT {
   inlineResidual(commandEncoder, rows, cols, layerOutputBuffer, residualBuffer) {
     const residualUniformBuffer = this.initBuffer(["uniform", "copy_to"], 4);
     const residualResultBuffer = this.initBuffer(["storage", "copy_from"], rows, cols);
-    const residualBindGroup = createBindGroup(this.device, this.u_s_BindLayout, [residualUniformBuffer, residualResultBuffer]);
+    const residualBindGroup = this.initBindGroup(this.u_s_Layout, [residualUniformBuffer, residualResultBuffer]);
     this.device.queue.writeBuffer(residualUniformBuffer, 0, new Uint32Array([rows, cols]));
 
     const passEncoder = commandEncoder.beginComputePass();
     passEncoder.setPipeline(this.elementAddPipeline);
     passEncoder.setBindGroup(0, residualBindGroup);
-    passEncoder.setBindGroup(1, createBindGroup(this.device, this.r_BindLayout, [residualBuffer]));
-    passEncoder.setBindGroup(2, createBindGroup(this.device, this.r_BindLayout, [layerOutputBuffer]));
+    passEncoder.setBindGroup(1, this.initBindGroup(this.r_Layout, [residualBuffer]));
+    passEncoder.setBindGroup(2, this.initBindGroup(this.r_Layout, [layerOutputBuffer]));
     passEncoder.dispatchWorkgroups(workgroupCalc(rows, workgroup_Y), workgroupCalc(cols, workgroup_X));
     passEncoder.end();
 
@@ -341,13 +341,13 @@ class GPT {
   inlineMatMul(commandEncoder, Abuffer, Bbuffer, rows, cols, shared) {
     const matmulUniformBuffer = this.initBuffer(["uniform", "copy_to"], 4);
     const matmulResultBuffer = this.initBuffer(["storage", "copy_from"], rows, cols);
-    const matMulBindGroup = createBindGroup(this.device, this.u_s_BindLayout, [matmulUniformBuffer, matmulResultBuffer]);
+    const matMulBindGroup = this.initBindGroup(this.u_s_Layout, [matmulUniformBuffer, matmulResultBuffer]);
     this.device.queue.writeBuffer(matmulUniformBuffer, 0, new Uint32Array([rows, cols, shared]));
 
     const passEncoder = commandEncoder.beginComputePass();
     passEncoder.setPipeline(this.matmulPipeline);
     passEncoder.setBindGroup(0, matMulBindGroup);
-    passEncoder.setBindGroup(1, createBindGroup(this.device, this.r_r_BindLayout, [Abuffer, Bbuffer]));
+    passEncoder.setBindGroup(1, this.initBindGroup(this.r_r_Layout, [Abuffer, Bbuffer]));
     passEncoder.dispatchWorkgroups(workgroupCalc(rows, workgroup_Y), workgroupCalc(cols, workgroup_X));
     passEncoder.end();
 
@@ -359,13 +359,13 @@ class GPT {
 
     const matmulUniformBuffer = this.initBuffer(["uniform", "copy_to"], 4);
     const matmulResultBuffer = this.initBuffer(["storage", "copy_from"], rows, cols);
-    const matMulBindGroup = createBindGroup(this.device, this.u_s_BindLayout, [matmulUniformBuffer, matmulResultBuffer]);
+    const matMulBindGroup = this.initBindGroup(this.u_s_Layout, [matmulUniformBuffer, matmulResultBuffer]);
     this.device.queue.writeBuffer(matmulUniformBuffer, 0, new Uint32Array([rows, cols, Math.ceil(cols / 4), Math.ceil(shared / 4)]));
 
     const passEncoder = commandEncoder.beginComputePass();
     passEncoder.setPipeline(this.fastMatMulPipeline);
     passEncoder.setBindGroup(0, matMulBindGroup);
-    passEncoder.setBindGroup(1, createBindGroup(this.device, this.r_r_BindLayout, [Abuffer, Bbuffer]));
+    passEncoder.setBindGroup(1, this.initBindGroup(this.r_r_Layout, [Abuffer, Bbuffer]));
     passEncoder.dispatchWorkgroups(workgroupCalc(cols, 64), workgroupCalc(rows, 32));
     passEncoder.end();
 
@@ -375,13 +375,13 @@ class GPT {
   inlineTranspose(commandEncoder, inputBuffer, rows, cols) {
     const transposeUniformBuffer = this.initBuffer(["uniform", "copy_to"], 4);
     const transposeResultBuffer = this.initBuffer(["storage", "copy_from"], rows, cols);
-    const transposeBindGroup = createBindGroup(this.device, this.u_s_BindLayout, [transposeUniformBuffer, transposeResultBuffer]);
+    const transposeBindGroup = this.initBindGroup(this.u_s_Layout, [transposeUniformBuffer, transposeResultBuffer]);
     this.device.queue.writeBuffer(transposeUniformBuffer, 0, new Uint32Array([rows, cols]));
 
     const passEncoder = commandEncoder.beginComputePass();
     passEncoder.setPipeline(this.transposePipeline);
     passEncoder.setBindGroup(0, transposeBindGroup);
-    passEncoder.setBindGroup(1, createBindGroup(this.device, this.r_BindLayout, [inputBuffer]));
+    passEncoder.setBindGroup(1, this.initBindGroup(this.r_Layout, [inputBuffer]));
     passEncoder.dispatchWorkgroups(workgroupCalc(rows, workgroup_Y), workgroupCalc(cols, workgroup_X));
     passEncoder.end();
 
@@ -391,26 +391,26 @@ class GPT {
   inlineLayerNorm(commandEncoder, seq_length, n_embd, inputBuffer, gammaBuffer, betaBuffer) {
     const statsUniformBuffer = this.initBuffer(["uniform", "copy_to"], 4);
     const statsResultBuffer = this.initBuffer(["storage", "copy_from"], seq_length, 2);
-    const statsBindGroup = createBindGroup(this.device, this.u_s_BindLayout, [statsUniformBuffer, statsResultBuffer]);
+    const statsBindGroup = this.initBindGroup(this.u_s_Layout, [statsUniformBuffer, statsResultBuffer]);
     this.device.queue.writeBuffer(statsUniformBuffer, 0, new Uint32Array([seq_length, n_embd]));
 
     const normUniformBuffer = this.initBuffer(["uniform", "copy_to"], 4);
     const normResultBuffer = this.initBuffer(["storage", "copy_from"], seq_length, n_embd);
-    const normBindGroup = createBindGroup(this.device, this.u_s_BindLayout, [normUniformBuffer, normResultBuffer]);
+    const normBindGroup = this.initBindGroup(this.u_s_Layout, [normUniformBuffer, normResultBuffer]);
     this.device.queue.writeBuffer(normUniformBuffer, 0, new Uint32Array([seq_length, n_embd]));
 
     const passEncoder_stats = commandEncoder.beginComputePass();
     passEncoder_stats.setPipeline(this.statsPipeline);
     passEncoder_stats.setBindGroup(0, statsBindGroup);
-    passEncoder_stats.setBindGroup(1, createBindGroup(this.device, this.r_BindLayout, [inputBuffer]));
+    passEncoder_stats.setBindGroup(1, this.initBindGroup(this.r_Layout, [inputBuffer]));
     passEncoder_stats.dispatchWorkgroups(workgroupCalc(seq_length, workgroup_Y));
     passEncoder_stats.end();
 
     const passEncoder_norm = commandEncoder.beginComputePass();
     passEncoder_norm.setPipeline(this.normPipeline);
     passEncoder_norm.setBindGroup(0, normBindGroup);
-    passEncoder_norm.setBindGroup(1, createBindGroup(this.device, this.r_r_r_BindLayout, [inputBuffer, gammaBuffer, betaBuffer]));
-    passEncoder_norm.setBindGroup(2, createBindGroup(this.device, this.r_BindLayout, [statsResultBuffer]));
+    passEncoder_norm.setBindGroup(1, this.initBindGroup(this.r_r_r_Layout, [inputBuffer, gammaBuffer, betaBuffer]));
+    passEncoder_norm.setBindGroup(2, this.initBindGroup(this.r_Layout, [statsResultBuffer]));
     passEncoder_norm.dispatchWorkgroups(workgroupCalc(seq_length, workgroup_Y), workgroupCalc(n_embd, workgroup_X));
     passEncoder_norm.end();
 
@@ -430,7 +430,7 @@ class GPT {
   ) {
     const geluUniformBuffer = this.initBuffer(["uniform", "copy_to"], 4);
     const geluResultBuffer = this.initBuffer(["storage", "copy_from"], seq_length, hidden_size);
-    const geluBindGroup = createBindGroup(this.device, this.u_s_BindLayout, [geluUniformBuffer, geluResultBuffer]);
+    const geluBindGroup = this.initBindGroup(this.u_s_Layout, [geluUniformBuffer, geluResultBuffer]);
     this.device.queue.writeBuffer(geluUniformBuffer, 0, new Uint32Array([seq_length, hidden_size]));
 
     const firstLayerMatMulBuffer = this.inlineFastMatMul(commandEncoder, inputBuffer, firstLayerWeightsBuffer, seq_length, hidden_size, n_embed);
@@ -439,7 +439,7 @@ class GPT {
     const passEncoder_gelu = commandEncoder.beginComputePass();
     passEncoder_gelu.setPipeline(this.GELUpipeline);
     passEncoder_gelu.setBindGroup(0, geluBindGroup);
-    passEncoder_gelu.setBindGroup(1, createBindGroup(this.device, this.r_BindLayout, [firstLayerResultBuffer]));
+    passEncoder_gelu.setBindGroup(1, this.initBindGroup(this.r_Layout, [firstLayerResultBuffer]));
     passEncoder_gelu.dispatchWorkgroups(workgroupCalc(seq_length, workgroup_Y), workgroupCalc(hidden_size, workgroup_X));
     passEncoder_gelu.end();
 
@@ -454,13 +454,13 @@ class GPT {
 
     const uniformBuffer = this.initBuffer(["uniform", "copy_to"], 4);
     const resultBuffer = this.initBuffer(["storage", "copy_from"], rows, cols);
-    const bindGroup = createBindGroup(this.device, this.u_s_BindLayout, [uniformBuffer, resultBuffer]);
+    const bindGroup = this.initBindGroup(this.u_s_Layout, [uniformBuffer, resultBuffer]);
     this.device.queue.writeBuffer(uniformBuffer, 0, new Uint32Array([rows, cols, cols / 4]));
 
     const passEncoder = commandEncoder.beginComputePass();
     passEncoder.setPipeline(this.fastRowAddPipeline);
     passEncoder.setBindGroup(0, bindGroup);
-    passEncoder.setBindGroup(1, createBindGroup(this.device, this.r_r_BindLayout, [inputBuffer, biasBuffer]));
+    passEncoder.setBindGroup(1, this.initBindGroup(this.r_r_Layout, [inputBuffer, biasBuffer]));
     passEncoder.dispatchWorkgroups(workgroupCalc(rows, 8), workgroupCalc(cols, 32));
     passEncoder.end();
 
@@ -483,33 +483,28 @@ class GPT {
     const splitQResultBuffer = this.initBuffer(["storage", "copy_from"], seq_length, n_embd);
     const splitKResultBuffer = this.initBuffer(["storage", "copy_from"], seq_length, n_embd);
     const splitVResultBuffer = this.initBuffer(["storage", "copy_from"], seq_length, n_embd);
-    const splitQKVBindGroup = createBindGroup(this.device, this.u_s_s_s_BindLayout, [
-      splitQKVUniformBuffer,
-      splitQResultBuffer,
-      splitKResultBuffer,
-      splitVResultBuffer,
-    ]);
+    const splitQKVBindGroup = this.initBindGroup(this.u_s_s_s_Layout, [splitQKVUniformBuffer, splitQResultBuffer, splitKResultBuffer, splitVResultBuffer]);
     this.device.queue.writeBuffer(splitQKVUniformBuffer, 0, new Uint32Array([seq_length, n_embd]));
 
     const attentionWeightsUniformBuffer = this.initBuffer(["uniform", "copy_to"], 4);
     const attentionWeightsResultBuffer = this.initBuffer(["storage", "copy_from"], seq_length, seq_length * n_head);
-    const attentionWeightsBindGroup = createBindGroup(this.device, this.u_s_BindLayout, [attentionWeightsUniformBuffer, attentionWeightsResultBuffer]);
+    const attentionWeightsBindGroup = this.initBindGroup(this.u_s_Layout, [attentionWeightsUniformBuffer, attentionWeightsResultBuffer]);
     this.device.queue.writeBuffer(attentionWeightsUniformBuffer, 0, new Uint32Array([seq_length, seq_length * n_head, n_embd / n_head, n_embd]));
 
     const multiplyUniformBuffer = this.initBuffer(["uniform", "copy_to"], 4);
     const multiplyResultBuffer = this.initBuffer(["storage", "copy_from"], seq_length, seq_length * n_head);
-    const multiplyBindGroup = createBindGroup(this.device, this.u_s_BindLayout, [multiplyUniformBuffer, multiplyResultBuffer]);
+    const multiplyBindGroup = this.initBindGroup(this.u_s_Layout, [multiplyUniformBuffer, multiplyResultBuffer]);
     this.device.queue.writeBuffer(multiplyUniformBuffer, 0, new Uint32Array([seq_length, seq_length * n_head]));
     this.device.queue.writeBuffer(multiplyUniformBuffer, 8, new Float32Array([attentionDotProductScale]));
 
     const causalMaskUniformBuffer = this.initBuffer(["uniform", "copy_to"], 4);
     const causalMaskResultBuffer = this.initBuffer(["storage", "copy_from"], seq_length, seq_length * n_head);
-    const causalMaskBindGroup = createBindGroup(this.device, this.u_s_BindLayout, [causalMaskUniformBuffer, causalMaskResultBuffer]);
+    const causalMaskBindGroup = this.initBindGroup(this.u_s_Layout, [causalMaskUniformBuffer, causalMaskResultBuffer]);
     this.device.queue.writeBuffer(causalMaskUniformBuffer, 0, new Uint32Array([seq_length * n_head, seq_length])); // Transposes! This is needed for softmax.
 
     const attentionValuesUniformBuffer = this.initBuffer(["uniform", "copy_to"], 4);
     const attentionValuesResultBuffer = this.initBuffer(["storage", "copy_from"], seq_length, n_embd);
-    const attentionValuesBindGroup = createBindGroup(this.device, this.u_s_BindLayout, [attentionValuesUniformBuffer, attentionValuesResultBuffer]);
+    const attentionValuesBindGroup = this.initBindGroup(this.u_s_Layout, [attentionValuesUniformBuffer, attentionValuesResultBuffer]);
     this.device.queue.writeBuffer(attentionValuesUniformBuffer, 0, new Uint32Array([seq_length, n_embd, n_head, n_embd / n_head]));
 
     const qkvMatmulBuffer = this.inlineFastMatMul(commandEncoder, inputBuffer, qkvWeightsBuffer, seq_length, 3 * n_embd, n_embd);
@@ -518,28 +513,28 @@ class GPT {
     const passEncoder_splitQKV = commandEncoder.beginComputePass();
     passEncoder_splitQKV.setPipeline(this.splitQKVpipeline);
     passEncoder_splitQKV.setBindGroup(0, splitQKVBindGroup);
-    passEncoder_splitQKV.setBindGroup(1, createBindGroup(this.device, this.r_BindLayout, [qkvResultBuffer]));
+    passEncoder_splitQKV.setBindGroup(1, this.initBindGroup(this.r_Layout, [qkvResultBuffer]));
     passEncoder_splitQKV.dispatchWorkgroups(workgroupCalc(seq_length, workgroup_Y), workgroupCalc(n_embd, workgroup_X));
     passEncoder_splitQKV.end();
 
     const passEncoder_attentionWeights = commandEncoder.beginComputePass();
     passEncoder_attentionWeights.setPipeline(this.attentionWeightsPipeline);
     passEncoder_attentionWeights.setBindGroup(0, attentionWeightsBindGroup);
-    passEncoder_attentionWeights.setBindGroup(1, createBindGroup(this.device, this.r_r_BindLayout, [splitQResultBuffer, splitKResultBuffer]));
+    passEncoder_attentionWeights.setBindGroup(1, this.initBindGroup(this.r_r_Layout, [splitQResultBuffer, splitKResultBuffer]));
     passEncoder_attentionWeights.dispatchWorkgroups(workgroupCalc(seq_length, workgroup_Y), workgroupCalc(seq_length * n_head, workgroup_X));
     passEncoder_attentionWeights.end();
 
     const passEncoder_multiply = commandEncoder.beginComputePass();
     passEncoder_multiply.setPipeline(this.multiplyPipeline);
     passEncoder_multiply.setBindGroup(0, multiplyBindGroup);
-    passEncoder_multiply.setBindGroup(1, createBindGroup(this.device, this.r_BindLayout, [attentionWeightsResultBuffer]));
+    passEncoder_multiply.setBindGroup(1, this.initBindGroup(this.r_Layout, [attentionWeightsResultBuffer]));
     passEncoder_multiply.dispatchWorkgroups(workgroupCalc(seq_length, workgroup_Y), workgroupCalc(seq_length * n_head, workgroup_X));
     passEncoder_multiply.end();
 
     const passEncoder_causalMask = commandEncoder.beginComputePass();
     passEncoder_causalMask.setPipeline(this.causalMaskPipeline);
     passEncoder_causalMask.setBindGroup(0, causalMaskBindGroup);
-    passEncoder_causalMask.setBindGroup(1, createBindGroup(this.device, this.r_BindLayout, [multiplyResultBuffer]));
+    passEncoder_causalMask.setBindGroup(1, this.initBindGroup(this.r_Layout, [multiplyResultBuffer]));
     passEncoder_causalMask.dispatchWorkgroups(workgroupCalc(seq_length * n_head, workgroup_Y), workgroupCalc(seq_length, workgroup_X));
     passEncoder_causalMask.end();
 
@@ -548,7 +543,7 @@ class GPT {
     const passEncoder_attentionValues = commandEncoder.beginComputePass();
     passEncoder_attentionValues.setPipeline(this.attentionValuesPipeline);
     passEncoder_attentionValues.setBindGroup(0, attentionValuesBindGroup);
-    passEncoder_attentionValues.setBindGroup(1, createBindGroup(this.device, this.r_r_BindLayout, [softmaxOutputBuffer, splitVResultBuffer]));
+    passEncoder_attentionValues.setBindGroup(1, this.initBindGroup(this.r_r_Layout, [softmaxOutputBuffer, splitVResultBuffer]));
     passEncoder_attentionValues.dispatchWorkgroups(workgroupCalc(seq_length, workgroup_Y), workgroupCalc(n_embd, workgroup_X));
     passEncoder_attentionValues.end();
 
@@ -558,14 +553,25 @@ class GPT {
     return linearResultBuffer;
   }
 
+  initBindGroup(layout, buffers) {
+    return this.device.createBindGroup({
+      layout,
+      entries: buffers.map((buffer, i) => ({
+        binding: i,
+        resource: { buffer },
+      })),
+    });
+  }
+
   initBuffer(ops, row, col = 1) {
-    const usage = ops.map((u) => bufferUsageDict[u]).reduce((a, b) => a | b);
-    return createBuffer(this.device, this.bufferSize(row, col), usage);
+    return this.device.createBuffer({
+      size: this.bufferSize(row, col),
+      usage: ops.map((u) => bufferUsageDict[u]).reduce((a, b) => a | b),
+    });
   }
 
   initTensor(data, sizeA, sizeB, ops) {
-    const usage = ops.map((u) => bufferUsageDict[u]).reduce((a, b) => a | b) | GPUBufferUsage.COPY_DST;
-    const buffer = createBuffer(this.device, this.bufferSize(sizeA, sizeB), usage);
+    const buffer = this.initBuffer([...ops, "copy_to"], sizeA, sizeB);
     this.device.queue.writeBuffer(buffer, 0, data);
     return buffer;
   }
@@ -575,31 +581,50 @@ class GPT {
   }
 
   initBindGroups() {
-    this.r_r_r_BindLayout = createBindGroupLayout(this.device, ["read-only-storage", "read-only-storage", "read-only-storage"]);
-    this.r_r_BindLayout = createBindGroupLayout(this.device, ["read-only-storage", "read-only-storage"]);
-    this.r_BindLayout = createBindGroupLayout(this.device, ["read-only-storage"]);
-    this.u_s_BindLayout = createBindGroupLayout(this.device, ["uniform", "storage"]);
-    this.u_s_s_s_BindLayout = createBindGroupLayout(this.device, ["uniform", "storage", "storage", "storage"]);
+    const bg = (types) =>
+      this.device.createBindGroupLayout({
+        entries: types.map((entry, i) => ({
+          binding: i,
+          visibility: GPUShaderStage.COMPUTE,
+          buffer: { type: entry },
+        })),
+      });
+
+    this.r_r_r_Layout = bg(["read-only-storage", "read-only-storage", "read-only-storage"]);
+    this.r_r_Layout = bg(["read-only-storage", "read-only-storage"]);
+    this.r_Layout = bg(["read-only-storage"]);
+    this.u_s_Layout = bg(["uniform", "storage"]);
+    this.u_s_s_s_Layout = bg(["uniform", "storage", "storage", "storage"]);
   }
 
   initPipelines() {
-    this.statsPipeline = createPipeline(this.device, normStatsShader, [this.u_s_BindLayout, this.r_BindLayout]);
-    this.normPipeline = createPipeline(this.device, normShader, [this.u_s_BindLayout, this.r_r_r_BindLayout, this.r_BindLayout]);
-    this.GELUpipeline = createPipeline(this.device, GELUShader, [this.u_s_BindLayout, this.r_BindLayout]);
-    this.splitQKVpipeline = createPipeline(this.device, splitQKVShader, [this.u_s_s_s_BindLayout, this.r_BindLayout]);
-    this.attentionWeightsPipeline = createPipeline(this.device, attentionWeightsShader, [this.u_s_BindLayout, this.r_r_BindLayout]);
-    this.attentionValuesPipeline = createPipeline(this.device, attentionValuesShader, [this.u_s_BindLayout, this.r_r_BindLayout]);
-    this.multiplyPipeline = createPipeline(this.device, multiplyShader, [this.u_s_BindLayout, this.r_BindLayout]);
-    this.causalMaskPipeline = createPipeline(this.device, causalMaskShader, [this.u_s_BindLayout, this.r_BindLayout]);
-    this.matmulPipeline = createPipeline(this.device, matMulShader, [this.u_s_BindLayout, this.r_r_BindLayout]);
-    this.elementAddPipeline = createPipeline(this.device, elementWiseAdditionShader, [this.u_s_BindLayout, this.r_BindLayout, this.r_BindLayout]);
-    this.maskedMaxPipeline = createPipeline(this.device, maskedNegMaxShader, [this.u_s_BindLayout, this.r_BindLayout]);
-    this.addPipeline = createPipeline(this.device, addShader, [this.u_s_BindLayout, this.r_BindLayout, this.r_BindLayout]);
-    this.addExpPipeline = createPipeline(this.device, addExpShader, [this.u_s_BindLayout, this.r_BindLayout, this.r_BindLayout]);
-    this.sumPipeline = createPipeline(this.device, sumShader, [this.u_s_BindLayout, this.r_BindLayout]);
-    this.dividePipeline = createPipeline(this.device, divideShader, [this.u_s_BindLayout, this.r_BindLayout, this.r_BindLayout]);
-    this.transposePipeline = createPipeline(this.device, transposeShader, [this.u_s_BindLayout, this.r_BindLayout]);
-    this.fastMatMulPipeline = createPipeline(this.device, fastMatMulShader, [this.u_s_BindLayout, this.r_r_BindLayout]);
-    this.fastRowAddPipeline = createPipeline(this.device, fastRowAddShader, [this.u_s_BindLayout, this.r_r_BindLayout]);
+    const p = (code, bindGroupLayouts) => {
+      return this.device.createComputePipeline({
+        layout: this.device.createPipelineLayout({ bindGroupLayouts }),
+        compute: {
+          module: this.device.createShaderModule({ code }),
+          entryPoint: "main",
+        },
+      });
+    };
+
+    this.statsPipeline = p(normStatsShader, [this.u_s_Layout, this.r_Layout]);
+    this.normPipeline = p(normShader, [this.u_s_Layout, this.r_r_r_Layout, this.r_Layout]);
+    this.GELUpipeline = p(GELUShader, [this.u_s_Layout, this.r_Layout]);
+    this.splitQKVpipeline = p(splitQKVShader, [this.u_s_s_s_Layout, this.r_Layout]);
+    this.attentionWeightsPipeline = p(attentionWeightsShader, [this.u_s_Layout, this.r_r_Layout]);
+    this.attentionValuesPipeline = p(attentionValuesShader, [this.u_s_Layout, this.r_r_Layout]);
+    this.multiplyPipeline = p(multiplyShader, [this.u_s_Layout, this.r_Layout]);
+    this.causalMaskPipeline = p(causalMaskShader, [this.u_s_Layout, this.r_Layout]);
+    this.matmulPipeline = p(matMulShader, [this.u_s_Layout, this.r_r_Layout]);
+    this.elementAddPipeline = p(elementWiseAdditionShader, [this.u_s_Layout, this.r_Layout, this.r_Layout]);
+    this.maskedMaxPipeline = p(maskedNegMaxShader, [this.u_s_Layout, this.r_Layout]);
+    this.addPipeline = p(addShader, [this.u_s_Layout, this.r_Layout, this.r_Layout]);
+    this.addExpPipeline = p(addExpShader, [this.u_s_Layout, this.r_Layout, this.r_Layout]);
+    this.sumPipeline = p(sumShader, [this.u_s_Layout, this.r_Layout]);
+    this.dividePipeline = p(divideShader, [this.u_s_Layout, this.r_Layout, this.r_Layout]);
+    this.transposePipeline = p(transposeShader, [this.u_s_Layout, this.r_Layout]);
+    this.fastMatMulPipeline = p(fastMatMulShader, [this.u_s_Layout, this.r_r_Layout]);
+    this.fastRowAddPipeline = p(fastRowAddShader, [this.u_s_Layout, this.r_r_Layout]);
   }
 }
