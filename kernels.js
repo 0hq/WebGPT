@@ -723,4 +723,4 @@ const GELUShader = `
 
       Result.data[row * dimX + col] = gelu(Input.data[row * dimX + col]);
     }
-  `;
+`;

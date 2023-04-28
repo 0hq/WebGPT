@@ -60,12 +60,6 @@ function transpose(array, input_rows, input_cols) {
   return new Float32Array(transpose);
 }
 
-function flattenEmbeddings(embeddings, n_embd, seq_length) {
-  const flattened = new Float32Array(n_embd * seq_length);
-  for (const [i, v] of embeddings.entries()) flattened.set(v, n_embd * i);
-  return flattened;
-}
-
 function leastPrimeFactor(n, start = 2) {
   for (let i = start; i <= Math.sqrt(n); i++) {
     if (n % i === 0) return i;

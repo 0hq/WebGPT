@@ -1,5 +1,5 @@
 class GPT {
-  constructor(folder, type) {
+  constructor(folder, type, doAttentionCache = true) {
     this.folder = folder;
     this.tokenizerType = type;
     this.initialized = false;
@@ -9,7 +9,7 @@ class GPT {
     this.tokenizer;
     this.params;
     this.minBufferOffset = 1;
-    this.doAttentionCache = true;
+    this.doAttentionCache = doAttentionCache;
 
     this.defaultPrompt;
     this.defaultTopK;
@@ -644,6 +644,7 @@ class GPT {
     linearBiasBuffer,
     attentionCacheBuffer
   ) {
+    // This can also be cached, unknown how much of a speedup it would be.
     const splitQKVUniformBuffer = this.initBuffer(["uniform", "copy_to"], 4);
     const splitQResultBuffer = this.initBuffer(["storage", "copy_from"], seq_length, n_embd);
     const splitKResultBuffer = this.initBuffer(["storage", "copy_from"], seq_length, n_embd);
@@ -819,13 +820,24 @@ class GPT {
   }
 }
 
+// const stream = GPTModel.generate(prompt, tokens, 1, 1);
+// for await (const _ of stream);
+
 const test = async () => {
-  const GPTModel = new GPT("better_shakespeare", "char");
+  const prompt = `The following is a conversation with an AI assistant. The assistant is helpful, creative, clever, and very friendly.\n
+  Human: Hello, who are you?\n
+  AI: I am an AI created by OpenAI. How can I help you today?\n`;
+  const tokens = 15;
+  const runs = 5;
+  const retries = 3;
+
+  const GPTModel = new GPT("gpt2", "bpe", true);
   await GPTModel.initialize();
 
-  const prompt = `WILL:\n`;
-  const tokens = 2;
+  await GPTModel.profile(prompt, tokens, runs, retries);
 
-  const stream = GPTModel.generate(prompt, tokens, 1, 1);
-  for await (const _ of stream);
+  const GPTModel2 = new GPT("gpt2", "bpe", false);
+  await GPTModel2.initialize();
+
+  await GPTModel2.profile(prompt, tokens, runs, retries);
 };
