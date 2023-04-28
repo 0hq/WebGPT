@@ -1,17 +1,29 @@
 class GPT {
-  constructor(folder, type) {
+  constructor(folder, type, doAttentionCache = false) {
     this.folder = folder;
     this.tokenizerType = type;
     this.initialized = false;
 
-    this.device = null;
-    this.model = null;
-    this.tokenizer = null;
-    this.params = null;
-    this.doFastMatMul = false;
-    this.minStorageBufferOffsetAlignment = 1;
+    this.device;
+    this.model;
+    this.tokenizer;
+    this.params;
+    this.minBufferOffset = 1;
+    this.doAttentionCache = doAttentionCache;
+
+    this.defaultPrompt;
+    this.defaultTopK;
+    this.defaultTemperature;
+    this.defaultTokens;
 
     this.bufferDeletionStack = [];
+    this.unloadDeletionStack = [];
+  }
+
+  unload() {
+    for (let i = 0; i < this.unloadDeletionStack.length; i++) {
+      this.unloadDeletionStack[i].destroy();
+    }
   }
 
   async initialize() {
@@ -32,7 +44,21 @@ class GPT {
       throw new Error("Model incompatible. n_embd and n_head must be divisible by 4 for fast matmul.");
     }
 
+    if (this.folder == "gpt2") {
+      this.defaultPrompt = `What is the answer to life, the universe, and everything?\n`;
+      this.defaultTopK = 3;
+      this.defaultTemperature = 1;
+      this.defaultTokens = 30;
+    } else {
+      this.defaultPrompt = `WILL:\nAh, how dare you challenge me?\nHave you forgotten I built WebGPT?\n`;
+      this.defaultTopK = 1;
+      this.defaultTemperature = 1;
+      this.defaultTokens = 10;
+    }
+
     this.initialized = true;
+
+    console.log("Model initialized");
   }
 
   async loadModel(folder) {
@@ -60,30 +86,26 @@ class GPT {
 
     const layer_buffers = [];
     for (let i = 0; i < n_layer; i++) {
-      console.log("Loading layer", i);
+      console.log("Loading layer...", i);
       const prefix = `${fldr}transformer.h.${i}.`;
 
-      console.log("\tLoading attention layer norm...");
       const normAttentionGamma = await fetchBin(`${prefix}ln_1.weight_gpt.bin`);
       const normAttentionBeta = bias ? await fetchBin(`${prefix}ln_1.bias_gpt.bin`) : zeros(n_embd);
 
-      console.log("\tLoading qkv transform...");
       const qkvWeights = transpose(await fetchBin(`${prefix}attn.c_attn.weight_gpt.bin`), 3 * n_embd, n_embd);
       const qkvBias = bias ? await fetchBin(`${prefix}attn.c_attn.bias_gpt.bin`) : zeros(3 * n_embd);
 
-      console.log("\tLoading attention c_proj...");
       const linearWeights = transpose(await fetchBin(`${prefix}attn.c_proj.weight_gpt.bin`), n_embd, n_embd);
       const linearBias = bias ? await fetchBin(`${prefix}attn.c_proj.bias_gpt.bin`) : zeros(n_embd);
 
-      console.log("\tLoading MLP layer norm...");
+      const attentionCache = zeros(block_size * n_head * block_size);
+
       const normLinearGamma = await fetchBin(`${prefix}ln_2.weight_gpt.bin`);
       const normLinearBeta = bias ? await fetchBin(`${prefix}ln_2.bias_gpt.bin`) : zeros(n_embd);
 
-      console.log("\tLoading MLP first layer...");
       const firstLayerWeights = transpose(await fetchBin(`${prefix}mlp.c_fc.weight_gpt.bin`), hidden_size, n_embd);
       const firstLayerBias = bias ? await fetchBin(`${prefix}mlp.c_fc.bias_gpt.bin`) : zeros(hidden_size);
 
-      console.log("\tLoading MLP second layer...");
       const secondLayerWeights = transpose(await fetchBin(`${prefix}mlp.c_proj.weight_gpt.bin`), n_embd, hidden_size);
       const secondLayerBias = bias ? await fetchBin(`${prefix}mlp.c_proj.bias_gpt.bin`) : zeros(n_embd);
 
@@ -100,6 +122,7 @@ class GPT {
         firstLayerBiasBuffer: this.initTensor(firstLayerBias, hidden_size, 1, ["storage"]),
         secondLayerWeightsBuffer: this.initTensor(secondLayerWeights, hidden_size, n_embd, ["storage"]),
         secondLayerBiasBuffer: this.initTensor(secondLayerBias, n_embd, 1, ["storage"]),
+        attentionCacheBuffer: this.initTensor(attentionCache, block_size * n_head, block_size, ["storage", "copy_from"]),
       });
     }
 
@@ -117,6 +140,8 @@ class GPT {
   async profile(prompt, tokens, runs, retries) {
     if (!this.initialized) return console.error("Model not loaded yet");
 
+    console.log("Profiling model at prompt length", this.tokenizer.encode(prompt).length);
+
     let avgRetryTime = 0;
     for (let t = 0; t < retries; t++) {
       let avgRunTime = 0;
@@ -124,10 +149,11 @@ class GPT {
         let history = this.tokenizer.encode(prompt);
         let totalTime = 0;
         for (let i = 0; i < tokens; i++) {
+          const useAttCache = i !== 0 && history.length <= this.params.block_size && this.doAttentionCache;
           const idx_cond = history.slice(-this.params.block_size);
 
           const startTime = performance.now();
-          const logits = await this.run(idx_cond);
+          const logits = await this.run(idx_cond, useAttCache);
           const endTime = performance.now();
 
           totalTime += endTime - startTime;
@@ -148,25 +174,28 @@ class GPT {
     console.log(`Average kernel execution time over ${retries} retries: ${avgRetryTime / retries} ms`);
   }
 
-  async *generate(prompt, max_new_tokens, top_k = 10, temperature = 1.0) {
+  async *generate(prompt, max_new_tokens, top_k, temperature) {
     if (!this.initialized) {
       console.error("Model not loaded yet");
       return;
     }
 
-    console.log("Starting generation with prompt", prompt);
     let history = this.tokenizer.encode(prompt);
+    console.log(`Prompt (${history.length} tokens):\n${prompt}`);
 
     let totalTime = 0;
 
     for (let i = 0; i < max_new_tokens; i++) {
       const idx_cond = history.slice(-this.params.block_size);
+      const useAttCache = i !== 0 && history.length <= this.params.block_size && this.doAttentionCache;
 
       const startTime = performance.now();
-      const logits = await this.run(idx_cond);
+      const logits = await this.run(idx_cond, useAttCache);
       const endTime = performance.now();
 
-      console.log(`(Loop ${i}) Kernel execution time: ${endTime - startTime} ms`);
+      console.log(`\nIteration ${i + 1} of ${max_new_tokens}`);
+      console.log(`Using attention cache? ${useAttCache}`);
+      console.log(`Kernel execution time: ${endTime - startTime} ms`);
       totalTime += endTime - startTime;
 
       const { topKIndices, topKProbs } = selectTopK(logits, top_k);
@@ -183,9 +212,9 @@ class GPT {
     console.log(`Average kernel execution time: ${totalTime / max_new_tokens} ms`);
   }
 
-  async run(idx) {
+  async run(idx, useAttCache = false) {
     const { posEmbdBuffer, layer_buffers, normGammaBuffer, normBetaBuffer, embeddingWeightsBuffer } = this.model;
-    const { attentionDotProductScale, n_embd, n_head, n_layer, vocab_size, hidden_size } = this.params;
+    const { attentionDotProductScale, n_embd, n_head, n_layer, vocab_size, hidden_size, block_size } = this.params;
     const seq_length = idx.length;
 
     const commandEncoder = this.device.createCommandEncoder();
@@ -220,18 +249,35 @@ class GPT {
       );
 
       let attentionOutputBuffer;
-      attentionOutputBuffer = this.inlineFastAttention(
-        commandEncoder,
-        seq_length,
-        n_embd,
-        attentionDotProductScale,
-        layerNormAttentionOutputBuffer,
-        n_head,
-        buffers.qkvWeightsBuffer,
-        buffers.qkvBiasBuffer,
-        buffers.linearWeightsBuffer,
-        buffers.linearBiasBuffer
-      );
+      if (useAttCache) {
+        attentionOutputBuffer = this.inlineFastCachedAttention(
+          commandEncoder,
+          seq_length,
+          n_embd,
+          attentionDotProductScale,
+          layerNormAttentionOutputBuffer,
+          n_head,
+          buffers.qkvWeightsBuffer,
+          buffers.qkvBiasBuffer,
+          buffers.linearWeightsBuffer,
+          buffers.linearBiasBuffer,
+          buffers.attentionCacheBuffer
+        );
+      } else {
+        attentionOutputBuffer = this.inlineFastAttention(
+          commandEncoder,
+          seq_length,
+          n_embd,
+          attentionDotProductScale,
+          layerNormAttentionOutputBuffer,
+          n_head,
+          buffers.qkvWeightsBuffer,
+          buffers.qkvBiasBuffer,
+          buffers.linearWeightsBuffer,
+          buffers.linearBiasBuffer,
+          buffers.attentionCacheBuffer
+        );
+      }
 
       const residualAttentionOutputBuffer = this.inlineResidual(commandEncoder, seq_length, n_embd, attentionOutputBuffer, layerOutputBuffer);
 
@@ -267,7 +313,7 @@ class GPT {
     const slicedEmbedOutputBuffer = this.initBuffer(["storage", "copy_to"], 1, n_embd);
     commandEncoder.copyBufferToBuffer(layerNormOutputBuffer, this.bufferSize(seq_length - 1, n_embd), slicedEmbedOutputBuffer, 0, this.bufferSize(1, n_embd));
 
-    const deEmbedOutputBuffer = this.initBuffer(["map_read", "copy_to"], 1, vocab_size, true);
+    const deEmbedOutputBuffer = this.initBuffer(["map_read", "copy_to"], 1, vocab_size);
 
     // Assumes that vocab_size has a decent least prime factor.
     const maxStorageBufferSize = this.device.limits.maxStorageBufferBindingSize;
@@ -294,7 +340,7 @@ class GPT {
 
     await deEmbedOutputBuffer.mapAsync(GPUMapMode.READ);
     const output = deEmbedOutputBuffer.getMappedRange();
-    const outputArray = new Float32Array(output);
+    const outputArray = new Float32Array(output).slice(0); // Copy the array, otherwise it'll be destroyed.
 
     for (let i = 0; i < this.bufferDeletionStack.length; i++) {
       this.bufferDeletionStack[i].destroy();
@@ -508,7 +554,8 @@ class GPT {
     qkvWeightsBuffer,
     qkvBiasBuffer,
     linearWeightsBuffer,
-    linearBiasBuffer
+    linearBiasBuffer,
+    attentionCacheBuffer
   ) {
     const splitQKVUniformBuffer = this.initBuffer(["uniform", "copy_to"], 4);
     const splitQResultBuffer = this.initBuffer(["storage", "copy_from"], seq_length, n_embd);
@@ -517,10 +564,10 @@ class GPT {
     const splitQKVBindGroup = this.initBindGroup(this.u_s_s_s_Layout, [splitQKVUniformBuffer, splitQResultBuffer, splitKResultBuffer, splitVResultBuffer]);
     this.device.queue.writeBuffer(splitQKVUniformBuffer, 0, new Uint32Array([seq_length, n_embd]));
 
-    const attentionWeightsUniformBuffer = this.initBuffer(["uniform", "copy_to"], 4);
+    const attentionWeightsUniformBuffer = this.initBuffer(["uniform", "copy_to"], 8);
     const attentionWeightsResultBuffer = this.initBuffer(["storage", "copy_from"], seq_length, seq_length * n_head);
     const attentionWeightsBindGroup = this.initBindGroup(this.u_s_Layout, [attentionWeightsUniformBuffer, attentionWeightsResultBuffer]);
-    this.device.queue.writeBuffer(attentionWeightsUniformBuffer, 0, new Uint32Array([seq_length, seq_length * n_head, n_embd / n_head, n_embd]));
+    this.device.queue.writeBuffer(attentionWeightsUniformBuffer, 0, new Uint32Array([seq_length, seq_length * n_head, seq_length, n_embd / n_head, n_embd]));
 
     const multiplyUniformBuffer = this.initBuffer(["uniform", "copy_to"], 4);
     const multiplyResultBuffer = this.initBuffer(["storage", "copy_from"], seq_length, seq_length * n_head);
@@ -569,7 +616,116 @@ class GPT {
     passEncoder_causalMask.dispatchWorkgroups(wgSize(seq_length * n_head, 16), wgSize(seq_length, 16));
     passEncoder_causalMask.end();
 
+    // Save attention weights for next iteration's key value cache.
+    commandEncoder.copyBufferToBuffer(causalMaskResultBuffer, 0, attentionCacheBuffer, 0, this.bufferSize(seq_length * n_head, seq_length));
+
     const softmaxOutputBuffer = this.maskedInlineSoftmax(commandEncoder, seq_length * n_head, seq_length, causalMaskResultBuffer);
+
+    const passEncoder_attentionValues = commandEncoder.beginComputePass();
+    passEncoder_attentionValues.setPipeline(this.attentionValuesPipeline);
+    passEncoder_attentionValues.setBindGroup(0, attentionValuesBindGroup);
+    passEncoder_attentionValues.setBindGroup(1, this.initBindGroup(this.r_r_Layout, [softmaxOutputBuffer, splitVResultBuffer]));
+    passEncoder_attentionValues.dispatchWorkgroups(wgSize(seq_length, 16), wgSize(n_embd, 16));
+    passEncoder_attentionValues.end();
+
+    const linearMatmulBuffer = this.inlineFastMatMul(commandEncoder, attentionValuesResultBuffer, linearWeightsBuffer, seq_length, n_embd, n_embd);
+    const linearResultBuffer = this.inlineFastRowAdd(commandEncoder, linearMatmulBuffer, linearBiasBuffer, seq_length, n_embd);
+
+    return linearResultBuffer;
+  }
+
+  inlineFastCachedAttention(
+    commandEncoder,
+    seq_length,
+    n_embd,
+    attentionDotProductScale,
+    inputBuffer,
+    n_head,
+    qkvWeightsBuffer,
+    qkvBiasBuffer,
+    linearWeightsBuffer,
+    linearBiasBuffer,
+    attentionCacheBuffer
+  ) {
+    // This can also be cached, unknown how much of a speedup it would be.
+    const splitQKVUniformBuffer = this.initBuffer(["uniform", "copy_to"], 4);
+    const splitQResultBuffer = this.initBuffer(["storage", "copy_from"], seq_length, n_embd);
+    const splitKResultBuffer = this.initBuffer(["storage", "copy_from"], seq_length, n_embd);
+    const splitVResultBuffer = this.initBuffer(["storage", "copy_from"], seq_length, n_embd);
+    const splitQKVBindGroup = this.initBindGroup(this.u_s_s_s_Layout, [splitQKVUniformBuffer, splitQResultBuffer, splitKResultBuffer, splitVResultBuffer]);
+    this.device.queue.writeBuffer(splitQKVUniformBuffer, 0, new Uint32Array([seq_length, n_embd]));
+
+    const singleQResultBuffer = this.initBuffer(["storage", "copy_from", "copy_to"], n_embd);
+
+    const attentionWeightsUniformBuffer = this.initBuffer(["uniform", "copy_to"], 8);
+    const attentionWeightsResultBuffer = this.initBuffer(["storage", "copy_from"], 1, seq_length * n_head);
+    const attentionWeightsBindGroup = this.initBindGroup(this.u_s_Layout, [attentionWeightsUniformBuffer, attentionWeightsResultBuffer]);
+    this.device.queue.writeBuffer(attentionWeightsUniformBuffer, 0, new Uint32Array([1, seq_length * n_head, seq_length, n_embd / n_head, n_embd]));
+
+    const multiplyUniformBuffer = this.initBuffer(["uniform", "copy_to"], 4);
+    const multiplyResultBuffer = this.initBuffer(["storage", "copy_from"], 1, seq_length * n_head);
+    const multiplyBindGroup = this.initBindGroup(this.u_s_Layout, [multiplyUniformBuffer, multiplyResultBuffer]);
+    this.device.queue.writeBuffer(multiplyUniformBuffer, 0, new Uint32Array([1, seq_length * n_head]));
+    this.device.queue.writeBuffer(multiplyUniformBuffer, 8, new Float32Array([attentionDotProductScale]));
+
+    const causalMaskCachedResultBuffer = this.initBuffer(["storage", "copy_from", "copy_to"], seq_length * n_head, seq_length);
+
+    const attentionValuesUniformBuffer = this.initBuffer(["uniform", "copy_to"], 4);
+    const attentionValuesResultBuffer = this.initBuffer(["storage", "copy_from"], seq_length, n_embd);
+    const attentionValuesBindGroup = this.initBindGroup(this.u_s_Layout, [attentionValuesUniformBuffer, attentionValuesResultBuffer]);
+    this.device.queue.writeBuffer(attentionValuesUniformBuffer, 0, new Uint32Array([seq_length, n_embd, n_head, n_embd / n_head]));
+
+    const qkvMatmulBuffer = this.inlineFastMatMul(commandEncoder, inputBuffer, qkvWeightsBuffer, seq_length, 3 * n_embd, n_embd);
+    const qkvResultBuffer = this.inlineFastRowAdd(commandEncoder, qkvMatmulBuffer, qkvBiasBuffer, seq_length, 3 * n_embd);
+
+    const passEncoder_splitQKV = commandEncoder.beginComputePass();
+    passEncoder_splitQKV.setPipeline(this.splitQKVpipeline);
+    passEncoder_splitQKV.setBindGroup(0, splitQKVBindGroup);
+    passEncoder_splitQKV.setBindGroup(1, this.initBindGroup(this.r_Layout, [qkvResultBuffer]));
+    passEncoder_splitQKV.dispatchWorkgroups(wgSize(seq_length, 16), wgSize(n_embd, 16));
+    passEncoder_splitQKV.end();
+
+    commandEncoder.copyBufferToBuffer(splitQResultBuffer, this.bufferSize(n_embd) * (seq_length - 1), singleQResultBuffer, 0, this.bufferSize(n_embd));
+
+    const passEncoder_attentionWeights = commandEncoder.beginComputePass();
+    passEncoder_attentionWeights.setPipeline(this.attentionWeightsPipeline);
+    passEncoder_attentionWeights.setBindGroup(0, attentionWeightsBindGroup);
+    passEncoder_attentionWeights.setBindGroup(1, this.initBindGroup(this.r_r_Layout, [singleQResultBuffer, splitKResultBuffer]));
+    passEncoder_attentionWeights.dispatchWorkgroups(wgSize(1, 16), wgSize(seq_length * n_head, 16));
+    passEncoder_attentionWeights.end();
+
+    const passEncoder_multiply = commandEncoder.beginComputePass();
+    passEncoder_multiply.setPipeline(this.multiplyPipeline);
+    passEncoder_multiply.setBindGroup(0, multiplyBindGroup);
+    passEncoder_multiply.setBindGroup(1, this.initBindGroup(this.r_Layout, [attentionWeightsResultBuffer]));
+    passEncoder_multiply.dispatchWorkgroups(wgSize(1, 16), wgSize(seq_length * n_head, 16));
+    passEncoder_multiply.end();
+
+    for (let i = 0; i < n_head; i++) {
+      commandEncoder.copyBufferToBuffer(
+        multiplyResultBuffer,
+        this.bufferSize(seq_length) * i,
+        causalMaskCachedResultBuffer,
+        this.bufferSize(seq_length, seq_length) * (i + 1) - this.bufferSize(seq_length),
+        this.bufferSize(seq_length)
+      );
+    }
+    for (let i = 0; i < n_head; i++) {
+      for (let j = 0; j < seq_length - 1; j++) {
+        commandEncoder.copyBufferToBuffer(
+          attentionCacheBuffer,
+          this.bufferSize(seq_length - 1) * j + this.bufferSize(seq_length - 1, seq_length - 1) * i,
+          causalMaskCachedResultBuffer,
+          this.bufferSize(seq_length) * j + this.bufferSize(seq_length, seq_length) * i,
+          this.bufferSize(seq_length - 1)
+        );
+      }
+    }
+
+    // Save for next iteration.
+    commandEncoder.copyBufferToBuffer(causalMaskCachedResultBuffer, 0, attentionCacheBuffer, 0, this.bufferSize(seq_length * n_head, seq_length));
+
+    const softmaxOutputBuffer = this.maskedInlineSoftmax(commandEncoder, seq_length * n_head, seq_length, causalMaskCachedResultBuffer);
 
     const passEncoder_attentionValues = commandEncoder.beginComputePass();
     passEncoder_attentionValues.setPipeline(this.attentionValuesPipeline);
@@ -594,12 +750,22 @@ class GPT {
     });
   }
 
+  initOutputBuffer(commandEncoder, buffer, row, col) {
+    const outputBuffer = this.initBuffer(["map_read", "copy_to"], row, col);
+    commandEncoder.copyBufferToBuffer(buffer, 0, outputBuffer, 0, this.bufferSize(row, col));
+    return outputBuffer;
+  }
+
   initBuffer(ops, row, col = 1, noDelete = false) {
     const buffer = this.device.createBuffer({
       size: this.bufferSize(row, col),
       usage: ops.map((u) => bufferUsageDict[u]).reduce((a, b) => a | b),
     });
-    if (!noDelete) this.bufferDeletionStack.push(buffer);
+    if (!noDelete) {
+      this.bufferDeletionStack.push(buffer);
+    } else {
+      this.unloadDeletionStack.push(buffer);
+    }
     return buffer;
   }
 
@@ -610,7 +776,7 @@ class GPT {
   }
 
   bufferSize(dimA, dimB = 1) {
-    return alignedSize(dimA * dimB * Float32Array.BYTES_PER_ELEMENT, this.minStorageBufferOffsetAlignment);
+    return Math.ceil((dimA * dimB * Float32Array.BYTES_PER_ELEMENT) / this.minBufferOffset) * this.minBufferOffset;
   }
 
   initBindGroups() {
@@ -648,11 +814,10 @@ class GPT {
     this.attentionWeightsPipeline = p(attentionWeightsShader, [this.u_s_Layout, this.r_r_Layout]);
     this.attentionValuesPipeline = p(attentionValuesShader, [this.u_s_Layout, this.r_r_Layout]);
     this.multiplyPipeline = p(multiplyShader, [this.u_s_Layout, this.r_Layout]);
-    this.causalMaskPipeline = p(causalMaskShader, [this.u_s_Layout, this.r_Layout]);
+    this.causalMaskPipeline = p(simpleCausalMaskShader, [this.u_s_Layout, this.r_Layout]);
     this.matmulPipeline = p(matMulShader, [this.u_s_Layout, this.r_r_Layout]);
     this.elementAddPipeline = p(elementWiseAdditionShader, [this.u_s_Layout, this.r_Layout, this.r_Layout]);
     this.maskedMaxPipeline = p(maskedNegMaxShader, [this.u_s_Layout, this.r_Layout]);
-    this.addPipeline = p(addShader, [this.u_s_Layout, this.r_Layout, this.r_Layout]);
     this.addExpPipeline = p(addExpShader, [this.u_s_Layout, this.r_Layout, this.r_Layout]);
     this.sumPipeline = p(sumShader, [this.u_s_Layout, this.r_Layout]);
     this.dividePipeline = p(divideShader, [this.u_s_Layout, this.r_Layout, this.r_Layout]);
@@ -662,9 +827,29 @@ class GPT {
   }
 }
 
-// (async () => {
-//   const GPTModel = new GPT("gpt2", "bpe");
-//   await GPTModel.initialize();
-//   const prompt = "Hello, my name is";
-//   await GPTModel.profile(prompt, 10, 5, 3);
-// })();
+// const stream = GPTModel.generate(prompt, tokens, 1, 1);
+// for await (const _ of stream);
+
+const test = async () => {
+  const prompt = `The following is a conversation with an AI assistant. The assistant is helpful, creative, clever, and very friendly.\n
+  Human: Hello, who are you?\nThe following is a conversation with an AI assistant. The assistant is helpful, creative, clever, and very friendly.\n
+  Human: Hello, who are you?\nThe following is a conversation with an AI assistant. The assistant is helpful, creative, clever, and very friendly.\n
+  Human: Hello, who are you?\nThe following is a conversation with an AI assistant. The assistant is helpful, creative, clever, and very friendly.\n
+  Human: Hello, who are you?\nThe following is a conversation with an AI assistant. The assistant is helpful, creative, clever, and very friendly.\n
+  Human: Hello, who are you?\n`;
+  const tokens = 15;
+  const runs = 5;
+  const retries = 3;
+
+  const GPTModel2 = new GPT("gpt2", "bpe", false);
+  await GPTModel2.initialize();
+
+  await GPTModel2.profile(prompt, tokens, runs, retries);
+  GPTModel2.unload();
+
+  const GPTModel = new GPT("gpt2", "bpe", true);
+  await GPTModel.initialize();
+
+  await GPTModel.profile(prompt, tokens, runs, retries);
+  GPTModel.unload();
+};
