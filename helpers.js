@@ -105,7 +105,7 @@ function selectTopK(probs, top_k) {
 
 // ----------------------- Matrix Operations -----------------------
 
-function transposeArray(array, input_rows, input_cols) {
+function transpose(array, input_rows, input_cols) {
   if (array.length !== input_rows * input_cols) {
     console.error("Transpose dims failed, not transposing!");
     // return array;
@@ -159,7 +159,14 @@ function formatAsMatrix(floatArray, dimA, dimB) {
   return resultMatrix;
 }
 
-async function loadBinaryFile(url) {
+const bufferUsageDict = {
+  copy_from: GPUBufferUsage.COPY_SRC,
+  copy_to: GPUBufferUsage.COPY_DST,
+  storage: GPUBufferUsage.STORAGE,
+  uniform: GPUBufferUsage.UNIFORM,
+};
+
+async function fetchBin(url) {
   const response = await fetch(url);
   const buffer = await response.arrayBuffer();
   return new Float32Array(buffer);

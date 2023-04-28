@@ -44,115 +44,80 @@ class GPT {
   }
 
   async loadModel(folder) {
-    if (this.initialized) {
-      console.error("Model already loaded");
-      return;
-    }
-
-    // Should be this.device.limits.minStorageBufferOffsetAlignment once bug is fixed.
+    if (this.initialized) return console.error("Model already loaded");
 
     console.log("Loading model from folder:", folder);
-    const params = await (await fetch(`models/${folder}/params_gpt.json`)).json();
-    const { block_size, n_embd, n_head, n_layer, bias, vocab_size } = params;
-    params.hidden_size = n_embd * 4;
-    params.attentionDotProductScale = 1 / Math.sqrt(n_embd / n_head);
-    const { hidden_size } = params;
+    const fldr = `models/${folder}/`;
+    const zeros = (dim) => new Float32Array(dim).fill(0);
+
+    const params = await (await fetch(`${fldr}/params_gpt.json`)).json();
+    params.hidden_size = params.n_embd * 4;
+    params.attentionDotProductScale = 1 / Math.sqrt(params.n_embd / params.n_head);
+    const { block_size, n_embd, n_head, n_layer, bias, vocab_size, hidden_size } = params;
     console.log("Params:", params);
 
     if (n_embd % n_head != 0) throw new Error("Model load failed: n_embd must be divisible by n_head.");
 
     console.log("Loading token embeddings...");
-    const embeddingWeights = await loadBinaryFile("models/" + folder + "/transformer.wte.weight_gpt.bin");
-    const embeddingWeightsBuffer = createBuffer(this.device, this.bufferSizeCalc(vocab_size, n_embd), GPUBufferUsage.COPY_DST | GPUBufferUsage.COPY_SRC);
-    this.device.queue.writeBuffer(embeddingWeightsBuffer, 0, embeddingWeights);
+    const embeddingWeights = await fetchBin(`${fldr}/transformer.wte.weight_gpt.bin`);
+    const embeddingWeightsBuffer = this.initializeTensor(embeddingWeights, vocab_size, n_embd, ["copy_from"]);
 
     console.log("Loading positional embeddings...");
-    const posEmbeddings = await loadBinaryFile("models/" + folder + "/transformer.wpe.weight_gpt.bin");
-    const posEmbdBuffer = createBuffer(this.device, this.bufferSizeCalc(block_size, n_embd), GPUBufferUsage.COPY_DST | GPUBufferUsage.COPY_SRC);
-    this.device.queue.writeBuffer(posEmbdBuffer, 0, posEmbeddings);
+    const posEmbeddings = await fetchBin(`${fldr}/transformer.wpe.weight_gpt.bin`);
+    const posEmbdBuffer = this.initializeTensor(posEmbeddings, block_size, n_embd, ["copy_from"]);
 
     const layer_buffers = [];
     for (let i = 0; i < n_layer; i++) {
       console.log("Loading layer", i);
-      const prefix = `transformer.h.${i}.`;
+      const prefix = `${fldr}transformer.h.${i}.`;
 
       console.log("\tLoading attention layer norm...");
-      const normAttentionGammaBuffer = createBuffer(this.device, this.bufferSizeCalc(n_embd), GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST);
-      const normAttentionBetaBuffer = createBuffer(this.device, this.bufferSizeCalc(n_embd), GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST);
-      this.device.queue.writeBuffer(normAttentionGammaBuffer, 0, await loadBinaryFile(`models/${folder}/${prefix}ln_1.weight_gpt.bin`));
-      this.device.queue.writeBuffer(normAttentionBetaBuffer, 0, await loadBinaryFile(`models/${folder}/${prefix}ln_1.bias_gpt.bin`));
+      const normAttentionGamma = await fetchBin(`${prefix}ln_1.weight_gpt.bin`);
+      const normAttentionBeta = bias ? await fetchBin(`${prefix}ln_1.bias_gpt.bin`) : zeros(n_embd);
 
       console.log("\tLoading qkv transform...");
-      const qkv_weights = await loadBinaryFile(`models/${folder}/${prefix}attn.c_attn.weight_gpt.bin`);
-      const qkv_bias = bias ? await loadBinaryFile(`models/${folder}/${prefix}attn.c_attn.bias_gpt.bin`) : new Array(3 * n_embd).fill(0);
-      const qkvWeightsBuffer = createBuffer(this.device, this.bufferSizeCalc(n_embd, 3 * n_embd), GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST);
-      const qkvBiasBuffer = createBuffer(this.device, this.bufferSizeCalc(3 * n_embd), GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST);
-      this.device.queue.writeBuffer(qkvWeightsBuffer, 0, transposeArray(qkv_weights, 3 * n_embd, n_embd));
-      this.device.queue.writeBuffer(qkvBiasBuffer, 0, qkv_bias);
+      const qkvWeights = transpose(await fetchBin(`${prefix}attn.c_attn.weight_gpt.bin`), 3 * n_embd, n_embd);
+      const qkvBias = bias ? await fetchBin(`${prefix}attn.c_attn.bias_gpt.bin`) : zeros(3 * n_embd);
 
       console.log("\tLoading attention c_proj...");
-      const linear_weights = await loadBinaryFile(`models/${folder}/${prefix}attn.c_proj.weight_gpt.bin`);
-      const linear_bias = bias ? await loadBinaryFile(`models/${folder}/${prefix}attn.c_proj.bias_gpt.bin`) : new Array(n_embd).fill(0);
-      const linearWeightsBuffer = createBuffer(this.device, this.bufferSizeCalc(n_embd, n_embd), GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST);
-      const linearBiasBuffer = createBuffer(this.device, this.bufferSizeCalc(n_embd), GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST);
-      this.device.queue.writeBuffer(linearWeightsBuffer, 0, transposeArray(linear_weights, n_embd, n_embd));
-      this.device.queue.writeBuffer(linearBiasBuffer, 0, linear_bias);
+      const linearWeights = transpose(await fetchBin(`${prefix}attn.c_proj.weight_gpt.bin`), n_embd, n_embd);
+      const linearBias = bias ? await fetchBin(`${prefix}attn.c_proj.bias_gpt.bin`) : zeros(n_embd);
 
       console.log("\tLoading MLP layer norm...");
-      const layerNormLinearGamma = await loadBinaryFile(`models/${folder}/${prefix}ln_2.weight_gpt.bin`);
-      const layerNormLinearBeta = bias ? await loadBinaryFile(`models/${folder}/${prefix}ln_2.bias_gpt.bin`) : new Array(n_embd).fill(0);
-      const normLinearGammaBuffer = createBuffer(this.device, this.bufferSizeCalc(n_embd), GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST);
-      const normLinearBetaBuffer = createBuffer(this.device, this.bufferSizeCalc(n_embd), GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST);
-      this.device.queue.writeBuffer(normLinearGammaBuffer, 0, layerNormLinearGamma);
-      this.device.queue.writeBuffer(normLinearBetaBuffer, 0, layerNormLinearBeta);
+      const normLinearGamma = await fetchBin(`${prefix}ln_2.weight_gpt.bin`);
+      const normLinearBeta = bias ? await fetchBin(`${prefix}ln_2.bias_gpt.bin`) : zeros(n_embd);
 
       console.log("\tLoading MLP first layer...");
-      const firstLayerWeights = await loadBinaryFile(`models/${folder}/${prefix}mlp.c_fc.weight_gpt.bin`);
-      const firstLayerBias = bias ? await loadBinaryFile(`models/${folder}/${prefix}mlp.c_fc.bias_gpt.bin`) : new Array(hidden_size).fill(0);
-      const firstLayerWeightsBuffer = createBuffer(this.device, this.bufferSizeCalc(n_embd, hidden_size), GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST);
-      const firstLayerBiasBuffer = createBuffer(this.device, this.bufferSizeCalc(hidden_size), GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST);
-      this.device.queue.writeBuffer(firstLayerWeightsBuffer, 0, transposeArray(firstLayerWeights, hidden_size, n_embd));
-      this.device.queue.writeBuffer(firstLayerBiasBuffer, 0, firstLayerBias);
+      const firstLayerWeights = transpose(await fetchBin(`${prefix}mlp.c_fc.weight_gpt.bin`), hidden_size, n_embd);
+      const firstLayerBias = bias ? await fetchBin(`${prefix}mlp.c_fc.bias_gpt.bin`) : zeros(hidden_size);
 
       console.log("\tLoading MLP second layer...");
-      const secondLayerWeights = await loadBinaryFile(`models/${folder}/${prefix}mlp.c_proj.weight_gpt.bin`);
-      const secondLayerBias = bias ? await loadBinaryFile(`models/${folder}/${prefix}mlp.c_proj.bias_gpt.bin`) : new Array(n_embd).fill(0);
-      const secondLayerWeightsBuffer = createBuffer(this.device, this.bufferSizeCalc(hidden_size, n_embd), GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST);
-      const secondLayerBiasBuffer = createBuffer(this.device, this.bufferSizeCalc(hidden_size), GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST);
-      this.device.queue.writeBuffer(secondLayerWeightsBuffer, 0, transposeArray(secondLayerWeights, n_embd, hidden_size));
-      this.device.queue.writeBuffer(secondLayerBiasBuffer, 0, secondLayerBias);
+      const secondLayerWeights = transpose(await fetchBin(`${prefix}mlp.c_proj.weight_gpt.bin`), n_embd, hidden_size);
+      const secondLayerBias = bias ? await fetchBin(`${prefix}mlp.c_proj.bias_gpt.bin`) : zeros(n_embd);
 
       layer_buffers.push({
-        normAttentionGammaBuffer,
-        normAttentionBetaBuffer,
-        qkvWeightsBuffer,
-        qkvBiasBuffer,
-        linearWeightsBuffer,
-        linearBiasBuffer,
-        normLinearGammaBuffer,
-        normLinearBetaBuffer,
-        firstLayerWeightsBuffer,
-        firstLayerBiasBuffer,
-        secondLayerWeightsBuffer,
-        secondLayerBiasBuffer,
+        normAttentionGammaBuffer: this.initializeTensor(normAttentionGamma, n_embd, 1, ["storage"]),
+        normAttentionBetaBuffer: this.initializeTensor(normAttentionBeta, n_embd, 1, ["storage"]),
+        qkvWeightsBuffer: this.initializeTensor(qkvWeights, n_embd, 3 * n_embd, ["storage"]),
+        qkvBiasBuffer: this.initializeTensor(qkvBias, 3 * n_embd, 1, ["storage"]),
+        linearWeightsBuffer: this.initializeTensor(linearWeights, n_embd, n_embd, ["storage"]),
+        linearBiasBuffer: this.initializeTensor(linearBias, n_embd, 1, ["storage"]),
+        normLinearGammaBuffer: this.initializeTensor(normLinearGamma, n_embd, 1, ["storage"]),
+        normLinearBetaBuffer: this.initializeTensor(normLinearBeta, n_embd, 1, ["storage"]),
+        firstLayerWeightsBuffer: this.initializeTensor(firstLayerWeights, n_embd, hidden_size, ["storage"]),
+        firstLayerBiasBuffer: this.initializeTensor(firstLayerBias, hidden_size, 1, ["storage"]),
+        secondLayerWeightsBuffer: this.initializeTensor(secondLayerWeights, hidden_size, n_embd, ["storage"]),
+        secondLayerBiasBuffer: this.initializeTensor(secondLayerBias, n_embd, 1, ["storage"]),
       });
     }
 
     console.log("Loading final layer norm...");
-    const layerNormGamma = await loadBinaryFile(`models/${folder}/transformer.ln_f.weight_gpt.bin`);
-    const layerNormBeta = bias ? await loadBinaryFile(`models/${folder}/transformer.ln_f.bias_gpt.bin`) : new Array(n_embd).fill(0);
-    const normGammaBuffer = createBuffer(this.device, this.bufferSizeCalc(n_embd), GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST);
-    const normBetaBuffer = createBuffer(this.device, this.bufferSizeCalc(n_embd), GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST);
-    this.device.queue.writeBuffer(normGammaBuffer, 0, layerNormGamma);
-    this.device.queue.writeBuffer(normBetaBuffer, 0, layerNormBeta);
+    const layerNormGamma = await fetchBin(`${fldr}/transformer.ln_f.weight_gpt.bin`);
+    const layerNormBeta = bias ? await fetchBin(`${fldr}/transformer.ln_f.bias_gpt.bin`) : zeros(n_embd);
+    const normGammaBuffer = this.initializeTensor(layerNormGamma, n_embd, 1, ["storage"]);
+    const normBetaBuffer = this.initializeTensor(layerNormBeta, n_embd, 1, ["storage"]);
 
-    const output = {
-      layer_buffers,
-      embeddingWeightsBuffer,
-      posEmbdBuffer,
-      normGammaBuffer,
-      normBetaBuffer,
-    };
+    const output = { layer_buffers, embeddingWeightsBuffer, posEmbdBuffer, normGammaBuffer, normBetaBuffer };
     console.log("Finished loading model.", output, params);
     return [output, params];
   }
@@ -705,6 +670,23 @@ class GPT {
     const linearResultBuffer = this.inlineFastRowAdd(commandEncoder, linearMatmulBuffer, linearBiasBuffer, seq_length, n_embd);
 
     return linearResultBuffer;
+  }
+
+  // let data;
+  //   if (!zeros) {
+  //     data = await fetchBin(path);
+  //   } else {
+  //     data = new Array(sizeA * sizeB).fill(0);
+  //   }
+  //   if (transpose) {
+  //     data = transpose(data, sizeA, sizeB);
+  //   }
+
+  initializeTensor(data, sizeA, sizeB, ops) {
+    const usage = ops.map((u) => bufferUsageDict[u]).reduce((a, b) => a | b) | GPUBufferUsage.COPY_DST;
+    const buffer = createBuffer(this.device, this.bufferSizeCalc(sizeA, sizeB), usage);
+    this.device.queue.writeBuffer(buffer, 0, data);
+    return buffer;
   }
 
   bufferSizeCalc(dimA, dimB = 1) {
