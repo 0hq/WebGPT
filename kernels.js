@@ -212,20 +212,6 @@ const fastMatMulShader = `
   @group(0) @binding(0) var<uniform> cmeta: CMeta;
   @group(0) @binding(1) var<storage,read_write> array_c: array<vec4<f32>>;
 
-  fn selectValueFromVec4(v: vec4<f32>, idx: u32) -> f32 {
-    var result: f32;
-    if (idx == 0u) {
-      result = v.x;
-    } else if (idx == 1u) {
-      result = v.y;
-    } else if (idx == 2u) {
-      result = v.z;
-    } else {
-      result = v.w;
-    }
-    return result;
-  }
-
   @compute @workgroup_size(8, 8)
   fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     var M: u32 = cmeta.M;
