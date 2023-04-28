@@ -28,6 +28,7 @@ If you want to try out WebGPT, visit the demo website here [KMeans.org](https://
 - [X] Key-value caching (testing).
 - [X] Reuse buffers.
 - [X] Kernel shared memory for matmul!
+- [X] Destroy buffers after use!
 - [ ] Make simple instructional version without special stuff.
 - [ ] Optimize workgroup sizes, specifically for single row/col operations.
 - [ ] Optimize all other kernels.
