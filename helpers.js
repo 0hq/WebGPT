@@ -1,5 +1,19 @@
 // ---------------- Helper Functions ----------------
 
+const bufferUsageDict = {
+  copy_from: GPUBufferUsage.COPY_SRC,
+  copy_to: GPUBufferUsage.COPY_DST,
+  storage: GPUBufferUsage.STORAGE,
+  uniform: GPUBufferUsage.UNIFORM,
+  map_read: GPUBufferUsage.MAP_READ,
+};
+
+async function fetchBin(url) {
+  const response = await fetch(url);
+  const buffer = await response.arrayBuffer();
+  return new Float32Array(buffer);
+}
+
 function alignedSize(size, alignment) {
   return Math.ceil(size / alignment) * alignment;
 }
@@ -89,18 +103,4 @@ function formatAsMatrix(floatArray, dimA, dimB) {
     resultMatrix.push(floatArray.slice(i * dimB, (i + 1) * dimB));
   }
   return resultMatrix;
-}
-
-const bufferUsageDict = {
-  copy_from: GPUBufferUsage.COPY_SRC,
-  copy_to: GPUBufferUsage.COPY_DST,
-  storage: GPUBufferUsage.STORAGE,
-  uniform: GPUBufferUsage.UNIFORM,
-  map_read: GPUBufferUsage.MAP_READ,
-};
-
-async function fetchBin(url) {
-  const response = await fetch(url);
-  const buffer = await response.arrayBuffer();
-  return new Float32Array(buffer);
 }
