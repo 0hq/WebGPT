@@ -1,8 +1,16 @@
 class Tokenizer {
-  constructor() {}
+  constructor() {
+    this.encoder = undefined;
+    this.decoder = undefined;
+    this.vocab_size = undefined;
+  }
 
   async load() {
     throw new Error("Not implemented.");
+  }
+
+  getVocabSize() {
+    return this.vocab_size;
   }
 
   encode(str) {
@@ -27,6 +35,7 @@ class SimpleTokenizer extends Tokenizer {
 
     this.encoder = encoder;
     this.decoder = decoder;
+    this.vocab_size = Object.keys(encoder).length;
   }
 
   encode(str) {
@@ -81,6 +90,8 @@ class GPT2Tokenizer extends Tokenizer {
 
     this.bpe_ranks = dictZip(bpe_merges, range(0, bpe_merges.length));
     this.cache = new Map();
+
+    this.vocab_size = Object.keys(encoder).length;
   }
 
   encode(text) {

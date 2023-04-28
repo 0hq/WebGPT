@@ -12,6 +12,7 @@ class GPT {
     this.model = null;
     this.tokenizer = null;
     this.params = null;
+    this.doFastMatMul = false;
     this.minStorageBufferOffsetAlignment = 1;
   }
 
@@ -28,6 +29,16 @@ class GPT {
 
     this.initBindGroups();
     this.initPipelines();
+
+    // Set fast matmul if all params are divisible by 4.
+    this.doFastMatMul = this.params.n_embd % 4 === 0 && this.params.n_head % 4 === 0;
+    // && this.tokenizer.getVocabSize() % 4 === 0;
+
+    if (!this.doFastMatMul) {
+      console.warn("Warning: Fast matmul not enabled. Model will run slower.");
+    } else {
+      console.log("Fast matmul enabled.");
+    }
 
     this.initialized = true;
   }
@@ -161,24 +172,17 @@ class GPT {
     console.log("Starting generation with prompt", prompt);
     let history = this.tokenizer.encode(prompt);
 
+    let totalTime = 0;
+
     for (let i = 0; i < max_new_tokens; i++) {
       const idx_cond = history.slice(-this.params.block_size);
-
-      // Pad to divisible of 4
-      // Save offset
-      // let offset = 0;
-      // while (idx_cond.length % 4 !== 0) {
-      //   idx_cond.push(0);
-      //   offset++;
-      // }
-
-      // console.log(idx_cond, offset);
 
       const startTime = performance.now();
       const logits = await this.run(idx_cond);
       const endTime = performance.now();
 
       console.log(`(Loop ${i}) Kernel execution time: ${endTime - startTime} ms`);
+      totalTime += endTime - startTime;
 
       const { topKIndices, topKProbs } = selectTopK(logits, top_k);
       const probs = cpuSoftmax(topKProbs, temperature);
@@ -190,6 +194,8 @@ class GPT {
 
       yield this.tokenizer.decode([idx_next]);
     }
+
+    console.log(`Average kernel execution time: ${totalTime / max_new_tokens} ms`);
   }
 
   async run(idx, offset = 0) {
@@ -259,17 +265,32 @@ class GPT {
         buffers.normLinearBetaBuffer
       );
 
-      const linearOutputBuffer = this.inlineFastFFN(
-        commandEncoder,
-        seq_length,
-        n_embd,
-        hidden_size,
-        layerNormLinearOutputBuffer,
-        buffers.firstLayerWeightsBuffer,
-        buffers.firstLayerBiasBuffer,
-        buffers.secondLayerWeightsBuffer,
-        buffers.secondLayerBiasBuffer
-      );
+      let linearOutputBuffer;
+      if (this.doFastMatMul) {
+        linearOutputBuffer = this.inlineFastFFN(
+          commandEncoder,
+          seq_length,
+          n_embd,
+          hidden_size,
+          layerNormLinearOutputBuffer,
+          buffers.firstLayerWeightsBuffer,
+          buffers.firstLayerBiasBuffer,
+          buffers.secondLayerWeightsBuffer,
+          buffers.secondLayerBiasBuffer
+        );
+      } else {
+        linearOutputBuffer = this.inlineFFN(
+          commandEncoder,
+          seq_length,
+          n_embd,
+          hidden_size,
+          layerNormLinearOutputBuffer,
+          buffers.firstLayerWeightsBuffer,
+          buffers.firstLayerBiasBuffer,
+          buffers.secondLayerWeightsBuffer,
+          buffers.secondLayerBiasBuffer
+        );
+      }
 
       const residualLinearOutputBuffer = this.inlineResidual(commandEncoder, seq_length, n_embd, linearOutputBuffer, residualAttentionOutputBuffer);
 

@@ -83,8 +83,6 @@ Have you forgotten I built WebGPT?&#13;&#10;</textarea
         GPTModel = new GPT("better_shakespeare", "char");
         await GPTModel.initialize();
 
-        console.log(await GPTModel.testMatmul());
-
         setTextareaDisabled(false);
         tokensInput.disabled = false;
         topKInput.disabled = false;
