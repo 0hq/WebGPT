@@ -164,6 +164,7 @@ const bufferUsageDict = {
   copy_to: GPUBufferUsage.COPY_DST,
   storage: GPUBufferUsage.STORAGE,
   uniform: GPUBufferUsage.UNIFORM,
+  map_read: GPUBufferUsage.MAP_READ,
 };
 
 async function fetchBin(url) {

@@ -99,36 +99,6 @@ const addShader = `
     }
 `;
 
-// Exponentiates each element of a matrix.
-const expShader = `
-  struct Matrix {
-      data: array<f32>,
-  }
-
-  struct Dimensions {
-    dimY: u32, // row dimension of input matrix
-    dimX: u32, // col dimension of input matrix
-  };
-
-  @group(0) @binding(0) var<uniform> DimBuffer: Dimensions;
-  @group(0) @binding(1) var<storage, read_write> Result: Matrix;
-  @group(1) @binding(0) var<storage, read> Input: Matrix;
-
-  @compute @workgroup_size(16, 16)
-  fn main (@builtin(global_invocation_id) global_id: vec3<u32>) {
-      let row: u32 = global_id.x;
-      let col: u32 = global_id.y;
-      let dimX: u32 = DimBuffer.dimX;
-      let dimY: u32 = DimBuffer.dimY;
-
-      if (row >= dimY || col >= dimX) {
-        return;
-      }
-
-      Result.data[row * dimX + col] = exp(Input.data[row * dimX + col]);
-    }
-`;
-
 // Combined add and exp.
 // Adds constants [rows, 1] to each row of a matrix [rows, cols].
 // Then exponentiates each element of the matrix.
@@ -364,46 +334,6 @@ const fastRowAddShader = `
     }
 
     array_output[row * ND4 + col] = array_matrix[row * ND4 + col] + array_bias[col];
-  }
-`;
-
-// Multiplies matrix times weights and adds bias.
-const FFNShader = `
-  struct Matrix {
-    data: array<f32>,
-  }
-
-  struct Dimensions {
-    dimY: u32, // row dimension of A and row dimension of C
-    dimX: u32, // col dimension of B and col dimension of C
-    dimS: u32, // shared dimension of A and B
-  };
-
-  @group(1) @binding(0) var<storage, read> Input: Matrix;
-
-  @group(0) @binding(0) var<uniform> DimBuffer: Dimensions;
-  @group(0) @binding(1) var<storage, read> Bias: Matrix;
-  @group(0) @binding(2) var<storage, read> Weight: Matrix;
-  @group(0) @binding(3) var<storage, read_write> Result: Matrix;
-
-  @compute @workgroup_size(16, 16)
-  fn main (@builtin(global_invocation_id) global_id: vec3<u32>) {
-    let row: u32 = global_id.x;
-    let col: u32 = global_id.y;
-    let dimX: u32 = DimBuffer.dimX;
-    let dimY: u32 = DimBuffer.dimY;
-    let dimS: u32 = DimBuffer.dimS;
-
-    if (row >= dimY || col >= dimX) {
-      return;
-    }
-
-    var sum: f32 = 0.0;
-    for (var i: u32 = 0; i < dimS; i = i + 1) {
-        sum = sum + Input.data[row * dimS + i] * Weight.data[i * dimX + col];
-    }
-
-    Result.data[row * dimX + col] = sum + Bias.data[col];
   }
 `;
 
