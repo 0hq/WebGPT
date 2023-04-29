@@ -15,7 +15,7 @@ const maskedNegMaxShader = `
   @group(0) @binding(1) var<storage, read_write> Result: Matrix;
   @group(1) @binding(0) var<storage, read> Input: Matrix;
 
-  @compute @workgroup_size(16, 16)
+  @compute @workgroup_size(16)
   fn main (@builtin(global_invocation_id) global_id: vec3<u32>) {
     let row: u32 = global_id.x;
     let dimX: u32 = DimBuffer.dimX;
@@ -33,37 +33,6 @@ const maskedNegMaxShader = `
 
     Result.data[row] = -max_buffer;
   }
-`;
-
-// Adds constants [rows, 1] to each row of a matrix [rows, cols].
-const addShader = `
-  struct Matrix {
-      data: array<f32>,
-  }
-
-  struct Dimensions {
-    dimY: u32, // row dimension of input matrix
-    dimX: u32, // col dimension of input matrix
-  };
-
-  @group(0) @binding(0) var<uniform> DimBuffer: Dimensions;
-  @group(0) @binding(1) var<storage, read_write> Result: Matrix;
-  @group(1) @binding(0) var<storage, read> Input: Matrix;
-  @group(2) @binding(0) var<storage, read> Constants: Matrix;
-
-  @compute @workgroup_size(16, 16)
-  fn main (@builtin(global_invocation_id) global_id: vec3<u32>) {
-      let row: u32 = global_id.x;
-      let col: u32 = global_id.y;
-      let dimX: u32 = DimBuffer.dimX;
-      let dimY: u32 = DimBuffer.dimY;
-
-      if (row >= dimY || col >= dimX) {
-        return;
-      }
-
-      Result.data[row * dimX + col] = Input.data[row * dimX + col] + Constants.data[row];
-    }
 `;
 
 // Combined add and exp.
@@ -86,8 +55,8 @@ const addExpShader = `
 
   @compute @workgroup_size(16, 16)
   fn main (@builtin(global_invocation_id) global_id: vec3<u32>) {
-      let row: u32 = global_id.x;
-      let col: u32 = global_id.y;
+      let col: u32 = global_id.x;
+      let row: u32 = global_id.y;
       let dimX: u32 = DimBuffer.dimX;
       let dimY: u32 = DimBuffer.dimY;
 
@@ -116,7 +85,7 @@ const sumShader = `
   @group(0) @binding(1) var<storage, read_write> Result: Matrix;
   @group(1) @binding(0) var<storage, read> Input: Matrix;
 
-  @compute @workgroup_size(16, 16)
+  @compute @workgroup_size(16)
   fn main (@builtin(global_invocation_id) global_id: vec3<u32>) {
     let row: u32 = global_id.x;
     let dimX: u32 = DimBuffer.dimX;
@@ -152,8 +121,8 @@ const divideShader = `
 
   @compute @workgroup_size(16, 16)
   fn main (@builtin(global_invocation_id) global_id: vec3<u32>) {
-      let row: u32 = global_id.x;
-      let col: u32 = global_id.y;
+      let col: u32 = global_id.x;
+      let row: u32 = global_id.y;
       let dimX: u32 = DimBuffer.dimX;
       let dimY: u32 = DimBuffer.dimY;
 
@@ -323,8 +292,8 @@ const simpleCausalMaskShader = `
 
   @compute @workgroup_size(16, 16)
   fn main (@builtin(global_invocation_id) global_id: vec3<u32>) {
-    let row: u32 = global_id.x;
-    let col: u32 = global_id.y;
+    let col: u32 = global_id.x;
+    let row: u32 = global_id.y;
     let dimX: u32 = DimBuffer.dimX;
     let dimY: u32 = DimBuffer.dimY;
 
@@ -358,8 +327,8 @@ const transposeShader = `
 
   @compute @workgroup_size(16, 16)
   fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
-    let row: u32 = global_id.x;
-    let col: u32 = global_id.y;
+    let col: u32 = global_id.x;
+    let row: u32 = global_id.y;
     let dimX: u32 = DimBuffer.dimX;
     let dimY: u32 = DimBuffer.dimY;
 
@@ -393,8 +362,8 @@ const splitQKVShader = `
 
   @compute @workgroup_size(16, 16)
   fn main (@builtin(global_invocation_id) global_id: vec3<u32>) {
-    let row: u32 = global_id.x;
-    let col: u32 = global_id.y;
+    let col: u32 = global_id.x;
+    let row: u32 = global_id.y;
     let dimX: u32 = DimBuffer.dimX;
     let dimY: u32 = DimBuffer.dimY;
 
@@ -432,8 +401,8 @@ const attentionWeightsShader = `
 
   @compute @workgroup_size(16, 16)
   fn main (@builtin(global_invocation_id) global_id: vec3<u32>) {
-    let row: u32 = global_id.x;
-    let col: u32 = global_id.y;
+    let col: u32 = global_id.x;
+    let row: u32 = global_id.y;
     let dimY: u32 = DimBuffer.dimY;
     let dimX: u32 = DimBuffer.dimX;
     let seqLength: u32 = DimBuffer.seqLength;
@@ -477,8 +446,8 @@ const attentionValuesShader = `
 
   @compute @workgroup_size(16, 16)
   fn main (@builtin(global_invocation_id) global_id: vec3<u32>) {
-    let row: u32 = global_id.x;
-    let col: u32 = global_id.y;
+    let col: u32 = global_id.x;
+    let row: u32 = global_id.y;
     let dimY: u32 = DimBuffer.dimY;
     let dimX: u32 = DimBuffer.dimX;
     let vCols: u32 = DimBuffer.vCols;
@@ -518,8 +487,8 @@ const multiplyShader = `
 
   @compute @workgroup_size(16, 16)
   fn main (@builtin(global_invocation_id) global_id: vec3<u32>) {
-      let row: u32 = global_id.x;
-      let col: u32 = global_id.y;
+      let col: u32 = global_id.x;
+      let row: u32 = global_id.y;
       let dimX: u32 = DimBuffer.dimX;
 
       if (row >= DimBuffer.dimY || col >= dimX) {
@@ -550,8 +519,8 @@ const elementWiseAdditionShader = `
 
   @compute @workgroup_size(16, 16)
   fn main (@builtin(global_invocation_id) global_id: vec3<u32>) {
-    let row: u32 = global_id.x;
-    let col: u32 = global_id.y;
+    let col: u32 = global_id.x;
+    let row: u32 = global_id.y;
     let dimX: u32 = dimBuffer.dimX;
     let dimY: u32 = dimBuffer.dimY;
 
@@ -583,8 +552,8 @@ const matMulShader = `
 
     @compute @workgroup_size(16, 16)
     fn main (@builtin(global_invocation_id) global_id: vec3<u32>) {
-        let row: u32 = global_id.x;
-        let col: u32 = global_id.y;
+        let col: u32 = global_id.x;
+        let row: u32 = global_id.y;
         let dimX: u32 = dimBuffer.dimX;
         let dimY: u32 = dimBuffer.dimY;
         let dimS: u32 = dimBuffer.dimS;
@@ -654,13 +623,12 @@ const normStatsShader = `
   @group(0) @binding(0) var<uniform> DimBuffer: Dimensions;
   @group(0) @binding(1) var<storage, read_write> Result: Matrix;
 
-  @compute @workgroup_size(16, 16)
+  @compute @workgroup_size(16)
   fn main (@builtin(global_invocation_id) global_id: vec3<u32>) {
     let row: u32 = global_id.x;
-    let col: u32 = global_id.y;
     let dimX: u32 = DimBuffer.dimX;
 
-    if (row >= DimBuffer.dimY || col >= 1) {
+    if (row >= DimBuffer.dimY) {
       return;
     }
 
@@ -703,8 +671,8 @@ const normShader = `
 
   @compute @workgroup_size(16, 16)
   fn main (@builtin(global_invocation_id) global_id: vec3<u32>) {
-    let row: u32 = global_id.x;
-    let col: u32 = global_id.y;
+    let col: u32 = global_id.x;
+    let row: u32 = global_id.y;
     let dimX: u32 = DimBuffer.dimX;
     let dimY: u32 = DimBuffer.dimY;
 
@@ -753,8 +721,8 @@ const GELUShader = `
 
   @compute @workgroup_size(16, 16)
   fn main (@builtin(global_invocation_id) global_id: vec3<u32>) {
-      let row: u32 = global_id.x;
-      let col: u32 = global_id.y;
+      let col: u32 = global_id.x;
+      let row: u32 = global_id.y;
       let dimX: u32 = DimBuffer.dimX;
       let dimY: u32 = DimBuffer.dimY;
 

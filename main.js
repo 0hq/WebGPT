@@ -47,7 +47,7 @@ class GPT {
       this.defaultPrompt = `WILL:\nAh, how dare you challenge me?\nHave you forgotten I built WebGPT?\n`;
       this.defaultTopK = 1;
       this.defaultTemperature = 1;
-      this.defaultTokens = 10;
+      this.defaultTokens = 80;
     }
 
     this.initialized = true;
@@ -361,7 +361,7 @@ class GPT {
     passEncoder_max.setPipeline(this.maskedMaxPipeline);
     passEncoder_max.setBindGroup(0, maxBindGroup);
     passEncoder_max.setBindGroup(1, this.initBindGroup(this.r_Layout, [inputBuffer]));
-    passEncoder_max.dispatchWorkgroups(wgSize(rows, 16), wgSize(cols, 16));
+    passEncoder_max.dispatchWorkgroups(wgSize(rows, 16));
     passEncoder_max.end();
 
     const passEncoder_addExp = commandEncoder.beginComputePass();
@@ -369,14 +369,14 @@ class GPT {
     passEncoder_addExp.setBindGroup(0, addExpBindGroup);
     passEncoder_addExp.setBindGroup(1, this.initBindGroup(this.r_Layout, [inputBuffer]));
     passEncoder_addExp.setBindGroup(2, this.initBindGroup(this.r_Layout, [maxResultBuffer]));
-    passEncoder_addExp.dispatchWorkgroups(wgSize(rows, 16), wgSize(cols, 16));
+    passEncoder_addExp.dispatchWorkgroups(wgSize(cols, 16), wgSize(rows, 16));
     passEncoder_addExp.end();
 
     const passEncoder_sum = commandEncoder.beginComputePass();
     passEncoder_sum.setPipeline(this.sumPipeline);
     passEncoder_sum.setBindGroup(0, sumBindGroup);
     passEncoder_sum.setBindGroup(1, this.initBindGroup(this.r_Layout, [addExpResultBuffer]));
-    passEncoder_sum.dispatchWorkgroups(wgSize(rows, 16), wgSize(cols, 16));
+    passEncoder_sum.dispatchWorkgroups(wgSize(rows, 16));
     passEncoder_sum.end();
 
     const passEncoder_div = commandEncoder.beginComputePass();
@@ -384,7 +384,7 @@ class GPT {
     passEncoder_div.setBindGroup(0, divBindGroup);
     passEncoder_div.setBindGroup(1, this.initBindGroup(this.r_Layout, [addExpResultBuffer]));
     passEncoder_div.setBindGroup(2, this.initBindGroup(this.r_Layout, [sumResultBuffer]));
-    passEncoder_div.dispatchWorkgroups(wgSize(rows, 16), wgSize(cols, 16));
+    passEncoder_div.dispatchWorkgroups(wgSize(cols, 16), wgSize(rows, 16));
     passEncoder_div.end();
 
     return divResultBuffer;
@@ -401,7 +401,7 @@ class GPT {
     passEncoder.setBindGroup(0, residualBindGroup);
     passEncoder.setBindGroup(1, this.initBindGroup(this.r_Layout, [residualBuffer]));
     passEncoder.setBindGroup(2, this.initBindGroup(this.r_Layout, [layerOutputBuffer]));
-    passEncoder.dispatchWorkgroups(wgSize(rows, 16), wgSize(cols, 16));
+    passEncoder.dispatchWorkgroups(wgSize(cols, 16), wgSize(rows, 16));
     passEncoder.end();
 
     return residualResultBuffer;
@@ -417,7 +417,7 @@ class GPT {
     passEncoder.setPipeline(this.matmulPipeline);
     passEncoder.setBindGroup(0, matMulBindGroup);
     passEncoder.setBindGroup(1, this.initBindGroup(this.r_r_Layout, [Abuffer, Bbuffer]));
-    passEncoder.dispatchWorkgroups(wgSize(rows, 16), wgSize(cols, 16));
+    passEncoder.dispatchWorkgroups(wgSize(cols, 16), wgSize(rows, 16));
     passEncoder.end();
 
     return matmulResultBuffer;
@@ -451,7 +451,7 @@ class GPT {
     passEncoder.setPipeline(this.transposePipeline);
     passEncoder.setBindGroup(0, transposeBindGroup);
     passEncoder.setBindGroup(1, this.initBindGroup(this.r_Layout, [inputBuffer]));
-    passEncoder.dispatchWorkgroups(wgSize(rows, 16), wgSize(cols, 16));
+    passEncoder.dispatchWorkgroups(wgSize(cols, 16), wgSize(rows, 16));
     passEncoder.end();
 
     return transposeResultBuffer;
@@ -480,7 +480,7 @@ class GPT {
     passEncoder_norm.setBindGroup(0, normBindGroup);
     passEncoder_norm.setBindGroup(1, this.initBindGroup(this.r_r_r_Layout, [inputBuffer, gammaBuffer, betaBuffer]));
     passEncoder_norm.setBindGroup(2, this.initBindGroup(this.r_Layout, [statsResultBuffer]));
-    passEncoder_norm.dispatchWorkgroups(wgSize(seq_length, 16), wgSize(n_embd, 16));
+    passEncoder_norm.dispatchWorkgroups(wgSize(n_embd, 16), wgSize(seq_length, 16));
     passEncoder_norm.end();
 
     return normResultBuffer;
@@ -509,7 +509,7 @@ class GPT {
     passEncoder_gelu.setPipeline(this.GELUpipeline);
     passEncoder_gelu.setBindGroup(0, geluBindGroup);
     passEncoder_gelu.setBindGroup(1, this.initBindGroup(this.r_Layout, [firstLayerResultBuffer]));
-    passEncoder_gelu.dispatchWorkgroups(wgSize(seq_length, 16), wgSize(hidden_size, 16));
+    passEncoder_gelu.dispatchWorkgroups(wgSize(hidden_size, 16), wgSize(seq_length, 16));
     passEncoder_gelu.end();
 
     const secondLayerMatMulBuffer = this.inlineFastMatMul(commandEncoder, geluResultBuffer, secondLayerWeightsBuffer, seq_length, n_embed, hidden_size);
@@ -584,28 +584,28 @@ class GPT {
     passEncoder_splitQKV.setPipeline(this.splitQKVpipeline);
     passEncoder_splitQKV.setBindGroup(0, splitQKVBindGroup);
     passEncoder_splitQKV.setBindGroup(1, this.initBindGroup(this.r_Layout, [qkvResultBuffer]));
-    passEncoder_splitQKV.dispatchWorkgroups(wgSize(seq_length, 16), wgSize(n_embd, 16));
+    passEncoder_splitQKV.dispatchWorkgroups(wgSize(n_embd, 16), wgSize(seq_length, 16));
     passEncoder_splitQKV.end();
 
     const passEncoder_attentionWeights = commandEncoder.beginComputePass();
     passEncoder_attentionWeights.setPipeline(this.attentionWeightsPipeline);
     passEncoder_attentionWeights.setBindGroup(0, attentionWeightsBindGroup);
     passEncoder_attentionWeights.setBindGroup(1, this.initBindGroup(this.r_r_Layout, [splitQResultBuffer, splitKResultBuffer]));
-    passEncoder_attentionWeights.dispatchWorkgroups(wgSize(seq_length, 16), wgSize(seq_length * n_head, 16));
+    passEncoder_attentionWeights.dispatchWorkgroups(wgSize(seq_length * n_head, 16), wgSize(seq_length, 16));
     passEncoder_attentionWeights.end();
 
     const passEncoder_multiply = commandEncoder.beginComputePass();
     passEncoder_multiply.setPipeline(this.multiplyPipeline);
     passEncoder_multiply.setBindGroup(0, multiplyBindGroup);
     passEncoder_multiply.setBindGroup(1, this.initBindGroup(this.r_Layout, [attentionWeightsResultBuffer]));
-    passEncoder_multiply.dispatchWorkgroups(wgSize(seq_length, 16), wgSize(seq_length * n_head, 16));
+    passEncoder_multiply.dispatchWorkgroups(wgSize(seq_length * n_head, 16), wgSize(seq_length, 16));
     passEncoder_multiply.end();
 
     const passEncoder_causalMask = commandEncoder.beginComputePass();
     passEncoder_causalMask.setPipeline(this.causalMaskPipeline);
     passEncoder_causalMask.setBindGroup(0, causalMaskBindGroup);
     passEncoder_causalMask.setBindGroup(1, this.initBindGroup(this.r_Layout, [multiplyResultBuffer]));
-    passEncoder_causalMask.dispatchWorkgroups(wgSize(seq_length * n_head, 16), wgSize(seq_length, 16));
+    passEncoder_causalMask.dispatchWorkgroups(wgSize(seq_length, 16), wgSize(seq_length * n_head, 16));
     passEncoder_causalMask.end();
 
     // Save attention weights for next iteration's key value cache.
@@ -617,7 +617,7 @@ class GPT {
     passEncoder_attentionValues.setPipeline(this.attentionValuesPipeline);
     passEncoder_attentionValues.setBindGroup(0, attentionValuesBindGroup);
     passEncoder_attentionValues.setBindGroup(1, this.initBindGroup(this.r_r_Layout, [softmaxOutputBuffer, splitVResultBuffer]));
-    passEncoder_attentionValues.dispatchWorkgroups(wgSize(seq_length, 16), wgSize(n_embd, 16));
+    passEncoder_attentionValues.dispatchWorkgroups(wgSize(n_embd, 16), wgSize(seq_length, 16));
     passEncoder_attentionValues.end();
 
     const linearMatmulBuffer = this.inlineFastMatMul(commandEncoder, attentionValuesResultBuffer, linearWeightsBuffer, seq_length, n_embd, n_embd);
@@ -674,7 +674,7 @@ class GPT {
     passEncoder_splitQKV.setPipeline(this.splitQKVpipeline);
     passEncoder_splitQKV.setBindGroup(0, splitQKVBindGroup);
     passEncoder_splitQKV.setBindGroup(1, this.initBindGroup(this.r_Layout, [qkvResultBuffer]));
-    passEncoder_splitQKV.dispatchWorkgroups(wgSize(seq_length, 16), wgSize(n_embd, 16));
+    passEncoder_splitQKV.dispatchWorkgroups(wgSize(n_embd, 16), wgSize(seq_length, 16));
     passEncoder_splitQKV.end();
 
     commandEncoder.copyBufferToBuffer(splitQResultBuffer, this.bufferSize(n_embd) * (seq_length - 1), singleQResultBuffer, 0, this.bufferSize(n_embd));
@@ -683,14 +683,14 @@ class GPT {
     passEncoder_attentionWeights.setPipeline(this.attentionWeightsPipeline);
     passEncoder_attentionWeights.setBindGroup(0, attentionWeightsBindGroup);
     passEncoder_attentionWeights.setBindGroup(1, this.initBindGroup(this.r_r_Layout, [singleQResultBuffer, splitKResultBuffer]));
-    passEncoder_attentionWeights.dispatchWorkgroups(wgSize(1, 16), wgSize(seq_length * n_head, 16));
+    passEncoder_attentionWeights.dispatchWorkgroups(wgSize(seq_length * n_head, 16), wgSize(1, 16));
     passEncoder_attentionWeights.end();
 
     const passEncoder_multiply = commandEncoder.beginComputePass();
     passEncoder_multiply.setPipeline(this.multiplyPipeline);
     passEncoder_multiply.setBindGroup(0, multiplyBindGroup);
     passEncoder_multiply.setBindGroup(1, this.initBindGroup(this.r_Layout, [attentionWeightsResultBuffer]));
-    passEncoder_multiply.dispatchWorkgroups(wgSize(1, 16), wgSize(seq_length * n_head, 16));
+    passEncoder_multiply.dispatchWorkgroups(wgSize(seq_length * n_head, 16), wgSize(1, 16));
     passEncoder_multiply.end();
 
     for (let i = 0; i < n_head; i++) {
@@ -723,7 +723,7 @@ class GPT {
     passEncoder_attentionValues.setPipeline(this.attentionValuesPipeline);
     passEncoder_attentionValues.setBindGroup(0, attentionValuesBindGroup);
     passEncoder_attentionValues.setBindGroup(1, this.initBindGroup(this.r_r_Layout, [softmaxOutputBuffer, splitVResultBuffer]));
-    passEncoder_attentionValues.dispatchWorkgroups(wgSize(seq_length, 16), wgSize(n_embd, 16));
+    passEncoder_attentionValues.dispatchWorkgroups(wgSize(n_embd, 16), wgSize(seq_length, 16));
     passEncoder_attentionValues.end();
 
     const linearMatmulBuffer = this.inlineFastMatMul(commandEncoder, attentionValuesResultBuffer, linearWeightsBuffer, seq_length, n_embd, n_embd);
@@ -838,7 +838,7 @@ const test = async () => {
   Human: Hello, who are you?\n`;
   const tokens = 15;
   const runs = 5;
-  const retries = 3;
+  const retries = 1;
 
   const GPTModel2 = new GPT("gpt2", "bpe", false);
   await GPTModel2.initialize();
