@@ -20,12 +20,6 @@ class GPT {
     this.unloadDeletionStack = [];
   }
 
-  unload() {
-    for (let i = 0; i < this.unloadDeletionStack.length; i++) {
-      this.unloadDeletionStack[i].destroy();
-    }
-  }
-
   async initialize() {
     if (this.initialized) return console.error("Model already initialized");
     if (!navigator.gpu) throw new Error("WebGPU is not supported");
@@ -342,9 +336,7 @@ class GPT {
     const output = deEmbedOutputBuffer.getMappedRange();
     const outputArray = new Float32Array(output).slice(0); // Copy the array, otherwise it'll be destroyed.
 
-    for (let i = 0; i < this.bufferDeletionStack.length; i++) {
-      this.bufferDeletionStack[i].destroy();
-    }
+    this.destroyBuffers();
 
     return outputArray;
   }
@@ -761,11 +753,8 @@ class GPT {
       size: this.bufferSize(row, col),
       usage: ops.map((u) => bufferUsageDict[u]).reduce((a, b) => a | b),
     });
-    if (!noDelete) {
-      this.bufferDeletionStack.push(buffer);
-    } else {
-      this.unloadDeletionStack.push(buffer);
-    }
+    if (!noDelete) this.bufferDeletionStack.push(buffer);
+    else this.unloadDeletionStack.push(buffer);
     return buffer;
   }
 
@@ -773,6 +762,16 @@ class GPT {
     const buffer = this.initBuffer([...ops, "copy_to"], sizeA, sizeB, true);
     this.device.queue.writeBuffer(buffer, 0, data);
     return buffer;
+  }
+
+  unloadBuffers() {
+    this.unloadDeletionStack.map((buffer) => buffer.destroy());
+    this.unloadDeletionStack = [];
+  }
+
+  destroyBuffers() {
+    this.bufferDeletionStack.map((buffer) => buffer.destroy());
+    this.bufferDeletionStack = [];
   }
 
   bufferSize(dimA, dimB = 1) {
@@ -845,11 +844,11 @@ const test = async () => {
   await GPTModel2.initialize();
 
   await GPTModel2.profile(prompt, tokens, runs, retries);
-  GPTModel2.unload();
+  GPTModel2.unloadBuffers();
 
   const GPTModel = new GPT("gpt2", "bpe", true);
   await GPTModel.initialize();
 
   await GPTModel.profile(prompt, tokens, runs, retries);
-  GPTModel.unload();
+  GPTModel.unloadBuffers();
 };
