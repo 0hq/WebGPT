@@ -1,5 +1,14 @@
 // --------------------- SHADER CODE --------------------- //
 
+/*
+
+  Must make a new class called Instruction that lets me change shader code on initialization and reuse the same pipeline.
+  Softmax will run via rows, every workgroup handling a different row.
+  Collapse inline instructions into more helpers.
+  Override constants.
+
+*/
+
 // Return maximum value of each row in a matrix times -1.
 const maskedNegMaxShader = `
   struct Matrix {
@@ -732,4 +741,59 @@ const GELUShader = `
 
       Result.data[row * dimX + col] = gelu(Input.data[row * dimX + col]);
     }
+`;
+
+// Adjusts the input matrix by the mean and standard deviation and gamma and beta parameters.
+const fusedSoftmaxShader = `
+  struct Matrix {
+      data: array<f32>,
+  }
+
+  struct Dimensions {
+    M: u32, // row dimension of input matrix
+    N: u32, // col dimension of input matrix
+  };
+
+  @group(0) @binding(0) var<uniform> DimBuffer: Dimensions;
+  @group(0) @binding(1) var<storage, read_write> Result: Matrix;
+
+  @group(1) @binding(0) var<storage, read> Input: Matrix;
+  @group(1) @binding(1) var<storage, read> Gamma: Matrix;
+  @group(1) @binding(2) var<storage, read> Beta: Matrix;
+  @group(2) @binding(0) var<storage, read> Stats: Matrix;
+
+  @compute @workgroup_size(16, 16)
+  fn main (@builtin(global_invocation_id) global_id: vec3<u32>) {
+    let col: u32 = global_id.x;
+    let row: u32 = global_id.y;
+    let N: u32 = DimBuffer.N;
+    let M: u32 = DimBuffer.M;
+
+    if (row >= M || col >= N) {
+      return;
+    }
+
+    // Calculate the exponential of each element in the input matrix
+    let exponent: f32 = exp(inputMatrix.data[row * N + col]);
+
+    // Store partial sums in shared memory
+    partial_sums[local_id.x] = exponent;
+
+    // Synchronize threads in the workgroup
+    workgroupBarrier();
+
+    // Perform parallel reduction to compute row-wise sum of exponentials
+    for (var offset: u32 = 128u; offset > 0u; offset = offset / 2u) {
+      if (local_id.x < offset && local_id.x + offset < N) {
+        partial_sums[local_id.x] = partial_sums[local_id.x] + partial_sums[local_id.x + offset];
+      }
+      workgroupBarrier();
+    }
+
+    // Normalize each element by dividing it by the sum of exponentials in its row
+    let softmax_val: f32 = exponent / partial_sums[0];
+
+    // Store the result in the output matrix
+    Result.data[row * N + col] = softmax_val;
+  }
 `;

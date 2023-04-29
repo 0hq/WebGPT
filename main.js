@@ -626,6 +626,8 @@ class GPT {
     return linearResultBuffer;
   }
 
+  // This really sucks (-20ms) and have no clue why.
+  // Copy instructions might be slower than presumed? Needs testing as theoretically sound.
   inlineFastCachedAttention(
     commandEncoder,
     seq_length,
@@ -798,7 +800,7 @@ class GPT {
   initPipelines() {
     const p = (code, bindGroupLayouts) => {
       return this.device.createComputePipeline({
-        layout: this.device.createPipelineLayout({ bindGroupLayouts }),
+        layout: "auto",
         compute: {
           module: this.device.createShaderModule({ code }),
           entryPoint: "main",
@@ -823,6 +825,7 @@ class GPT {
     this.transposePipeline = p(transposeShader, [this.u_s_Layout, this.r_Layout]);
     this.fastMatMulPipeline = p(fastMatMulShader, [this.u_s_Layout, this.r_r_Layout]);
     this.fastRowAddPipeline = p(fastRowAddShader, [this.u_s_Layout, this.r_r_Layout]);
+    // this.fusedSoftmaxPipeline = p(fusedSoftmaxShader, [this.u_s_Layout, this.r_r_Layout]);
   }
 }
 

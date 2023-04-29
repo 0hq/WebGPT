@@ -1,53 +1,55 @@
-const fastRowAddShader = `
-  struct BMeta {
-    M: u32,
-    N: u32,
-    ND4: u32,
+// Adjusts the input matrix by the mean and standard deviation and gamma and beta parameters.
+const fusedSoftmaxShader = `
+  struct Matrix {
+      data: array<f32>,
   }
 
-  @group(1) @binding(0) var<storage,read> array_matrix: array<vec4<f32>>;
-  @group(1) @binding(1) var<storage,read> array_bias: array<vec4<f32>>;
-  @group(0) @binding(0) var<uniform> bmeta: BMeta;
-  @group(0) @binding(1) var<storage,read_write> array_output: array<vec4<f32>>;
+  struct Dimensions {
+    M: u32, // row dimension of input matrix
+    N: u32, // col dimension of input matrix
+  };
 
-  @compute @workgroup_size(8,8)
-  fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
-    var col: u32 = global_id.x;
-    var row: u32 = global_id.y;
-    var ND4: u32 = bmeta.ND4;
-    var M: u32 = bmeta.M;
-    
-    if (row >= M || col >= ND4) {
-      return;
-    }
+  @group(0) @binding(0) var<uniform> DimBuffer: Dimensions;
+  @group(0) @binding(1) var<storage, read_write> Result: Matrix;
 
-    array_output[row * ND4 + col] = array_matrix[row * ND4 + col] + array_bias[col];
-  }
-`;
+  @group(1) @binding(0) var<storage, read> Input: Matrix;
+  @group(1) @binding(1) var<workgroup> shared_sum: array<f32>;
 
-const slowRowAddShader = `
-  struct BMeta {
-    M: u32,
-    N: u32,
-  }
+  var<workgroup> sumValues : array<f32, 256>;
 
-  @group(1) @binding(0) var<storage,read> array_matrix: array<f32>;
-  @group(1) @binding(1) var<storage,read> array_bias: array<f32>;
-  @group(0) @binding(0) var<uniform> bmeta: BMeta;
-  @group(0) @binding(1) var<storage,read_write> array_output: array<f32>;
+  @compute @workgroup_size(256, 1)
+  fn main (@builtin(global_invocation_id) global_id: vec3<u32>) {
+    let col: u32 = global_id.x;
+    let row: u32 = global_id.y;
+    let N: u32 = DimBuffer.N;
+    let M: u32 = DimBuffer.M;
 
-  @compute @workgroup_size(8,8)
-  fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
-    var col: u32 = global_id.x;
-    var row: u32 = global_id.y;
-    var N: u32 = bmeta.N;
-    var M: u32 = bmeta.M;
-    
     if (row >= M || col >= N) {
       return;
     }
 
-    array_output[row * N + col] = array_matrix[row * N + col] + array_bias[col];
+    // Calculate the exponential of each element in the input matrix
+    let exponent: f32 = exp(Input.data[row * N + col]);
+
+    // Store partial sums in shared memory
+    partial_sums[local_id.x] = exponent;
+
+    // Synchronize threads in the workgroup
+    workgroupBarrier();
+
+    // Perform parallel reduction to compute row-wise sum of exponentials
+    for (var offset: u32 = 128u; offset > 0u; offset = offset / 2u) {
+      if (local_id.x < offset && local_id.x + offset < N) {
+        partial_sums[local_id.x] = partial_sums[local_id.x] + partial_sums[local_id.x + offset];
+      }
+      workgroupBarrier();
+    }
+
+    // Normalize each element by dividing it by the sum of exponentials in its row
+    let softmax_val: f32 = exponent / partial_sums[0];
+
+    // Store the result in the output matrix
+    Result.data[row * N + col] = softmax_val;
   }
 `;
 
@@ -86,82 +88,38 @@ class TestGPT {
     this.initialized = true;
   }
 
-  async testFastRowAdd(iters = 5, runs = 10, retries = 3) {
-    const dimM = 1000;
-    const dimN = 25128;
+  async test() {
+    const dimM = 1024;
+    const dimN = 1024;
     const matrixA = new Float32Array(dimM * dimN);
-    const matrixB = new Float32Array(dimN);
     for (let i = 0; i < dimM * dimN; i++) matrixA[i] = i + 1;
-    for (let i = 0; i < dimN; i++) matrixB[i] = i + 1;
-    const matrixABuffer = this.initBuffer(["storage", "copy_to"], dimM, dimN, 1, true);
-    const matrixBBuffer = this.initBuffer(["storage", "copy_to"], dimN, 1, true);
-    this.device.queue.writeBuffer(matrixBBuffer, 0, matrixB);
+    const matrixABuffer = this.initBuffer(["storage", "copy_to"], dimM, dimN, 1);
     this.device.queue.writeBuffer(matrixABuffer, 0, matrixA);
 
-    let times = [];
-    for (let i = 0; i < retries; i++) {
-      let runTime = 0;
-      for (let i = 0; i < runs; i++) {
-        const startTime = performance.now();
-        const commandEncoder = this.device.createCommandEncoder();
-        for (let i = 0; i < iters; i++) {
-          this.inlineSlowRowAdd(commandEncoder, matrixABuffer, matrixBBuffer, dimM, dimN);
-        }
-        this.device.queue.submit([commandEncoder.finish()]);
-        this.destroyBuffers();
-        const endTime = performance.now();
-        runTime += endTime - startTime;
-      }
+    const commandEncoder = this.device.createCommandEncoder();
+    const softmaxOutput = this.maskedInlineSoftmax(commandEncoder, dimM, dimN, matrixABuffer);
+    const outputBuffer = this.initOutputBuffer(commandEncoder, softmaxOutput, dimM, dimN);
+    this.device.queue.submit([commandEncoder.finish()]);
 
-      console.log(`${runs * iters} runs of ${dimM}x${dimN} took ${runTime}ms`);
-      console.log(`average time: ${runTime / (runs * iters)}ms`);
-      times.push(runTime);
-    }
-    this.unloadBuffers();
+    await outputBuffer.mapAsync(GPUMapMode.READ);
+    const output = outputBuffer.getMappedRange();
+    const outputArray = new Float32Array(output).slice(0); // Prevent destruction.
+    console.log(outputArray);
 
-    // Average of times
-    let sum = 0;
-    for (let i = 0; i < times.length; i++) {
-      sum += times[i];
-    }
-    console.log("Average:", sum / times.length);
-
-    // Median of times
-    times.sort((a, b) => a - b);
-    console.log("Median:", times[Math.floor(times.length / 2)]);
+    this.destroyBuffers();
   }
 
-  inlineFastRowAdd(commandEncoder, inputBuffer, biasBuffer, rows, cols) {
-    if (cols % 4 !== 0) throw new Error(`cols must be a multiple of 4, got ${rows}x${cols}`);
-
+  maskedInlineSoftmax(commandEncoder, rows, cols, inputBuffer) {
     const uniformBuffer = this.initBuffer(["uniform", "copy_to"], 4);
     const resultBuffer = this.initBuffer(["storage", "copy_from"], rows, cols);
-    const bindGroup = this.initBindGroup(this.u_s_Layout, [uniformBuffer, resultBuffer]);
-    this.device.queue.writeBuffer(uniformBuffer, 0, new Uint32Array([rows, cols, cols / 4]));
-
-    const passEncoder = commandEncoder.beginComputePass();
-    passEncoder.setPipeline(this.fastRowAddPipeline);
-    passEncoder.setBindGroup(0, bindGroup);
-    passEncoder.setBindGroup(1, this.initBindGroup(this.r_r_Layout, [inputBuffer, biasBuffer]));
-    passEncoder.dispatchWorkgroups(wgSize(cols, 32), wgSize(rows, 8));
-    passEncoder.end();
-
-    return resultBuffer;
-  }
-
-  inlineSlowRowAdd(commandEncoder, inputBuffer, biasBuffer, rows, cols) {
-    if (cols % 4 !== 0) throw new Error(`cols must be a multiple of 4, got ${rows}x${cols}`);
-
-    const uniformBuffer = this.initBuffer(["uniform", "copy_to"], 4);
-    const resultBuffer = this.initBuffer(["storage", "copy_from"], rows, cols);
-    const bindGroup = this.initBindGroup(this.u_s_Layout, [uniformBuffer, resultBuffer]);
+    const softmaxBindGroup = this.initBindGroup(this.u_s_Layout, [uniformBuffer, resultBuffer]);
     this.device.queue.writeBuffer(uniformBuffer, 0, new Uint32Array([rows, cols]));
 
     const passEncoder = commandEncoder.beginComputePass();
-    passEncoder.setPipeline(this.slowRowAddPipeline);
-    passEncoder.setBindGroup(0, bindGroup);
-    passEncoder.setBindGroup(1, this.initBindGroup(this.r_r_Layout, [inputBuffer, biasBuffer]));
-    passEncoder.dispatchWorkgroups(wgSize(rows, 8), wgSize(cols, 8));
+    passEncoder.setPipeline(this.fusedSoftmaxPipeline);
+    passEncoder.setBindGroup(0, softmaxBindGroup);
+    passEncoder.setBindGroup(1, this.initBindGroup(this.r_Layout, [inputBuffer]));
+    passEncoder.dispatchWorkgroups(wgSize(cols, 256), wgSize(rows, 1));
     passEncoder.end();
 
     return resultBuffer;
@@ -241,13 +199,12 @@ class TestGPT {
       });
     };
 
-    this.fastRowAddPipeline = await p(fastRowAddShader, [this.u_s_Layout, this.r_r_Layout]);
-    this.slowRowAddPipeline = await p(slowRowAddShader, [this.u_s_Layout, this.r_r_Layout]);
+    this.fusedSoftmaxPipeline = await p(fusedSoftmaxShader, [this.u_s_Layout, this.r_r_Layout]);
   }
 }
 
 async function test() {
   const GPU = new TestGPT();
   await GPU.initialize();
-  await GPU.testFastRowAdd();
+  await GPU.test();
 }
