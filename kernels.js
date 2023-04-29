@@ -165,6 +165,7 @@ const divideShader = `
     }
 `;
 
+// Merge with row sum shader later.
 const fastMatMulShader = `
   struct CMeta {
     M: u32,
@@ -290,8 +291,8 @@ const fastRowAddShader = `
 
   @compute @workgroup_size(8,8)
   fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
-    var row: u32 = global_id.x;
-    var col: u32 = global_id.y;
+    var col: u32 = global_id.x;
+    var row: u32 = global_id.y;
     var ND4: u32 = bmeta.ND4;
     var M: u32 = bmeta.M;
     
@@ -339,6 +340,7 @@ const simpleCausalMaskShader = `
 `;
 
 // Transpose the matrix.
+// Can be vectorized and memory optimized.
 const transposeShader = `
   struct Matrix {
     data: array<f32>,
@@ -370,6 +372,7 @@ const transposeShader = `
 `;
 
 // Splits a matrix into Q, K, and V matrices.
+// Can be vectorized and memory optimized.
 const splitQKVShader = `
   struct Matrix {
     data: array<f32>,
@@ -407,6 +410,7 @@ const splitQKVShader = `
 `;
 
 // Calculates attention weights from Q and K matrices.
+// Can be vectorized and memory optimized.
 const attentionWeightsShader = `
   struct Matrix {
     data: array<f32>,
@@ -452,6 +456,7 @@ const attentionWeightsShader = `
 `;
 
 // Calculates attention values from attention weights and V matrix.
+// Can be vectorized and memory optimized.
 const attentionValuesShader = `
   struct Matrix {
     data: array<f32>,
@@ -494,7 +499,7 @@ const attentionValuesShader = `
 `;
 
 // Multiplies every value in a matrix by a single constant.
-// Can be vectorized.
+// Can be vectorized and memory optimized.
 const multiplyShader = `
   struct Matrix {
       data: array<f32>,
@@ -596,6 +601,42 @@ const matMulShader = `
         C.data[row * dimX + col] = sum;
       }
   `;
+
+// Row vector times a matrix.
+const deEmbedShader = `
+  struct Matrix {
+      data: array<f32>,
+  }
+
+  struct Uniforms {
+    dimY: u32, // col dimension of deEmbed and row dimension of embed
+    dimX: u32, // row dimension of deEmbed
+  };
+
+  @group(1) @binding(0) var<storage,read> array_a: array<vec4<f32>>;
+  @group(1) @binding(1) var<storage,read> array_b: array<vec4<f32>>;
+
+  @group(0) @binding(0) var<uniform> dimBuffer: Uniforms;
+  @group(0) @binding(1) var<storage,read> array_c: array<vec4<f32>>;
+
+  @compute @workgroup_size(256)
+  fn main (@builtin(global_invocation_id) global_id: vec3<u32>) {
+      let col: u32 = global_id.x;
+      let dimX: u32 = dimBuffer.dimX;
+      let dimY: u32 = dimBuffer.dimY;
+
+      if (col >= dimX) {
+        return;
+      }
+
+      var sum: f32 = 0.0;
+      for (var i: u32 = 0; i < dimS; i = i + 1) {
+          sum = sum + A.data[row * dimS + i] * B.data[i * dimX + col];
+      }
+
+      C.data[row * dimX + col] = sum;
+    }
+`;
 
 // Calculates mean and standard deviation per row of a matrix.
 const normStatsShader = `

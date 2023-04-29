@@ -538,7 +538,7 @@ class GPT {
     passEncoder.setPipeline(this.fastRowAddPipeline);
     passEncoder.setBindGroup(0, bindGroup);
     passEncoder.setBindGroup(1, this.initBindGroup(this.r_r_Layout, [inputBuffer, biasBuffer]));
-    passEncoder.dispatchWorkgroups(wgSize(rows, 8), wgSize(cols, 32));
+    passEncoder.dispatchWorkgroups(wgSize(cols, 32), wgSize(rows, 8));
     passEncoder.end();
 
     return resultBuffer;
