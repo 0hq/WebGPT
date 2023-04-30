@@ -105,6 +105,7 @@ class FastMatMulBlock extends Block {
       resultBuf,
       passes: [
         {
+          flag: "compute",
           pipeline,
           groups: [opBindGroup, inputBindGroup],
           workgroups,
@@ -356,6 +357,7 @@ class ResidualBlock extends Block {
       resultBuffer,
       passes: [
         {
+          flag: "compute",
           pipeline,
           groups: [opBindGroup, inputBindGroup],
           workgroups,
@@ -424,6 +426,7 @@ class NaiveMatMulBlock extends Block {
       resultBuffer,
       passes: [
         {
+          flag: "compute",
           pipeline,
           groups: [opBindGroup, inputBindGroup],
           workgroups,
@@ -499,6 +502,7 @@ class TransposeBlock extends Block {
       resultBuffer,
       passes: [
         {
+          flag: "compute",
           pipeline,
           groups: [opBindGroup, inputBindGroup],
           workgroups,
@@ -568,6 +572,7 @@ class FastRowAddBlock extends Block {
       resultBuffer,
       passes: [
         {
+          flag: "compute",
           pipeline,
           groups: [opBindGroup, inputBindGroup],
           workgroups,
@@ -652,11 +657,13 @@ class LayerNormBlock extends Block {
       resultBuffer: normResultBuffer,
       passes: [
         {
+          flag: "compute",
           pipeline: statsPipeline,
           groups: [statsBindGroup, statsInputBindGroup],
           workgroups: statsWorkgroups,
         },
         {
+          flag: "compute",
           pipeline: normPipeline,
           groups: [normBindGroup, normInputBindGroup],
           workgroups: normWorkgroups,
@@ -819,21 +826,25 @@ class SoftmaxBlock extends Block {
       resultBuffer: divResultBuffer,
       passes: [
         {
+          flag: "compute",
           pipeline: maxPipeline,
           groups: [maxBindGroup, maxInputBindGroup],
           workgroups: maxWorkgroups,
         },
         {
+          flag: "compute",
           pipeline: addPipeline,
           groups: [addExpBindGroup, addExpInputBindGroup],
           workgroups: addExpWorkgroups,
         },
         {
+          flag: "compute",
           pipeline: sumPipeline,
           groups: [sumBindGroup, sumInputBindGroup],
           workgroups: sumWorkgroups,
         },
         {
+          flag: "compute",
           pipeline: divResultPipeline,
           groups: [divBindGroup, divInputBindGroup],
           workgroups: divWorkgroups,
@@ -999,6 +1010,7 @@ class GeluBlock extends Block {
       resultBuffer,
       passes: [
         {
+          flag: "compute",
           pipeline,
           groups: [opBindGroup, inputBindGroup],
           workgroups,
@@ -1188,27 +1200,32 @@ class AttentionBlock extends Block {
         ...qkvMatMulPasses,
         ...qkvBiasAddPasses,
         {
+          flag: "compute",
           pipeline: splitQKVPipeline,
           groups: [splitQKVBindGroup, splitQKVInputBindGroup],
           workgroups: splitQKVWorkgroups,
         },
         {
+          flag: "compute",
           pipeline: attentionWeightsPipeline,
           groups: [attentionWeightsBindGroup, attentionWeightsInputBindGroup],
           workgroups: attentionWeightsWorkgroups,
         },
         {
+          flag: "compute",
           pipeline: multiplyPipeline,
           groups: [multiplyBindGroup, multiplyInputBindGroup],
           workgroups: multiplyWorkgroups,
         },
         {
+          flag: "compute",
           pipeline: causalMaskPipeline,
           groups: [causalMaskBindGroup, causalMaskInputBindGroup],
           workgroups: causalMaskWorkgroups,
         },
         ...softmaxPasses,
         {
+          flag: "compute",
           pipeline: attentionValuesPipeline,
           groups: [attentionValuesBindGroup, attentionValuesInputBindGroup],
           workgroups: attentionValuesWorkgroupts,
@@ -1402,4 +1419,111 @@ class AttentionBlock extends Block {
       Result.data[row * dimX + col] = sum;
     }
   `;
+}
+
+class EmbedBlock extends Block {
+  constructor(device) {
+    super(device);
+    this.name = "embed";
+    this.pipelineCache = new Map();
+  }
+
+  newInstance(idx, seq_length, n_embd, embdBuffer, posEmbdBuffer, ResidualBlock) {
+    const embdOutputBuffer = this.initBuffer(["storage", "copy_to"], [seq_length, n_embd]);
+    const posEmbdOutputBuffer = this.initBuffer(["storage", "copy_to"], [seq_length, n_embd]);
+
+    // Can build a cache later.
+    const embdCopyCommands = Array(seq_length).map((_, i) => {
+      return {
+        flag: "copy",
+        src: embdBuffer,
+        srcOffset: this.bufferSize(n_embd) * idx[i],
+        dst: embdOutputBuffer,
+        dstOffset: this.bufferSize(n_embd) * i,
+        size: this.bufferSize(n_embd),
+      };
+    });
+
+    // Also can be cached.
+    const posCopyCommand = {
+      flag: "copy",
+      src: posEmbdBuffer,
+      srcOffset: 0,
+      dst: posEmbdOutputBuffer,
+      dstOffset: 0,
+      size: this.bufferSize(seq_length, n_embd),
+    };
+
+    const { resultBuffer: residualResult, passes: residualPasses } = ResidualBlock.newInstance(seq_length, n_embd, embdOutputBuffer, posEmbdOutputBuffer);
+
+    return {
+      resultBuffer: residualResult,
+      passes: [...embdCopyCommands, posCopyCommand, ...residualPasses],
+    };
+  }
+}
+
+class DeEmbedBlock extends Block {
+  constructor(device) {
+    super(device);
+    this.name = "deembed";
+    this.pipelineCache = new Map();
+  }
+
+  newInstance(vocab_size, n_embd, seq_length, embedBuffer, embeddingWeightsBuffer, NaiveMatMulBlock) {
+    const slicedEmbedOutputBuffer = this.initBuffer(["storage", "copy_to"], [n_embd]);
+    const deEmbedOutputBuffer = this.initBuffer(["map_read", "copy_to"], [vocab_size]);
+
+    // Assumes that vocab_size has a decent least prime factor.
+    const maxStorageBufferSize = this.device.limits.maxStorageBufferBindingSize;
+    const totalElements = this.bufferSize(vocab_size, n_embd);
+    var numInstances = Math.ceil(totalElements / maxStorageBufferSize);
+    if (numInstances > 1) numInstances = leastPrimeFactor(vocab_size, numInstances);
+    var vocabChunkSize = vocab_size / numInstances;
+
+    const chunkBuffers = Array(numInstances)
+      .fill()
+      .map((_, i) => {
+        return this.initBuffer(["storage", "copy_to"], [n_embd, vocabChunkSize]);
+      });
+
+    const sliceEmbedCopyCommand = {
+      flag: "copy",
+      src: embedBuffer,
+      srcOffset: this.bufferSize(seq_length - 1, n_embd),
+      dst: slicedEmbedOutputBuffer,
+      dstOffset: 0,
+      size: this.bufferSize(1, n_embd),
+    };
+
+    const deEmbedPasses = chunkBuffers.flatMap((buffer, i) => {
+      const { resultBuffer: matmulResult, passes: matmulPasses } = NaiveMatMulBlock.newInstance(vocabChunkSize, 1, n_embd, buffer, slicedEmbedOutputBuffer);
+      // We're doing some buffer tricks here. Since slicedEmbedOutputBuffer is a row matrix, we can just pretend it's a column matrix without any changes to the way it's stored. We then multiply it by the transposed embeddingWeights chunk, resulting in a column vector which, once again, we can pretend is a row vector.
+
+      return [
+        {
+          flag: "copy",
+          src: embeddingWeightsBuffer,
+          srcOffset: i * this.bufferSize(n_embd * vocabChunkSize),
+          dst: buffer,
+          dstOffset: 0,
+          size: this.bufferSize(n_embd, vocabChunkSize),
+        },
+        ...matmulPasses,
+        {
+          flag: "copy",
+          src: matmulResult,
+          srcOffset: 0,
+          dst: deEmbedOutputBuffer,
+          dstOffset: i * this.bufferSize(vocabChunkSize),
+          size: this.bufferSize(vocabChunkSize),
+        },
+      ];
+    });
+
+    return {
+      resultBuffer: deEmbedOutputBuffer,
+      passes: [sliceEmbedCopyCommand, ...deEmbedPasses],
+    };
+  }
 }
