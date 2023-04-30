@@ -800,7 +800,7 @@ class GPT {
   initPipelines() {
     const p = (code, bindGroupLayouts) => {
       return this.device.createComputePipeline({
-        layout: "auto",
+        layout: this.device.createPipelineLayout({ bindGroupLayouts }),
         compute: {
           module: this.device.createShaderModule({ code }),
           entryPoint: "main",
