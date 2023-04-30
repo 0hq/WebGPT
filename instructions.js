@@ -18,13 +18,12 @@ class Block {
     });
   }
 
-  initBuffer(ops, row, col = 1, noDelete = false) {
+  initBuffer(ops, dims) {
     const buffer = this.device.createBuffer({
-      size: this.bufferSize(row, col),
+      size: this.bufferSize(dims[0], dims[1] || 1, dims[2] || 1),
       usage: ops.map((u) => bufferUsageDict[u]).reduce((a, b) => a | b),
     });
-    if (!noDelete) this.bufferDeletionStack.push(buffer);
-    else this.unloadDeletionStack.push(buffer);
+    this.bufferDeletionStack.push(buffer);
     return buffer;
   }
 
@@ -94,15 +93,15 @@ class FastMatMulBlock extends Block {
 
   newInstance(rows, cols, shared, bufA, bufB) {
     const pipeline = this.getPipeline(rows);
-    const uniformBuffer = this.initBuffer(["uniform", "copy_to"], 4);
-    const resultBuf = this.initBuffer(["storage", "copy_from"], rows, cols);
-    const opBindGroup = this.initBindGroup(this.u_s_Layout, [uniformBuffer, resultBuf], `${this.name}_OpG`);
+    const uniformBuffer = this.initBuffer(["uniform", "copy_to"], [4]);
+    const resultBuffer = this.initBuffer(["storage", "copy_from"], [rows, cols]);
+    const opBindGroup = this.initBindGroup(this.u_s_Layout, [uniformBuffer, resultBuffer], `${this.name}_OpG`);
     const inputBindGroup = this.initBindGroup(this.r_r_Layout, [bufA, bufB], `${this.name}_InputG`);
     const workgroups = { x: wgSize(cols, 64), y: wgSize(rows, 32) };
     this.device.queue.writeBuffer(uniformBuffer, 0, new Uint32Array([rows, cols, Math.ceil(cols / 4), Math.ceil(shared / 4)]));
 
     return {
-      resultBuf,
+      resultBuffer,
       passes: [
         {
           flag: "compute",
@@ -435,6 +434,35 @@ class NaiveMatMulBlock extends Block {
     };
   }
 
+  // Experimenting with preloading all weights, not too important just style.
+  preloadInstance(cols, shared, bufB) {
+    this.cols = cols;
+    this.shared = shared;
+    this.weightsBuf = bufB;
+
+    return (newPreloadedInstance = (rows, bufA) => {
+      const pipeline = this.getPipeline();
+      const uniformBuffer = this.initBuffer(["uniform", "copy_to"], [4]);
+      const resultBuffer = this.initBuffer(["storage", "copy_from"], [rows, this.cols]);
+      const opBindGroup = this.initBindGroup(this.u_s_Layout, [uniformBuffer, resultBuffer], `${this.name}_OutputG`);
+      const inputBindGroup = this.initBindGroup(this.r_r_Layout, [bufA, this.weightsBuf], `${this.name}_InputG`);
+      const workgroups = { x: wgSize(this.cols, 16), y: wgSize(rows, 16), z: 1 };
+      this.device.queue.writeBuffer(uniformBuffer, 0, new Uint32Array([rows, this.cols, this.shared]));
+
+      return {
+        resultBuffer,
+        passes: [
+          {
+            flag: "compute",
+            pipeline,
+            groups: [opBindGroup, inputBindGroup],
+            workgroups,
+          },
+        ],
+      };
+    });
+  }
+
   matMulShader = `
     struct Matrix {
         data: array<f32>,
@@ -552,19 +580,19 @@ class FastRowAddBlock extends Block {
   getPipeline() {
     const pipelineCacheKey = this.name; // No param optimization.
     if (this.pipelineCache.has(pipelineCacheKey)) return this.pipelineCache.get(pipelineCacheKey);
-    const pipeline = this.initPipeline(this.transposeShader, [this.u_s_Layout, this.r_r_Layout], `${this.name}_Pipeline`);
+    const pipeline = this.initPipeline(this.fastRowAddShader, [this.u_s_Layout, this.r_r_Layout], `${this.name}_Pipeline`);
     this.pipelineCache.set(pipelineCacheKey, pipeline);
     return pipeline;
   }
 
-  newInstance(rows, cols, inputBuf) {
+  newInstance(rows, cols, inputBuf, rowBuf) {
     if (cols % 4 !== 0) throw new Error(`cols must be a multiple of 4, got ${rows}x${cols}`);
 
     const pipeline = this.getPipeline();
     const uniformBuffer = this.initBuffer(["uniform", "copy_to"], [4]);
     const resultBuffer = this.initBuffer(["storage", "copy_from"], [rows, cols]);
     const opBindGroup = this.initBindGroup(this.u_s_Layout, [uniformBuffer, resultBuffer], `${this.name}_OpG`);
-    const inputBindGroup = this.initBindGroup(this.r_r_Layout, [inputBuf], `${this.name}_InputG`);
+    const inputBindGroup = this.initBindGroup(this.r_r_Layout, [inputBuf, rowBuf], `${this.name}_InputG`);
     const workgroups = { x: wgSize(cols, 16), y: wgSize(rows, 16), z: 1 };
     this.device.queue.writeBuffer(uniformBuffer, 0, new Uint32Array([rows, cols, cols / 4]));
 
@@ -635,22 +663,22 @@ class LayerNormBlock extends Block {
   newInstance(rows, cols, inputBuffer, gammaBuffer, betaBuffer) {
     const statsPipeline = this.getStatsPipeline();
     const statsUniformBuffer = this.initBuffer(["uniform", "copy_to"], [4]);
-    const statsResultBuffer = this.initBuffer(["storage", "copy_from"], [seq_length, 2]);
+    const statsResultBuffer = this.initBuffer(["storage", "copy_from"], [rows, 2]);
     const statsBindGroup = this.initBindGroup(this.u_s_Layout, [statsUniformBuffer, statsResultBuffer], `${this.name}_BindGroup_stats`);
     const statsInputBindGroup = this.initBindGroup(this.r_Layout, [inputBuffer], `${this.name}_InputG`);
     const statsWorkgroups = { x: wgSize(cols, 16), y: 1, z: 1 };
-    this.device.queue.writeBuffer(statsUniformBuffer, 0, new Uint32Array([seq_length, n_embd]));
+    this.device.queue.writeBuffer(statsUniformBuffer, 0, new Uint32Array([rows, cols]));
 
     const normPipeline = this.getNormPipeline();
     const normUniformBuffer = this.initBuffer(["uniform", "copy_to"], [4]);
-    const normResultBuffer = this.initBuffer(["storage", "copy_from"], [seq_length, n_embd]);
+    const normResultBuffer = this.initBuffer(["storage", "copy_from"], [rows, cols]);
     const normBindGroup = this.initBindGroup(this.u_s_Layout, [normUniformBuffer, normResultBuffer], `${this.name}_BindGroup_norm`);
     const normInputBindGroup = this.initBindGroup(
-      this.r_r_r_r_layout,
+      this.r_r_r_r_Layout,
       [inputBuffer, gammaBuffer, betaBuffer, statsResultBuffer],
       `${this.name}_InputBindGroup_norm`
     );
-    this.device.queue.writeBuffer(normUniformBuffer, 0, new Uint32Array([seq_length, n_embd]));
+    this.device.queue.writeBuffer(normUniformBuffer, 0, new Uint32Array([rows, cols]));
     const normWorkgroups = { x: wgSize(cols, 16), y: wgSize(rows, 16), z: 1 };
 
     return {
@@ -788,7 +816,7 @@ class SoftmaxBlock extends Block {
   getDivPipeline() {
     const pipelineCacheKey = `${this.name}_div`; // No param optimization.
     if (this.pipelineCache.has(pipelineCacheKey)) return this.pipelineCache.get(pipelineCacheKey);
-    const pipeline = this.initPipeline(this.divShader, [this.u_s_Layout, this.r_r_Layout], `${this.name}_Pipeline_Div`);
+    const pipeline = this.initPipeline(this.divideShader, [this.u_s_Layout, this.r_r_Layout], `${this.name}_Pipeline_Div`);
     this.pipelineCache.set(pipelineCacheKey, pipeline);
     return pipeline;
   }
@@ -992,7 +1020,7 @@ class GeluBlock extends Block {
   getPipeline() {
     const pipelineCacheKey = this.name; // No param optimization.
     if (this.pipelineCache.has(pipelineCacheKey)) return this.pipelineCache.get(pipelineCacheKey);
-    const pipeline = this.initPipeline(this.GELUShader, [this.u_s_Layout, this.r_r_Layout], `${this.name}_Pipeline`);
+    const pipeline = this.initPipeline(this.GELUShader, [this.u_s_Layout, this.r_Layout], `${this.name}_Pipeline`);
     this.pipelineCache.set(pipelineCacheKey, pipeline);
     return pipeline;
   }
@@ -1002,7 +1030,7 @@ class GeluBlock extends Block {
     const uniformBuffer = this.initBuffer(["uniform", "copy_to"], [4]);
     const resultBuffer = this.initBuffer(["storage", "copy_from"], [rows, cols]);
     const opBindGroup = this.initBindGroup(this.u_s_Layout, [uniformBuffer, resultBuffer], `${this.name}_OpG`);
-    const inputBindGroup = this.initBindGroup(this.r_r_Layout, [inputBuf], `${this.name}_InputG`);
+    const inputBindGroup = this.initBindGroup(this.r_Layout, [inputBuf], `${this.name}_InputG`);
     const workgroups = { x: wgSize(cols, 16), y: wgSize(rows, 16), z: 1 };
     this.device.queue.writeBuffer(uniformBuffer, 0, new Uint32Array([rows, cols]));
 
@@ -1070,41 +1098,41 @@ class AttentionBlock extends Block {
   }
 
   getSplitQKVPipeline() {
-    const pipelineCacheKey = `${this.name}_stats`; // No param optimization.
+    const pipelineCacheKey = `${this.name}_splitkqv`; // No param optimization.
     if (this.pipelineCache.has(pipelineCacheKey)) return this.pipelineCache.get(pipelineCacheKey);
-    const pipeline = this.initPipeline(this.splitQKVShader, [this.u_s_Layout, this.r_Layout], `${this.name}_Pipeline_SplitQKV`);
+    const pipeline = this.initPipeline(this.splitQKVShader, [this.u_s_s_s_Layout, this.r_Layout], `${this.name}_Pipeline_SplitQKV`);
     this.pipelineCache.set(pipelineCacheKey, pipeline);
     return pipeline;
   }
 
   getAttentionWeightsPipeline() {
-    const pipelineCacheKey = `${this.name}_norm`; // No param optimization.
+    const pipelineCacheKey = `${this.name}_weights`; // No param optimization.
     if (this.pipelineCache.has(pipelineCacheKey)) return this.pipelineCache.get(pipelineCacheKey);
-    const pipeline = this.initPipeline(this.attentionWeightsShader, [this.u_s_Layout, this.r_r_r_r_Layout], `${this.name}_Pipeline_AttWeights`);
+    const pipeline = this.initPipeline(this.attentionWeightsShader, [this.u_s_Layout, this.r_r_Layout], `${this.name}_Pipeline_AttWeights`);
     this.pipelineCache.set(pipelineCacheKey, pipeline);
     return pipeline;
   }
 
   getMultiplyPipeline() {
-    const pipelineCacheKey = `${this.name}_norm`; // No param optimization.
+    const pipelineCacheKey = `${this.name}_multiply`; // No param optimization.
     if (this.pipelineCache.has(pipelineCacheKey)) return this.pipelineCache.get(pipelineCacheKey);
-    const pipeline = this.initPipeline(this.multiplyShader, [this.u_s_Layout, this.r_r_r_r_Layout], `${this.name}_Pipeline_Mult`);
+    const pipeline = this.initPipeline(this.multiplyShader, [this.u_s_Layout, this.r_Layout], `${this.name}_Pipeline_Mult`);
     this.pipelineCache.set(pipelineCacheKey, pipeline);
     return pipeline;
   }
 
   getCausalMaskPipeline() {
-    const pipelineCacheKey = `${this.name}_norm`; // No param optimization.
+    const pipelineCacheKey = `${this.name}_causalmask`; // No param optimization.
     if (this.pipelineCache.has(pipelineCacheKey)) return this.pipelineCache.get(pipelineCacheKey);
-    const pipeline = this.initPipeline(this.simpleCausalMaskShader, [this.u_s_Layout, this.r_r_r_r_Layout], `${this.name}_Pipeline_CausalMask`);
+    const pipeline = this.initPipeline(this.simpleCausalMaskShader, [this.u_s_Layout, this.r_Layout], `${this.name}_Pipeline_CausalMask`);
     this.pipelineCache.set(pipelineCacheKey, pipeline);
     return pipeline;
   }
 
   getAttentionValuesPipeline() {
-    const pipelineCacheKey = `${this.name}_norm`; // No param optimization.
+    const pipelineCacheKey = `${this.name}_values`; // No param optimization.
     if (this.pipelineCache.has(pipelineCacheKey)) return this.pipelineCache.get(pipelineCacheKey);
-    const pipeline = this.initPipeline(this.attentionValuesShader, [this.u_s_Layout, this.r_r_r_r_Layout], `${this.name}_Pipeline_AttValues`);
+    const pipeline = this.initPipeline(this.attentionValuesShader, [this.u_s_Layout, this.r_r_Layout], `${this.name}_Pipeline_AttValues`);
     this.pipelineCache.set(pipelineCacheKey, pipeline);
     return pipeline;
   }
@@ -1113,8 +1141,8 @@ class AttentionBlock extends Block {
     seq_length,
     n_embd,
     attentionDotProductScale,
-    inputBuffer,
     n_head,
+    inputBuffer,
     qkvWeightsBuffer,
     qkvBiasBuffer,
     linearWeightsBuffer,
@@ -1144,7 +1172,7 @@ class AttentionBlock extends Block {
     );
     const splitQKVInputBindGroup = this.initBindGroup(this.r_Layout, [qkvBiasAddResult], `${this.name}_SplitQKVInputG`);
     this.device.queue.writeBuffer(splitQKVUniformBuffer, 0, new Uint32Array([seq_length, n_embd]));
-    const splitQKVWorkgroups = { x: wgSize(n_embd), y: wgSize(seq_length), z: 1 };
+    const splitQKVWorkgroups = { x: wgSize(n_embd, 16), y: wgSize(seq_length, 16), z: 1 };
 
     const attentionWeightsPipeline = this.getAttentionWeightsPipeline();
     const attentionWeightsUniformBuffer = this.initBuffer(["uniform", "copy_to"], [8]);
@@ -1156,7 +1184,7 @@ class AttentionBlock extends Block {
     );
     const attentionWeightsInputBindGroup = this.initBindGroup(this.r_r_Layout, [splitQResultBuffer, splitKResultBuffer], `${this.name}_AttentionWeightsInputG`);
     this.device.queue.writeBuffer(attentionWeightsUniformBuffer, 0, new Uint32Array([seq_length, seq_length * n_head, seq_length, n_embd / n_head, n_embd]));
-    const attentionWeightsWorkgroups = { x: wgSize(seq_length * n_head), y: wgSize(seq_length), z: 1 };
+    const attentionWeightsWorkgroups = { x: wgSize(seq_length * n_head, 16), y: wgSize(seq_length, 16), z: 1 };
 
     const multiplyPipeline = this.getMultiplyPipeline();
     const multiplyUniformBuffer = this.initBuffer(["uniform", "copy_to"], [4]);
@@ -1165,7 +1193,7 @@ class AttentionBlock extends Block {
     const multiplyInputBindGroup = this.initBindGroup(this.r_Layout, [attentionWeightsResultBuffer], `${this.name}_MultiplyInputG`);
     this.device.queue.writeBuffer(multiplyUniformBuffer, 0, new Uint32Array([seq_length, seq_length * n_head]));
     this.device.queue.writeBuffer(multiplyUniformBuffer, 8, new Float32Array([attentionDotProductScale]));
-    const multiplyWorkgroups = { x: wgSize(seq_length * n_head), y: wgSize(seq_length), z: 1 };
+    const multiplyWorkgroups = { x: wgSize(seq_length * n_head, 16), y: wgSize(seq_length, 16), z: 1 };
 
     const causalMaskPipeline = this.getCausalMaskPipeline();
     const causalMaskUniformBuffer = this.initBuffer(["uniform", "copy_to"], [4]);
@@ -1173,7 +1201,7 @@ class AttentionBlock extends Block {
     const causalMaskBindGroup = this.initBindGroup(this.u_s_Layout, [causalMaskUniformBuffer, causalMaskResultBuffer], `${this.name}_CausalMaskG`);
     const causalMaskInputBindGroup = this.initBindGroup(this.r_Layout, [multiplyResultBuffer], `${this.name}_CausalMaskInputG`);
     this.device.queue.writeBuffer(causalMaskUniformBuffer, 0, new Uint32Array([seq_length * n_head, seq_length])); // Transposes! This is needed for softmax.
-    const causalMaskWorkgroups = { x: wgSize(seq_length), y: wgSize(seq_length * n_head), z: 1 };
+    const causalMaskWorkgroups = { x: wgSize(seq_length, 16), y: wgSize(seq_length * n_head, 16), z: 1 };
 
     const { resultBuffer: softmaxOutputBuffer, passes: softmaxPasses } = SoftmaxBlock.newInstance(seq_length, 3 * n_embd, causalMaskResultBuffer);
 
@@ -1190,7 +1218,7 @@ class AttentionBlock extends Block {
       n_embd,
       n_embd,
       inputBuffer,
-      qkvWeightsBuffer
+      linearWeightsBuffer
     );
     const { resultBuffer: linearBiasResult, passes: linearBiasPasses } = FastRowAddBlock.newInstance(seq_length, n_embd, linearMatmulResult, linearBiasBuffer);
 
@@ -1433,16 +1461,18 @@ class EmbedBlock extends Block {
     const posEmbdOutputBuffer = this.initBuffer(["storage", "copy_to"], [seq_length, n_embd]);
 
     // Can build a cache later.
-    const embdCopyCommands = Array(seq_length).map((_, i) => {
-      return {
-        flag: "copy",
-        src: embdBuffer,
-        srcOffset: this.bufferSize(n_embd) * idx[i],
-        dst: embdOutputBuffer,
-        dstOffset: this.bufferSize(n_embd) * i,
-        size: this.bufferSize(n_embd),
-      };
-    });
+    const embdCopyCommands = Array(seq_length)
+      .fill()
+      .map((_, i) => {
+        return {
+          flag: "copy",
+          src: embdBuffer,
+          srcOffset: this.bufferSize(n_embd) * idx[i],
+          dst: embdOutputBuffer,
+          dstOffset: this.bufferSize(n_embd) * i,
+          size: this.bufferSize(n_embd),
+        };
+      });
 
     // Also can be cached.
     const posCopyCommand = {
@@ -1524,6 +1554,58 @@ class DeEmbedBlock extends Block {
     return {
       resultBuffer: deEmbedOutputBuffer,
       passes: [sliceEmbedCopyCommand, ...deEmbedPasses],
+    };
+  }
+}
+
+class FastFFNBlock extends Block {
+  constructor(device) {
+    super(device);
+    this.name = "fastffn";
+    this.pipelineCache = new Map();
+  }
+
+  newInstance(
+    seq_length,
+    n_embd,
+    hidden_size,
+    inputBuffer,
+    firstLayerWeightsBuffer,
+    firstLayerBiasBuffer,
+    secondLayerWeightsBuffer,
+    secondLayerBiasBuffer,
+    FastMatMulBlock,
+    FastRowAddBlock,
+    GeluBlock
+  ) {
+    const { resultBuffer: firstMatmulResult, passes: firstMatmulPasses } = FastMatMulBlock.newInstance(
+      seq_length,
+      hidden_size,
+      n_embd,
+      inputBuffer,
+      firstLayerWeightsBuffer
+    );
+    const { resultBuffer: firstBiasResult, passes: firstBiasPasses } = FastRowAddBlock.newInstance(seq_length, n_embd, firstMatmulResult, firstLayerBiasBuffer);
+
+    const { resultBuffer: geluResult, passes: geluPasses } = GeluBlock.newInstance(seq_length, hidden_size, firstBiasResult);
+
+    const { resultBuffer: secondMatmulResult, passes: secondMatmulPasses } = FastMatMulBlock.newInstance(
+      seq_length,
+      hidden_size,
+      n_embd,
+      geluResult,
+      secondLayerWeightsBuffer
+    );
+    const { resultBuffer: secondBiasResult, passes: secondBiasPasses } = FastRowAddBlock.newInstance(
+      seq_length,
+      n_embd,
+      secondMatmulResult,
+      secondLayerBiasBuffer
+    );
+
+    return {
+      resultBuffer: secondBiasResult,
+      passes: [...firstMatmulPasses, ...firstBiasPasses, ...geluPasses, ...secondMatmulPasses, ...secondBiasPasses],
     };
   }
 }
