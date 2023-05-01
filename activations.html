@@ -13,7 +13,17 @@
   </head>
   <body>
     <canvas id="webgpu-canvas"></canvas>
+
     <script>
+      /*
+
+        Public Service Announcement: 
+        This is my first time working with fragment/vertex shaders, so half of this is probably completely wrong.
+
+        Goal is to create a matrix visualizer that can be used to visualize the activations of a neural network. Right now starting with a very simple example that just renders a matrix as a grid of quads.
+
+      */
+
       (async () => {
         if (navigator.gpu === undefined) {
           document.getElementById("webgpu-canvas").setAttribute("style", "display:none;");
@@ -24,7 +34,6 @@
         var adapter = await navigator.gpu.requestAdapter();
 
         console.log(adapter);
-
         adapter.features.forEach((value) => {
           console.log(value);
         });
