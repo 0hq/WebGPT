@@ -183,7 +183,7 @@ class GPT {
     console.log(`Average kernel execution time: ${totalTime / max_new_tokens} ms`);
   }
 
-  async run(idx, useAttCache = false) {
+  async run(idx) {
     const { posEmbdBuffer, layer_buffers, normGammaBuffer, normBetaBuffer, embeddingWeightsBuffer } = this.model;
     const { attentionDotProductScale, n_embd, n_head, n_layer, vocab_size, hidden_size, block_size } = this.params;
     const seq_length = idx.length;
@@ -271,76 +271,46 @@ class GPT {
         this.computePasses.push(...passes);
       }
     }
-    // {
-    //   const { passes, resultBuffer } = this.DeEmbedBlock.newInstance(
-    //     vocab_size,
-    //     n_embd,
-    //     seq_length,
-    //     intermediateBuffer,
-    //     embeddingWeightsBuffer,
-    //     this.NaiveMatMulBlock
-    //   );
-    //   intermediateBuffer = resultBuffer;
-    //   this.computePasses.push(...passes);
-    // }
+    {
+      const { passes, resultBuffer } = this.LayerNormBlock.newInstance(seq_length, n_embd, intermediateBuffer, normGammaBuffer, normBetaBuffer);
+      intermediateBuffer = resultBuffer;
+      this.computePasses.push(...passes);
+    }
+    {
+      const { passes, resultBuffer } = this.DeEmbedBlock.newInstance(
+        vocab_size,
+        n_embd,
+        seq_length,
+        intermediateBuffer,
+        embeddingWeightsBuffer,
+        this.NaiveMatMulBlock
+      );
+      intermediateBuffer = resultBuffer;
+      this.computePasses.push(...passes);
+    }
     const resultBuffer = intermediateBuffer;
 
     // ---------------- Compute Passes ----------------
 
     const commandEncoder = this.device.createCommandEncoder();
-
     console.log("Running:", this.computePasses);
     for (const pass of this.computePasses) {
       if (pass.flag === "compute") {
-        // console.log("computing");
-        // console.log(pass);
         const passEncoder = commandEncoder.beginComputePass();
         passEncoder.setPipeline(pass.pipeline);
         for (let i = 0; i < pass.groups.length; i++) passEncoder.setBindGroup(i, pass.groups[i]);
         passEncoder.dispatchWorkgroups(pass.workgroups.x, pass.workgroups.y);
         passEncoder.end();
       } else if (pass.flag === "copy") {
-        // console.log("copying");
-        // console.log(pass);
         commandEncoder.copyBufferToBuffer(pass.src, pass.srcOffset, pass.dst, pass.dstOffset, pass.size);
       }
     }
-
-    const slicedEmbedOutputBuffer = this.initBuffer(["storage", "copy_to"], [n_embd]);
-    commandEncoder.copyBufferToBuffer(resultBuffer, this.bufferSize(seq_length - 1, n_embd), slicedEmbedOutputBuffer, 0, this.bufferSize(1, n_embd));
-
-    const deEmbedOutputBuffer = this.initBuffer(["map_read", "copy_to"], [vocab_size]);
-
-    // Assumes that vocab_size has a decent least prime factor.
-    const maxStorageBufferSize = this.device.limits.maxStorageBufferBindingSize;
-    const totalElements = this.bufferSize(vocab_size, n_embd);
-    var numInstances = Math.ceil(totalElements / maxStorageBufferSize);
-    if (numInstances > 1) numInstances = leastPrimeFactor(vocab_size, numInstances);
-    var vocabChunkSize = vocab_size / numInstances;
-
-    for (let i = 0; i < numInstances; i++) {
-      const deEmbedChunkInputBuffer = this.initBuffer(["storage", "copy_to"], [n_embd, vocabChunkSize]);
-      commandEncoder.copyBufferToBuffer(
-        embeddingWeightsBuffer,
-        i * this.bufferSize(n_embd * vocabChunkSize),
-        deEmbedChunkInputBuffer,
-        0,
-        this.bufferSize(n_embd, vocabChunkSize)
-      );
-      // We're doing some buffer tricks here. Since slicedEmbedOutputBuffer is a row matrix, we can just pretend it's a column matrix without any changes to the way it's stored. We then multiply it by the transposed embeddingWeights chunk, resulting in a column vector which, once again, we can pretend is a row vector.
-      const deEmbedChunkResultBuffer = this.inlineMatMul(commandEncoder, deEmbedChunkInputBuffer, slicedEmbedOutputBuffer, vocabChunkSize, 1, n_embd);
-      commandEncoder.copyBufferToBuffer(deEmbedChunkResultBuffer, 0, deEmbedOutputBuffer, i * this.bufferSize(vocabChunkSize), this.bufferSize(vocabChunkSize));
-    }
-
-    // const layerNormOutput2Buffer = this.initOutputBuffer(commandEncoder, layerNormBuffer, seq_length, n_embd);
-    // const ffnOutputBuffer = this.initOutputBuffer(commandEncoder, linearOutputBuffer, seq_length, n_embd);
-    // const customFFNOutputBuffer = this.initOutputBuffer(commandEncoder, resultBuffer, seq_length, n_embd);
-
     this.device.queue.submit([commandEncoder.finish()]);
 
-    await deEmbedOutputBuffer.mapAsync(GPUMapMode.READ);
+    // ---------------- Read Results ----------------
 
-    const output = deEmbedOutputBuffer.getMappedRange();
+    await resultBuffer.mapAsync(GPUMapMode.READ);
+    const output = resultBuffer.getMappedRange();
     const outputArray = new Float32Array(output).slice(0); // Copy the array, otherwise it'll be destroyed.
 
     this.destroyBuffers();
