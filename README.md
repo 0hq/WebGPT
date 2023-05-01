@@ -29,6 +29,8 @@ If you want to try out WebGPT, visit the demo website here [KMeans.org](https://
 - [X] Reuse buffers.
 - [X] Kernel shared memory for matmul!
 - [X] Destroy buffers after use!
+- [X] Create kernel instruction classes + optimize pipeline creation.
+- [ ] Fuse all kernels.
 - [ ] Investigate why attention cache isn't giving proper speed-ups.
 - [ ] Make simple instructional version without special stuff.
 - [ ] Optimize workgroup sizes, specifically for single row/col operations.
