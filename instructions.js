@@ -3,6 +3,7 @@
   Softmax will run via rows, every workgroup handling a different row.
   Override constants.
 
+  
 */
 
 class Block {
@@ -82,7 +83,7 @@ class FastMatMulBlock extends Block {
   }
 
   getPipeline(rows) {
-    const div4 = rows % 4 === 0 && false;
+    const div4 = rows % 4 === 0;
     const pipelineCacheKey = div4 ? "fastMatMulNoCheck" : "fastMatMul";
     if (this.pipelineCache.has(pipelineCacheKey)) return this.pipelineCache.get(pipelineCacheKey);
     const kernel = div4 ? this.fastMatMulNoCheck : this.fastMatMul;
@@ -1500,6 +1501,14 @@ class DeEmbedBlock extends Block {
     this.pipelineCache = new Map();
   }
 
+  getPipeline() {
+    const pipelineCacheKey = this.name; // No param optimization.
+    if (this.pipelineCache.has(pipelineCacheKey)) return this.pipelineCache.get(pipelineCacheKey);
+    const pipeline = this.initPipeline(this.deEmbedShader, [this.u_s_Layout, this.r_r_Layout], `${this.name}_Pipeline`);
+    this.pipelineCache.set(pipelineCacheKey, pipeline);
+    return pipeline;
+  }
+
   newInstance(vocab_size, n_embd, seq_length, embedBuffer, embeddingWeightsBuffer, NaiveMatMulBlock) {
     const slicedEmbedOutputBuffer = this.initBuffer(["storage", "copy_to"], [n_embd]);
     const deEmbedOutputBuffer = this.initBuffer(["map_read", "copy_to"], [vocab_size]);
@@ -1556,6 +1565,51 @@ class DeEmbedBlock extends Block {
       passes: [sliceEmbedCopyCommand, ...deEmbedPasses],
     };
   }
+
+  deEmbedShader = `
+    struct BMeta {
+      M: u32,
+      N: u32,
+      ND4: u32,
+    }
+
+    @group(1) @binding(0) var<storage,read> array_matrix: array<vec4<f32>>;
+    @group(1) @binding(1) var<storage,read> embed_row: array<vec4<f32>>;
+    @group(0) @binding(0) var<uniform> bmeta: BMeta;
+    @group(0) @binding(1) var<storage,read_write> array_output: array<vec4<f32>>;
+
+    @compute @workgroup_size(8,8)
+    fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
+      var row: u32 = global_id.x;
+      var ND4: u32 = bmeta.ND4;
+      var M: u32 = bmeta.M;
+      
+      if (row >= M) {
+        return;
+      }
+
+      var sum00: vec4<f32> = vec4<f32>(0.0);
+
+      for (var i: u32 = 0u; i < ND4; i = i + 1u) {
+        var embedChunk = embed_row[i]
+        var brow: vec4<f32>;
+
+        brow = array_matrix[(i + 0u) * ND4 + row];
+        sum00 = sum00 + vec4<f32>(embedChunk.x) * matrixChunk;
+
+        brow = array_matrix[row * ND4 + i];
+        sum00 = sum00 + vec4<f32>(embedChunk.y) * matrixChunk;
+
+        brow = array_matrix[row * ND4 + i];
+        sum00 = sum00 + vec4<f32>(embedChunk.z) * matrixChunk;
+
+        brow = array_matrix[row * ND4 + i];
+        sum00 = sum00 + vec4<f32>(embedChunk.w) * matrixChunk;
+      }
+
+      array_output[row] = sum00;
+    }
+  `;
 }
 
 class FastFFNBlock extends Block {
