@@ -1,3 +1,10 @@
+/*
+
+  Softmax will run via rows, every workgroup handling a different row.
+  Override constants.
+
+*/
+
 class Block {
   constructor(device) {
     this.device = device;
