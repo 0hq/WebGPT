@@ -29,17 +29,9 @@ class SimpleTokenizer extends Tokenizer {
 
   async load() {
     console.log("Loading simple tokenizer...");
-
-    const encoder = await (await fetch("models/tokenization/simple_tokens.json")).json();
-
-    const decoder = {};
-    Object.keys(encoder).map((x) => {
-      decoder[encoder[x]] = x;
-    });
-
-    this.encoder = encoder;
-    this.decoder = decoder;
-    this.vocab_size = Object.keys(encoder).length;
+    this.encoder = await (await fetch("models/tokenization/simple_tokens.json")).json();
+    this.decoder = Object.keys(this.encoder).reduce((acc, x) => ({ ...acc, [this.encoder[x]]: x }), {});
+    this.vocab_size = Object.keys(this.encoder).length;
   }
 
   encode(str) {
@@ -69,6 +61,7 @@ class GPT2Tokenizer extends Tokenizer {
     const encoder = await (await fetch("models/tokenization/gpt_tokens.json")).json();
     this.encoder = encoder;
 
+    console.log("Building decoder...");
     const decoder = {};
     Object.keys(encoder).map((x) => {
       decoder[encoder[x]] = x;
@@ -76,8 +69,6 @@ class GPT2Tokenizer extends Tokenizer {
     this.decoder = decoder;
 
     const lines = bpe_file.split("\n");
-
-    // bpe_merges = [tuple(merge_str.split()) for merge_str in bpe_data.split("\n")[1:-1]]
     const bpe_merges = lines.slice(1, lines.length - 1).map((x) => {
       return x.split(/(\s+)/).filter(function (e) {
         return e.trim().length > 0;
@@ -94,14 +85,11 @@ class GPT2Tokenizer extends Tokenizer {
 
     this.bpe_ranks = dictZip(bpe_merges, range(0, bpe_merges.length));
     this.cache = new Map();
-
     this.vocab_size = Object.keys(encoder).length;
   }
 
   encode(text) {
-    if (this.byte_encoder === undefined) {
-      throw new Error("Not loaded.");
-    }
+    if (!this.byte_encoder) throw new Error("Tokenizer not loaded.");
     let bpe_tokens = [];
     const matches = Array.from(text.matchAll(this.pat)).map((x) => x[0]);
     for (let token of matches) {
@@ -121,52 +109,30 @@ class GPT2Tokenizer extends Tokenizer {
   }
 
   decode(tokens) {
-    if (this.byte_decoder === undefined || this.decoder === undefined) {
-      throw new Error("Not loaded.");
-    }
+    if (!this.byte_decoder) throw new Error("Tokenizer not loaded.");
     let text = tokens.map((x) => this.decoder[x]).join("");
     text = this.textDecoder.decode(new Uint8Array(text.split("").map((x) => this.byte_decoder[x])));
     return text;
   }
 
   bpe(token) {
-    if (this.cache.has(token)) {
-      return this.cache.get(token);
-    }
-
+    if (this.cache.has(token)) return this.cache.get(token);
     let word = token.split("");
-
     let pairs = get_pairs(word);
-
-    if (!pairs) {
-      return token;
-    }
-
+    if (!pairs) return token;
     while (true) {
       const minPairs = {};
       Array.from(pairs).map((pair) => {
         const rank = this.bpe_ranks[pair];
         minPairs[isNaN(rank) ? 10e10 : rank] = pair;
       });
-
-      const bigram =
-        minPairs[
-          Math.min(
-            ...Object.keys(minPairs).map((x) => {
-              return parseInt(x);
-            })
-          )
-        ];
-
-      if (!Object.hasOwn(this.bpe_ranks, bigram)) {
-        break;
-      }
-
+      const keys = Object.keys(minPairs).map((x) => parseInt(x));
+      const bigram = minPairs[Math.min(...keys)];
+      if (!Object.hasOwn(this.bpe_ranks, bigram)) break;
       const first = bigram[0];
       const second = bigram[1];
       let new_word = [];
       let i = 0;
-
       while (i < word.length) {
         const j = word.indexOf(first, i);
         if (j === -1) {
@@ -175,7 +141,6 @@ class GPT2Tokenizer extends Tokenizer {
         }
         new_word = new_word.concat(word.slice(i, j));
         i = j;
-
         if (word[i] === first && i < word.length - 1 && word[i + 1] === second) {
           new_word.push(first + second);
           i = i + 2;
@@ -184,18 +149,12 @@ class GPT2Tokenizer extends Tokenizer {
           i = i + 1;
         }
       }
-
       word = new_word;
-      if (word.length === 1) {
-        break;
-      } else {
-        pairs = get_pairs(word);
-      }
+      if (word.length === 1) break;
+      else pairs = get_pairs(word);
     }
-
     word = word.join(" ");
     this.cache.set(token, word);
-
     return word;
   }
 }
@@ -219,7 +178,6 @@ const dictZip = (x, y) => {
 
 const bytes_to_unicode = () => {
   const bs = range(ord("!"), ord("~") + 1).concat(range(ord("¡"), ord("¬") + 1), range(ord("®"), ord("ÿ") + 1));
-
   let cs = bs.slice();
   let n = 0;
   for (let b = 0; b < 2 ** 8; b++) {
@@ -229,9 +187,7 @@ const bytes_to_unicode = () => {
       n = n + 1;
     }
   }
-
   cs = cs.map((x) => String.fromCharCode(x));
-
   const result = {};
   bs.map((_, i) => {
     result[bs[i]] = cs[i];
