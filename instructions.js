@@ -80,12 +80,12 @@ class FastMatMulBlock extends Block {
   }
 
   getPipeline(rows) {
-    const div4 = rows % 4 === 0;
-    const pipelineCacheKey = div4 ? "fastMatMulNoCheck" : "fastMatMul";
-    if (this.pipelineCache.has(pipelineCacheKey)) {
-      return this.pipelineCache.get(pipelineCacheKey);
-    }
-    const kernel = div4 ? this.fastMatMulNoCheck : this.fastMatMul;
+    // const div4 = rows % 4 === 0 && false;
+    const pipelineCacheKey = "fastMatMul";
+    // if (this.pipelineCache.has(pipelineCacheKey)) {
+    //   return this.pipelineCache.get(pipelineCacheKey);
+    // }
+    const kernel = this.fastMatMul;
     const pipeline = this.initPipeline(kernel, [this.u_s_Layout, this.r_r_Layout], `${this.name}_Pipeline_${pipelineCacheKey}`);
     this.pipelineCache.set(pipelineCacheKey, pipeline);
     return pipeline;
@@ -579,7 +579,7 @@ class FastRowAddBlock extends Block {
 
   getPipeline() {
     const pipelineCacheKey = this.name; // No param optimization.
-    if (this.pipelineCache.has(pipelineCacheKey)) return this.pipelineCache.get(pipelineCacheKey);
+    // if (this.pipelineCache.has(pipelineCacheKey)) return this.pipelineCache.get(pipelineCacheKey);
     const pipeline = this.initPipeline(this.fastRowAddShader, [this.u_s_Layout, this.r_r_Layout], `${this.name}_Pipeline`);
     this.pipelineCache.set(pipelineCacheKey, pipeline);
     return pipeline;
@@ -593,7 +593,7 @@ class FastRowAddBlock extends Block {
     const resultBuffer = this.initBuffer(["storage", "copy_from"], [rows, cols]);
     const opBindGroup = this.initBindGroup(this.u_s_Layout, [uniformBuffer, resultBuffer], `${this.name}_OpG`);
     const inputBindGroup = this.initBindGroup(this.r_r_Layout, [inputBuf, rowBuf], `${this.name}_InputG`);
-    const workgroups = { x: wgSize(cols, 16), y: wgSize(rows, 16), z: 1 };
+    const workgroups = { x: wgSize(cols, 32), y: wgSize(rows, 8), z: 1 };
     this.device.queue.writeBuffer(uniformBuffer, 0, new Uint32Array([rows, cols, cols / 4]));
 
     return {
@@ -1203,7 +1203,7 @@ class AttentionBlock extends Block {
     this.device.queue.writeBuffer(causalMaskUniformBuffer, 0, new Uint32Array([seq_length * n_head, seq_length])); // Transposes! This is needed for softmax.
     const causalMaskWorkgroups = { x: wgSize(seq_length, 16), y: wgSize(seq_length * n_head, 16), z: 1 };
 
-    const { resultBuffer: softmaxOutputBuffer, passes: softmaxPasses } = SoftmaxBlock.newInstance(seq_length, 3 * n_embd, causalMaskResultBuffer);
+    const { resultBuffer: softmaxOutputBuffer, passes: softmaxPasses } = SoftmaxBlock.newInstance(seq_length * n_head, seq_length, causalMaskResultBuffer);
 
     const attentionValuesPipeline = this.getAttentionValuesPipeline();
     const attentionValuesUniformBuffer = this.initBuffer(["uniform", "copy_to"], [4]);
@@ -1211,13 +1211,13 @@ class AttentionBlock extends Block {
     const attentionValuesBindGroup = this.initBindGroup(this.u_s_Layout, [attentionValuesUniformBuffer, attentionValuesResultBuffer]);
     const attentionValuesInputBindGroup = this.initBindGroup(this.r_r_Layout, [softmaxOutputBuffer, splitVResultBuffer], `${this.name}_AttentionValuesInputG`);
     this.device.queue.writeBuffer(attentionValuesUniformBuffer, 0, new Uint32Array([seq_length, n_embd, n_head, n_embd / n_head]));
-    const attentionValuesWorkgroupts = { x: wgSize(n_embd, 16), y: wgSize(seq_length, 16), z: 1 };
+    const attentionValuesWorkgroups = { x: wgSize(n_embd, 16), y: wgSize(seq_length, 16), z: 1 };
 
     const { resultBuffer: linearMatmulResult, passes: linearMatmulPasses } = FastMatMulBlock.newInstance(
       seq_length,
       n_embd,
       n_embd,
-      inputBuffer,
+      attentionValuesResultBuffer,
       linearWeightsBuffer
     );
     const { resultBuffer: linearBiasResult, passes: linearBiasPasses } = FastRowAddBlock.newInstance(seq_length, n_embd, linearMatmulResult, linearBiasBuffer);
@@ -1256,7 +1256,7 @@ class AttentionBlock extends Block {
           flag: "compute",
           pipeline: attentionValuesPipeline,
           groups: [attentionValuesBindGroup, attentionValuesInputBindGroup],
-          workgroups: attentionValuesWorkgroupts,
+          workgroups: attentionValuesWorkgroups,
         },
         ...linearMatmulPasses,
         ...linearBiasPasses,
@@ -1585,14 +1585,19 @@ class FastFFNBlock extends Block {
       inputBuffer,
       firstLayerWeightsBuffer
     );
-    const { resultBuffer: firstBiasResult, passes: firstBiasPasses } = FastRowAddBlock.newInstance(seq_length, n_embd, firstMatmulResult, firstLayerBiasBuffer);
+    const { resultBuffer: firstBiasResult, passes: firstBiasPasses } = FastRowAddBlock.newInstance(
+      seq_length,
+      hidden_size,
+      firstMatmulResult,
+      firstLayerBiasBuffer
+    );
 
     const { resultBuffer: geluResult, passes: geluPasses } = GeluBlock.newInstance(seq_length, hidden_size, firstBiasResult);
 
     const { resultBuffer: secondMatmulResult, passes: secondMatmulPasses } = FastMatMulBlock.newInstance(
       seq_length,
-      hidden_size,
       n_embd,
+      hidden_size,
       geluResult,
       secondLayerWeightsBuffer
     );

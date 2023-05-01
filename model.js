@@ -199,78 +199,91 @@ class GPT {
       residualBuffer = resultBuffer;
       this.computePasses.push(...passes);
     }
-    const buffers = layer_buffers[0];
-    {
-      const { passes, resultBuffer } = this.LayerNormBlock.newInstance(
-        seq_length,
-        n_embd,
-        intermediateBuffer,
-        buffers.normAttentionGammaBuffer,
-        buffers.normAttentionBetaBuffer
-      );
-      intermediateBuffer = resultBuffer;
-      this.computePasses.push(...passes);
+    for (let i = 0; i < n_layer; i++) {
+      const buffers = layer_buffers[i];
+      {
+        const { passes, resultBuffer } = this.LayerNormBlock.newInstance(
+          seq_length,
+          n_embd,
+          intermediateBuffer,
+          buffers.normAttentionGammaBuffer,
+          buffers.normAttentionBetaBuffer
+        );
+        intermediateBuffer = resultBuffer;
+        this.computePasses.push(...passes);
+      }
+      {
+        const { passes, resultBuffer } = this.AttentionBlock.newInstance(
+          seq_length,
+          n_embd,
+          attentionDotProductScale,
+          n_head,
+          intermediateBuffer,
+          buffers.qkvWeightsBuffer,
+          buffers.qkvBiasBuffer,
+          buffers.linearWeightsBuffer,
+          buffers.linearBiasBuffer,
+          this.FastMatMulBlock,
+          this.FastRowAddBlock,
+          this.SoftmaxBlock
+        );
+        intermediateBuffer = resultBuffer;
+        this.computePasses.push(...passes);
+      }
+      {
+        const { passes, resultBuffer } = this.ResidualBlock.newInstance(seq_length, n_embd, intermediateBuffer, residualBuffer);
+        intermediateBuffer = resultBuffer;
+        residualBuffer = resultBuffer;
+        this.computePasses.push(...passes);
+      }
+      {
+        const { passes, resultBuffer } = this.LayerNormBlock.newInstance(
+          seq_length,
+          n_embd,
+          intermediateBuffer,
+          buffers.normLinearGammaBuffer,
+          buffers.normLinearBetaBuffer
+        );
+        intermediateBuffer = resultBuffer;
+        this.computePasses.push(...passes);
+      }
+      {
+        const { passes, resultBuffer } = this.FastFFNBlock.newInstance(
+          seq_length,
+          n_embd,
+          hidden_size,
+          intermediateBuffer,
+          buffers.firstLayerWeightsBuffer,
+          buffers.firstLayerBiasBuffer,
+          buffers.secondLayerWeightsBuffer,
+          buffers.secondLayerBiasBuffer,
+          this.FastMatMulBlock,
+          this.FastRowAddBlock,
+          this.GeluBlock
+        );
+        intermediateBuffer = resultBuffer;
+        this.computePasses.push(...passes);
+      }
+      {
+        const { passes, resultBuffer } = this.ResidualBlock.newInstance(seq_length, n_embd, intermediateBuffer, residualBuffer);
+        intermediateBuffer = resultBuffer;
+        residualBuffer = resultBuffer;
+        this.computePasses.push(...passes);
+      }
     }
-    {
-      const { passes, resultBuffer } = this.AttentionBlock.newInstance(
-        seq_length,
-        n_embd,
-        attentionDotProductScale,
-        n_head,
-        intermediateBuffer,
-        buffers.qkvWeightsBuffer,
-        buffers.qkvBiasBuffer,
-        buffers.linearWeightsBuffer,
-        buffers.linearBiasBuffer,
-        this.FastMatMulBlock,
-        this.FastRowAddBlock,
-        this.SoftmaxBlock
-      );
-      intermediateBuffer = resultBuffer;
-      this.computePasses.push(...passes);
-    }
-    {
-      const { passes, resultBuffer } = this.ResidualBlock.newInstance(seq_length, n_embd, intermediateBuffer, residualBuffer);
-      intermediateBuffer = resultBuffer;
-      residualBuffer = resultBuffer;
-      this.computePasses.push(...passes);
-    }
-    {
-      const { passes, resultBuffer } = this.LayerNormBlock.newInstance(
-        seq_length,
-        n_embd,
-        intermediateBuffer,
-        buffers.normLinearGammaBuffer,
-        buffers.normLinearBetaBuffer
-      );
-      intermediateBuffer = resultBuffer;
-      this.computePasses.push(...passes);
-    }
-    {
-      const { passes, resultBuffer } = this.FastFFNBlock.newInstance(
-        seq_length,
-        n_embd,
-        hidden_size,
-        intermediateBuffer,
-        buffers.firstLayerWeightsBuffer,
-        buffers.firstLayerBiasBuffer,
-        buffers.secondLayerWeightsBuffer,
-        buffers.secondLayerBiasBuffer,
-        this.FastMatMulBlock,
-        this.FastRowAddBlock,
-        this.GeluBlock
-      );
-      intermediateBuffer = resultBuffer;
-      this.computePasses.push(...passes);
-    }
-    {
-      const { passes, resultBuffer } = this.ResidualBlock.newInstance(seq_length, n_embd, intermediateBuffer, residualBuffer);
-      intermediateBuffer = resultBuffer;
-      residualBuffer = resultBuffer;
-      this.computePasses.push(...passes);
-    }
-
-    this.resultBuffer = intermediateBuffer;
+    // {
+    //   const { passes, resultBuffer } = this.DeEmbedBlock.newInstance(
+    //     vocab_size,
+    //     n_embd,
+    //     seq_length,
+    //     intermediateBuffer,
+    //     embeddingWeightsBuffer,
+    //     this.NaiveMatMulBlock
+    //   );
+    //   intermediateBuffer = resultBuffer;
+    //   this.computePasses.push(...passes);
+    // }
+    const resultBuffer = intermediateBuffer;
 
     // ---------------- Compute Passes ----------------
 
@@ -279,113 +292,22 @@ class GPT {
     console.log("Running:", this.computePasses);
     for (const pass of this.computePasses) {
       if (pass.flag === "compute") {
-        console.log("computing");
-        console.log(pass);
+        // console.log("computing");
+        // console.log(pass);
         const passEncoder = commandEncoder.beginComputePass();
         passEncoder.setPipeline(pass.pipeline);
         for (let i = 0; i < pass.groups.length; i++) passEncoder.setBindGroup(i, pass.groups[i]);
         passEncoder.dispatchWorkgroups(pass.workgroups.x, pass.workgroups.y);
         passEncoder.end();
       } else if (pass.flag === "copy") {
-        console.log("copying");
-        console.log(pass);
+        // console.log("copying");
+        // console.log(pass);
         commandEncoder.copyBufferToBuffer(pass.src, pass.srcOffset, pass.dst, pass.dstOffset, pass.size);
       }
     }
 
-    // const embdOutputBuffer = this.initBuffer(["storage", "copy_to"], [seq_length, n_embd]);
-    // for (let i = 0; i < seq_length; i++) {
-    //   commandEncoder.copyBufferToBuffer(
-    //     embeddingWeightsBuffer,
-    //     this.bufferSize(n_embd) * idx[i],
-    //     embdOutputBuffer,
-    //     this.bufferSize(n_embd) * i,
-    //     this.bufferSize(n_embd)
-    //   );
-    // }
-    // // Crop position embeddings.
-    // const posEmbdOutputBuffer = this.initBuffer(["storage", "copy_to"], [seq_length, n_embd]);
-    // commandEncoder.copyBufferToBuffer(posEmbdBuffer, 0, posEmbdOutputBuffer, 0, this.bufferSize(seq_length, n_embd));
-
-    // const embeddedInputBuffer = this.inlineResidual(commandEncoder, seq_length, n_embd, embdOutputBuffer, posEmbdOutputBuffer); // Residual connection is just elementwise addition.
-
-    let layerOutputBuffer = this.resultBuffer;
-    for (let i = 1; i < n_layer; i++) {
-      const buffers = layer_buffers[i];
-
-      const layerNormAttentionOutputBuffer = this.inlineLayerNorm(
-        commandEncoder,
-        seq_length,
-        n_embd,
-        layerOutputBuffer,
-        buffers.normAttentionGammaBuffer,
-        buffers.normAttentionBetaBuffer
-      );
-
-      let attentionOutputBuffer;
-      if (useAttCache) {
-        attentionOutputBuffer = this.inlineFastCachedAttention(
-          commandEncoder,
-          seq_length,
-          n_embd,
-          attentionDotProductScale,
-          layerNormAttentionOutputBuffer,
-          n_head,
-          buffers.qkvWeightsBuffer,
-          buffers.qkvBiasBuffer,
-          buffers.linearWeightsBuffer,
-          buffers.linearBiasBuffer,
-          buffers.attentionCacheBuffer
-        );
-      } else {
-        attentionOutputBuffer = this.inlineFastAttention(
-          commandEncoder,
-          seq_length,
-          n_embd,
-          attentionDotProductScale,
-          layerNormAttentionOutputBuffer,
-          n_head,
-          buffers.qkvWeightsBuffer,
-          buffers.qkvBiasBuffer,
-          buffers.linearWeightsBuffer,
-          buffers.linearBiasBuffer,
-          buffers.attentionCacheBuffer
-        );
-      }
-
-      const residualAttentionOutputBuffer = this.inlineResidual(commandEncoder, seq_length, n_embd, attentionOutputBuffer, layerOutputBuffer);
-
-      const layerNormLinearOutputBuffer = this.inlineLayerNorm(
-        commandEncoder,
-        seq_length,
-        n_embd,
-        residualAttentionOutputBuffer,
-        buffers.normLinearGammaBuffer,
-        buffers.normLinearBetaBuffer
-      );
-
-      let linearOutputBuffer;
-      linearOutputBuffer = this.inlineFastFFN(
-        commandEncoder,
-        seq_length,
-        n_embd,
-        hidden_size,
-        layerNormLinearOutputBuffer,
-        buffers.firstLayerWeightsBuffer,
-        buffers.firstLayerBiasBuffer,
-        buffers.secondLayerWeightsBuffer,
-        buffers.secondLayerBiasBuffer
-      );
-
-      const residualLinearOutputBuffer = this.inlineResidual(commandEncoder, seq_length, n_embd, linearOutputBuffer, residualAttentionOutputBuffer);
-
-      layerOutputBuffer = residualLinearOutputBuffer;
-    }
-
-    const layerNormOutputBuffer = this.inlineLayerNorm(commandEncoder, seq_length, n_embd, layerOutputBuffer, normGammaBuffer, normBetaBuffer);
-
     const slicedEmbedOutputBuffer = this.initBuffer(["storage", "copy_to"], [n_embd]);
-    commandEncoder.copyBufferToBuffer(layerNormOutputBuffer, this.bufferSize(seq_length - 1, n_embd), slicedEmbedOutputBuffer, 0, this.bufferSize(1, n_embd));
+    commandEncoder.copyBufferToBuffer(resultBuffer, this.bufferSize(seq_length - 1, n_embd), slicedEmbedOutputBuffer, 0, this.bufferSize(1, n_embd));
 
     const deEmbedOutputBuffer = this.initBuffer(["map_read", "copy_to"], [vocab_size]);
 
@@ -410,15 +332,14 @@ class GPT {
       commandEncoder.copyBufferToBuffer(deEmbedChunkResultBuffer, 0, deEmbedOutputBuffer, i * this.bufferSize(vocabChunkSize), this.bufferSize(vocabChunkSize));
     }
 
-    const embedOutputBuffer = this.initOutputBuffer(commandEncoder, this.resultBuffer, seq_length, n_embd);
+    // const layerNormOutput2Buffer = this.initOutputBuffer(commandEncoder, layerNormBuffer, seq_length, n_embd);
+    // const ffnOutputBuffer = this.initOutputBuffer(commandEncoder, linearOutputBuffer, seq_length, n_embd);
+    // const customFFNOutputBuffer = this.initOutputBuffer(commandEncoder, resultBuffer, seq_length, n_embd);
 
     this.device.queue.submit([commandEncoder.finish()]);
 
-    await embedOutputBuffer.mapAsync(GPUMapMode.READ);
     await deEmbedOutputBuffer.mapAsync(GPUMapMode.READ);
-    const embed = embedOutputBuffer.getMappedRange();
-    const embedArray = new Float32Array(embed).slice(0); // Copy the array, otherwise it'll be destroyed.
-    // console.log("Embed array", embedArray);
+
     const output = deEmbedOutputBuffer.getMappedRange();
     const outputArray = new Float32Array(output).slice(0); // Copy the array, otherwise it'll be destroyed.
 
