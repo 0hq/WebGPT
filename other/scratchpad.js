@@ -1,55 +1,329 @@
-const fastRowAddShader = `
-  struct BMeta {
-    M: u32,
-    N: u32,
-    ND4: u32,
+class Instruction {
+  constructor(device) {
+    this.device = device;
+    this.bufferDeletionStack = [];
+    this.unloadDeletionStack = [];
+
+    this.initBindGroups();
   }
 
-  @group(1) @binding(0) var<storage,read> array_matrix: array<vec4<f32>>;
-  @group(1) @binding(1) var<storage,read> array_bias: array<vec4<f32>>;
-  @group(0) @binding(0) var<uniform> bmeta: BMeta;
-  @group(0) @binding(1) var<storage,read_write> array_output: array<vec4<f32>>;
+  initBindGroup(layout, buffers, label = "") {
+    return this.device.createBindGroup({
+      layout,
+      entries: buffers.map((buffer, i) => ({
+        binding: i,
+        resource: { buffer },
+      })),
+      label,
+    });
+  }
 
-  @compute @workgroup_size(8,8)
-  fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
-    var col: u32 = global_id.x;
-    var row: u32 = global_id.y;
-    var ND4: u32 = bmeta.ND4;
-    var M: u32 = bmeta.M;
-    
-    if (row >= M || col >= ND4) {
-      return;
+  initBuffer(ops, row, col = 1, noDelete = false) {
+    const buffer = this.device.createBuffer({
+      size: this.bufferSize(row, col),
+      usage: ops.map((u) => bufferUsageDict[u]).reduce((a, b) => a | b),
+    });
+    if (!noDelete) this.bufferDeletionStack.push(buffer);
+    else this.unloadDeletionStack.push(buffer);
+    return buffer;
+  }
+
+  bufferSize(dimA, dimB = 1) {
+    return Math.ceil((dimA * dimB * Float32Array.BYTES_PER_ELEMENT) / 1) * 1;
+  }
+
+  initBindGroups() {
+    const bg = (types) =>
+      this.device.createBindGroupLayout({
+        entries: types.map((entry, i) => ({
+          binding: i,
+          visibility: GPUShaderStage.COMPUTE,
+          buffer: { type: entry },
+        })),
+      });
+
+    this.r_r_r_Layout = bg(["read-only-storage", "read-only-storage", "read-only-storage"]);
+    this.r_r_Layout = bg(["read-only-storage", "read-only-storage"]);
+    this.r_Layout = bg(["read-only-storage"]);
+    this.u_s_Layout = bg(["uniform", "storage"]);
+    this.u_s_s_s_Layout = bg(["uniform", "storage", "storage", "storage"]);
+  }
+
+  initPipeline(code, bindGroupLayouts, label = "", constants = {}) {
+    return this.device.createComputePipeline({
+      layout: this.device.createPipelineLayout({ bindGroupLayouts }),
+      compute: {
+        module: this.device.createShaderModule({ code }),
+        entryPoint: "main",
+        constants,
+      },
+      label,
+    });
+  }
+
+  unloadBuffers() {
+    this.unloadDeletionStack.map((buffer) => buffer.destroy());
+    this.unloadDeletionStack = [];
+  }
+
+  destroyBuffers() {
+    this.bufferDeletionStack.map((buffer) => buffer.destroy());
+    this.bufferDeletionStack = [];
+  }
+}
+
+class FastMatMul extends Instruction {
+  constructor(device) {
+    super(device);
+    this.name = "fastMatMul";
+    this.pipelineCache = new Map();
+  }
+
+  getPipeline(rows) {
+    const div4 = rows % 4 === 0;
+    const pipelineCacheKey = div4 ? "fastMatMulNoCheck" : "fastMatMul";
+    if (this.pipelineCache.has(pipelineCacheKey)) {
+      return this.pipelineCache.get(pipelineCacheKey);
+    }
+    const kernel = div4 ? this.fastMatMulNoCheck : this.fastMatMul;
+    const pipeline = this.initPipeline(kernel, [this.u_s_Layout, this.r_r_Layout], pipelineCacheKey);
+    this.pipelineCache.set(pipelineCacheKey, pipeline);
+    return pipeline;
+  }
+
+  newInstance(rows, cols, shared, bufA, bufB) {
+    const pipeline = this.getPipeline(rows);
+    const uniformBuffer = this.initBuffer(["uniform", "copy_to"], 4);
+    const resultBuf = this.initBuffer(["storage", "copy_from"], rows, cols);
+    const opBindGroup = this.initBindGroup(this.u_s_Layout, [uniformBuffer, resultBuf], "opBindGroup");
+    const inputBindGroup = this.initBindGroup(this.r_r_Layout, [bufA, bufB], "inputBindGroup");
+    const workgroups = { x: wgSize(cols, 64), y: wgSize(rows, 32) };
+    this.device.queue.writeBuffer(uniformBuffer, 0, new Uint32Array([rows, cols, Math.ceil(cols / 4), Math.ceil(shared / 4)]));
+
+    return {
+      resultBuf,
+      pass: {
+        pipeline,
+        groups: [opBindGroup, inputBindGroup],
+        workgroups,
+      },
+    };
+  }
+
+  fastMatMul = `
+    struct CMeta {
+      M: u32,
+      N: u32,
+      ND4: u32,
+      KD4: u32,
     }
 
-    array_output[row * ND4 + col] = array_matrix[row * ND4 + col] + array_bias[col];
-  }
-`;
+    @group(1) @binding(0) var<storage,read> array_a: array<vec4<f32>>;
+    @group(1) @binding(1) var<storage,read> array_b: array<vec4<f32>>;
 
-const slowRowAddShader = `
-  struct BMeta {
-    M: u32,
-    N: u32,
-  }
+    @group(0) @binding(0) var<uniform> cmeta: CMeta;
+    @group(0) @binding(1) var<storage,read_write> array_c: array<vec4<f32>>;
 
-  @group(1) @binding(0) var<storage,read> array_matrix: array<f32>;
-  @group(1) @binding(1) var<storage,read> array_bias: array<f32>;
-  @group(0) @binding(0) var<uniform> bmeta: BMeta;
-  @group(0) @binding(1) var<storage,read_write> array_output: array<f32>;
+    @compute @workgroup_size(8, 8)
+    fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
+      var M: u32 = cmeta.M;
+      var N: u32 = cmeta.N;
+      var ND4: u32 = cmeta.ND4;
+      var KD4: u32 = cmeta.KD4;
+      var x: u32 = global_id.x;
+      var y: u32 = global_id.y;
 
-  @compute @workgroup_size(8,8)
-  fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
-    var col: u32 = global_id.x;
-    var row: u32 = global_id.y;
-    var N: u32 = bmeta.N;
-    var M: u32 = bmeta.M;
-    
-    if (row >= M || col >= N) {
-      return;
+      if (x * 8 >= N || y * 4 >= M) {
+        return;
+      }
+
+      var sum00: vec4<f32> = vec4<f32>();
+      var sum01: vec4<f32> = vec4<f32>();
+      var sum02: vec4<f32> = vec4<f32>();
+      var sum03: vec4<f32> = vec4<f32>();
+      var sum10: vec4<f32> = vec4<f32>();
+      var sum11: vec4<f32> = vec4<f32>();
+      var sum12: vec4<f32> = vec4<f32>();
+      var sum13: vec4<f32> = vec4<f32>();
+
+      for(var k: u32 = 0u; k < KD4; k = k + 1u) {
+        var arow0: vec4<f32> = array_a[(y * 4u + 0u) * KD4 + k];
+        var arow1: vec4<f32> = array_a[(y * 4u + 1u) * KD4 + k];
+        var arow2: vec4<f32> = array_a[(y * 4u + 2u) * KD4 + k];
+        var arow3: vec4<f32> = array_a[(y * 4u + 3u) * KD4 + k];
+        var brow: vec4<f32>;
+
+        brow = array_b[(k * 4u + 0u) * ND4 + x * 2u + 0u];
+        sum00 = vec4<f32>(arow0.x) * brow + sum00;
+        sum01 = vec4<f32>(arow1.x) * brow + sum01;
+        sum02 = vec4<f32>(arow2.x) * brow + sum02;
+        sum03 = vec4<f32>(arow3.x) * brow + sum03;
+
+        brow = array_b[(k * 4u + 0u) * ND4 + x * 2u + 1u];
+        sum10 = vec4<f32>(arow0.x) * brow + sum10;
+        sum11 = vec4<f32>(arow1.x) * brow + sum11;
+        sum12 = vec4<f32>(arow2.x) * brow + sum12;
+        sum13 = vec4<f32>(arow3.x) * brow + sum13;
+
+        brow = array_b[(k * 4u + 1u) * ND4 + x * 2u + 0u];
+        sum00 = vec4<f32>(arow0.y) * brow + sum00;
+        sum01 = vec4<f32>(arow1.y) * brow + sum01;
+        sum02 = vec4<f32>(arow2.y) * brow + sum02;
+        sum03 = vec4<f32>(arow3.y) * brow + sum03;
+
+        brow = array_b[(k * 4u + 1u) * ND4 + x * 2u + 1u];
+        sum10 = vec4<f32>(arow0.y) * brow + sum10;
+        sum11 = vec4<f32>(arow1.y) * brow + sum11;
+        sum12 = vec4<f32>(arow2.y) * brow + sum12;
+        sum13 = vec4<f32>(arow3.y) * brow + sum13;
+
+        brow = array_b[(k * 4u + 2u) * ND4 + x * 2u + 0u];
+        sum00 = vec4<f32>(arow0.z) * brow + sum00;
+        sum01 = vec4<f32>(arow1.z) * brow + sum01;
+        sum02 = vec4<f32>(arow2.z) * brow + sum02;
+        sum03 = vec4<f32>(arow3.z) * brow + sum03;
+
+        brow = array_b[(k * 4u + 2u) * ND4 + x * 2u + 1u];
+        sum10 = vec4<f32>(arow0.z) * brow + sum10;
+        sum11 = vec4<f32>(arow1.z) * brow + sum11;
+        sum12 = vec4<f32>(arow2.z) * brow + sum12;
+        sum13 = vec4<f32>(arow3.z) * brow + sum13;
+
+        brow = array_b[(k * 4u + 3u) * ND4 + x * 2u + 0u];
+        sum00 = vec4<f32>(arow0.w) * brow + sum00;
+        sum01 = vec4<f32>(arow1.w) * brow + sum01;
+        sum02 = vec4<f32>(arow2.w) * brow + sum02;
+        sum03 = vec4<f32>(arow3.w) * brow + sum03;
+
+        brow = array_b[(k * 4u + 3u) * ND4 + x * 2u + 1u];
+        sum10 = vec4<f32>(arow0.w) * brow + sum10;
+        sum11 = vec4<f32>(arow1.w) * brow + sum11;
+        sum12 = vec4<f32>(arow2.w) * brow + sum12;
+        sum13 = vec4<f32>(arow3.w) * brow + sum13;
+      }
+
+      if (y * 4u + 0u < M) {
+        array_c[x * 2u + 0u + (y * 4u + 0u) * ND4] = sum00;
+        array_c[x * 2u + 1u + (y * 4u + 0u) * ND4] = sum10;
+      }
+      if (y * 4u + 1u < M) {
+        array_c[x * 2u + 0u + (y * 4u + 1u) * ND4] = sum01;
+        array_c[x * 2u + 1u + (y * 4u + 1u) * ND4] = sum11;
+      }
+      if (y * 4u + 2u < M) {
+        array_c[x * 2u + 0u + (y * 4u + 2u) * ND4] = sum02;
+        array_c[x * 2u + 1u + (y * 4u + 2u) * ND4] = sum12;
+      }
+      if (y * 4u + 3u < M) {
+        array_c[x * 2u + 0u + (y * 4u + 3u) * ND4] = sum03;
+        array_c[x * 2u + 1u + (y * 4u + 3u) * ND4] = sum13;
+      }
+    }
+  `;
+
+  fastMatMulNoCheck = `
+    struct CMeta {
+      M: u32,
+      N: u32,
+      ND4: u32,
+      KD4: u32,
     }
 
-    array_output[row * N + col] = array_matrix[row * N + col] + array_bias[col];
-  }
-`;
+    @group(1) @binding(0) var<storage,read> array_a: array<vec4<f32>>;
+    @group(1) @binding(1) var<storage,read> array_b: array<vec4<f32>>;
+
+    @group(0) @binding(0) var<uniform> cmeta: CMeta;
+    @group(0) @binding(1) var<storage,read_write> array_c: array<vec4<f32>>;
+
+    @compute @workgroup_size(8, 8)
+    fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
+      var M: u32 = cmeta.M;
+      var N: u32 = cmeta.N;
+      var ND4: u32 = cmeta.ND4;
+      var KD4: u32 = cmeta.KD4;
+      var x: u32 = global_id.x;
+      var y: u32 = global_id.y;
+
+      if (x * 8 >= N || y * 4 >= M) {
+        return;
+      }
+
+      var sum00: vec4<f32> = vec4<f32>();
+      var sum01: vec4<f32> = vec4<f32>();
+      var sum02: vec4<f32> = vec4<f32>();
+      var sum03: vec4<f32> = vec4<f32>();
+      var sum10: vec4<f32> = vec4<f32>();
+      var sum11: vec4<f32> = vec4<f32>();
+      var sum12: vec4<f32> = vec4<f32>();
+      var sum13: vec4<f32> = vec4<f32>();
+
+      for(var k: u32 = 0u; k < KD4; k = k + 1u) {
+        var arow0: vec4<f32> = array_a[(y * 4u + 0u) * KD4 + k];
+        var arow1: vec4<f32> = array_a[(y * 4u + 1u) * KD4 + k];
+        var arow2: vec4<f32> = array_a[(y * 4u + 2u) * KD4 + k];
+        var arow3: vec4<f32> = array_a[(y * 4u + 3u) * KD4 + k];
+        var brow: vec4<f32>;
+
+        brow = array_b[(k * 4u + 0u) * ND4 + x * 2u + 0u];
+        sum00 = vec4<f32>(arow0.x) * brow + sum00;
+        sum01 = vec4<f32>(arow1.x) * brow + sum01;
+        sum02 = vec4<f32>(arow2.x) * brow + sum02;
+        sum03 = vec4<f32>(arow3.x) * brow + sum03;
+
+        brow = array_b[(k * 4u + 0u) * ND4 + x * 2u + 1u];
+        sum10 = vec4<f32>(arow0.x) * brow + sum10;
+        sum11 = vec4<f32>(arow1.x) * brow + sum11;
+        sum12 = vec4<f32>(arow2.x) * brow + sum12;
+        sum13 = vec4<f32>(arow3.x) * brow + sum13;
+
+        brow = array_b[(k * 4u + 1u) * ND4 + x * 2u + 0u];
+        sum00 = vec4<f32>(arow0.y) * brow + sum00;
+        sum01 = vec4<f32>(arow1.y) * brow + sum01;
+        sum02 = vec4<f32>(arow2.y) * brow + sum02;
+        sum03 = vec4<f32>(arow3.y) * brow + sum03;
+
+        brow = array_b[(k * 4u + 1u) * ND4 + x * 2u + 1u];
+        sum10 = vec4<f32>(arow0.y) * brow + sum10;
+        sum11 = vec4<f32>(arow1.y) * brow + sum11;
+        sum12 = vec4<f32>(arow2.y) * brow + sum12;
+        sum13 = vec4<f32>(arow3.y) * brow + sum13;
+
+        brow = array_b[(k * 4u + 2u) * ND4 + x * 2u + 0u];
+        sum00 = vec4<f32>(arow0.z) * brow + sum00;
+        sum01 = vec4<f32>(arow1.z) * brow + sum01;
+        sum02 = vec4<f32>(arow2.z) * brow + sum02;
+        sum03 = vec4<f32>(arow3.z) * brow + sum03;
+
+        brow = array_b[(k * 4u + 2u) * ND4 + x * 2u + 1u];
+        sum10 = vec4<f32>(arow0.z) * brow + sum10;
+        sum11 = vec4<f32>(arow1.z) * brow + sum11;
+        sum12 = vec4<f32>(arow2.z) * brow + sum12;
+        sum13 = vec4<f32>(arow3.z) * brow + sum13;
+
+        brow = array_b[(k * 4u + 3u) * ND4 + x * 2u + 0u];
+        sum00 = vec4<f32>(arow0.w) * brow + sum00;
+        sum01 = vec4<f32>(arow1.w) * brow + sum01;
+        sum02 = vec4<f32>(arow2.w) * brow + sum02;
+        sum03 = vec4<f32>(arow3.w) * brow + sum03;
+
+        brow = array_b[(k * 4u + 3u) * ND4 + x * 2u + 1u];
+        sum10 = vec4<f32>(arow0.w) * brow + sum10;
+        sum11 = vec4<f32>(arow1.w) * brow + sum11;
+        sum12 = vec4<f32>(arow2.w) * brow + sum12;
+        sum13 = vec4<f32>(arow3.w) * brow + sum13;
+      }
+
+      array_c[x * 2u + 0u + (y * 4u + 0u) * ND4] = sum00;
+      array_c[x * 2u + 1u + (y * 4u + 0u) * ND4] = sum10;
+      array_c[x * 2u + 0u + (y * 4u + 1u) * ND4] = sum01;
+      array_c[x * 2u + 1u + (y * 4u + 1u) * ND4] = sum11;
+      array_c[x * 2u + 0u + (y * 4u + 2u) * ND4] = sum02;
+      array_c[x * 2u + 1u + (y * 4u + 2u) * ND4] = sum12;
+      array_c[x * 2u + 0u + (y * 4u + 3u) * ND4] = sum03;
+      array_c[x * 2u + 1u + (y * 4u + 3u) * ND4] = sum13;
+    }
+  `;
+}
 
 class TestGPT {
   constructor(folder, type, doAttentionCache = false) {
@@ -80,91 +354,54 @@ class TestGPT {
     const adapter = await navigator.gpu.requestAdapter();
     this.device = await adapter.requestDevice();
 
-    this.initBindGroups();
-    await this.initPipelines();
+    this.matMulOperation = new FastMatMul(this.device);
+
+    const dimM = 10;
+    const dimN = 10;
+    const demo = new Float32Array(dimM * dimN);
+    for (let i = 0; i < dimM * dimN; i++) demo[i] = 1;
+    const weights1 = this.initTensor(demo, [dimM, dimN], ["storage", "copy_from"]);
+    // const weights2 = this.initTensor(demo, [dimM, dimN], ["storage", "copy_from"]);
+    this.inputBuffer = this.initBuffer(["storage", "copy_from", "copy_to"], dimM, dimN);
+
+    this.computePasses = [];
+    let intermediateBuffer = this.inputBuffer;
+    for (let i = 0; i < 10; i++) {
+      let { pass, resultBuf } = this.matMulOperation.newInstance(10, 10, 10, intermediateBuffer, weights1);
+      intermediateBuffer = resultBuf;
+      this.computePasses.push(pass);
+    }
+    this.resultBuffer = intermediateBuffer;
+    this.outputBuffer = this.initBuffer(["map_read", "copy_to"], dimM, dimN);
 
     this.initialized = true;
   }
 
-  async testFastRowAdd(iters = 5, runs = 10, retries = 3) {
-    const dimM = 1000;
-    const dimN = 25128;
+  async test() {
+    const dimM = 10;
+    const dimN = 10;
     const matrixA = new Float32Array(dimM * dimN);
-    const matrixB = new Float32Array(dimN);
-    for (let i = 0; i < dimM * dimN; i++) matrixA[i] = i + 1;
-    for (let i = 0; i < dimN; i++) matrixB[i] = i + 1;
-    const matrixABuffer = this.initBuffer(["storage", "copy_to"], dimM, dimN, 1, true);
-    const matrixBBuffer = this.initBuffer(["storage", "copy_to"], dimN, 1, true);
-    this.device.queue.writeBuffer(matrixBBuffer, 0, matrixB);
-    this.device.queue.writeBuffer(matrixABuffer, 0, matrixA);
+    for (let i = 0; i < dimM * dimN; i++) matrixA[i] = i * 0.1;
 
-    let times = [];
-    for (let i = 0; i < retries; i++) {
-      let runTime = 0;
-      for (let i = 0; i < runs; i++) {
-        const startTime = performance.now();
-        const commandEncoder = this.device.createCommandEncoder();
-        for (let i = 0; i < iters; i++) {
-          this.inlineSlowRowAdd(commandEncoder, matrixABuffer, matrixBBuffer, dimM, dimN);
-        }
-        this.device.queue.submit([commandEncoder.finish()]);
-        this.destroyBuffers();
-        const endTime = performance.now();
-        runTime += endTime - startTime;
-      }
+    this.device.queue.writeBuffer(this.inputBuffer, 0, matrixA);
 
-      console.log(`${runs * iters} runs of ${dimM}x${dimN} took ${runTime}ms`);
-      console.log(`average time: ${runTime / (runs * iters)}ms`);
-      times.push(runTime);
+    const commandEncoder = this.device.createCommandEncoder();
+    for (const pass of this.computePasses) {
+      const passEncoder = commandEncoder.beginComputePass();
+      passEncoder.setPipeline(pass.pipeline);
+      for (let i = 0; i < pass.groups.length; i++) passEncoder.setBindGroup(i, pass.groups[i]);
+      passEncoder.dispatchWorkgroups(pass.workgroups.x, pass.workgroups.y);
+      passEncoder.end();
     }
-    this.unloadBuffers();
+    commandEncoder.copyBufferToBuffer(this.resultBuffer, 0, this.outputBuffer, 0, this.bufferSize(dimM, dimN));
+    this.device.queue.submit([commandEncoder.finish()]);
 
-    // Average of times
-    let sum = 0;
-    for (let i = 0; i < times.length; i++) {
-      sum += times[i];
-    }
-    console.log("Average:", sum / times.length);
+    await this.outputBuffer.mapAsync(GPUMapMode.READ);
+    const output = this.outputBuffer.getMappedRange();
+    const outputArray = new Float32Array(output).slice(0); // Prevent destruction.
+    console.log(outputArray, formatAsMatrix(outputArray, dimM, dimN));
 
-    // Median of times
-    times.sort((a, b) => a - b);
-    console.log("Median:", times[Math.floor(times.length / 2)]);
-  }
-
-  inlineFastRowAdd(commandEncoder, inputBuffer, biasBuffer, rows, cols) {
-    if (cols % 4 !== 0) throw new Error(`cols must be a multiple of 4, got ${rows}x${cols}`);
-
-    const uniformBuffer = this.initBuffer(["uniform", "copy_to"], 4);
-    const resultBuffer = this.initBuffer(["storage", "copy_from"], rows, cols);
-    const bindGroup = this.initBindGroup(this.u_s_Layout, [uniformBuffer, resultBuffer]);
-    this.device.queue.writeBuffer(uniformBuffer, 0, new Uint32Array([rows, cols, cols / 4]));
-
-    const passEncoder = commandEncoder.beginComputePass();
-    passEncoder.setPipeline(this.fastRowAddPipeline);
-    passEncoder.setBindGroup(0, bindGroup);
-    passEncoder.setBindGroup(1, this.initBindGroup(this.r_r_Layout, [inputBuffer, biasBuffer]));
-    passEncoder.dispatchWorkgroups(wgSize(cols, 32), wgSize(rows, 8));
-    passEncoder.end();
-
-    return resultBuffer;
-  }
-
-  inlineSlowRowAdd(commandEncoder, inputBuffer, biasBuffer, rows, cols) {
-    if (cols % 4 !== 0) throw new Error(`cols must be a multiple of 4, got ${rows}x${cols}`);
-
-    const uniformBuffer = this.initBuffer(["uniform", "copy_to"], 4);
-    const resultBuffer = this.initBuffer(["storage", "copy_from"], rows, cols);
-    const bindGroup = this.initBindGroup(this.u_s_Layout, [uniformBuffer, resultBuffer]);
-    this.device.queue.writeBuffer(uniformBuffer, 0, new Uint32Array([rows, cols]));
-
-    const passEncoder = commandEncoder.beginComputePass();
-    passEncoder.setPipeline(this.slowRowAddPipeline);
-    passEncoder.setBindGroup(0, bindGroup);
-    passEncoder.setBindGroup(1, this.initBindGroup(this.r_r_Layout, [inputBuffer, biasBuffer]));
-    passEncoder.dispatchWorkgroups(wgSize(rows, 8), wgSize(cols, 8));
-    passEncoder.end();
-
-    return resultBuffer;
+    this.destroyBuffers();
   }
 
   initBindGroup(layout, buffers) {
@@ -193,14 +430,21 @@ class TestGPT {
     return buffer;
   }
 
-  initTensor(data, sizeA, sizeB, ops) {
-    const buffer = this.initBuffer([...ops, "copy_to"], sizeA, sizeB, true);
-    this.device.queue.writeBuffer(buffer, 0, data);
+  initTensor(data, dims, ops) {
+    const buffer = this.device.createBuffer({
+      size: this.bufferSize(dims[0], dims[1], dims[2] || 1),
+      usage: ops.map((u) => bufferUsageDict[u]).reduce((a, b) => a | b),
+      mappedAtCreation: true,
+    });
+    const array = new Float32Array(buffer.getMappedRange());
+    array.set(data);
+    buffer.unmap();
+    this.unloadDeletionStack.push(buffer);
     return buffer;
   }
 
-  bufferSize(dimA, dimB = 1) {
-    return Math.ceil((dimA * dimB * Float32Array.BYTES_PER_ELEMENT) / this.minBufferOffset) * this.minBufferOffset;
+  bufferSize(dimX, dimY = 1, dimZ = 1) {
+    return Math.ceil((dimX * dimY * dimZ * Float32Array.BYTES_PER_ELEMENT) / this.minBufferOffset) * this.minBufferOffset;
   }
 
   unloadBuffers() {
@@ -240,14 +484,11 @@ class TestGPT {
         },
       });
     };
-
-    this.fastRowAddPipeline = await p(fastRowAddShader, [this.u_s_Layout, this.r_r_Layout]);
-    this.slowRowAddPipeline = await p(slowRowAddShader, [this.u_s_Layout, this.r_r_Layout]);
   }
 }
 
 async function test() {
   const GPU = new TestGPT();
   await GPU.initialize();
-  await GPU.testFastRowAdd();
+  await GPU.test();
 }
