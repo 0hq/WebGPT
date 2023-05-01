@@ -1,0 +1,282 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Matrix Visualizer</title>
+    <style>
+      canvas {
+        display: block;
+        margin: 0 auto;
+      }
+    </style>
+  </head>
+  <body>
+    <canvas id="webgpu-canvas"></canvas>
+    <script>
+      (async () => {
+        if (navigator.gpu === undefined) {
+          document.getElementById("webgpu-canvas").setAttribute("style", "display:none;");
+          return;
+        }
+
+        // Get a GPU device to render with
+        var adapter = await navigator.gpu.requestAdapter();
+
+        console.log(adapter);
+
+        adapter.features.forEach((value) => {
+          console.log(value);
+        });
+
+        if (!adapter) {
+          document.getElementById("webgpu-canvas").setAttribute("style", "display:none;");
+          console.log("WebGPU not supported");
+          return;
+        }
+        var device = await adapter.requestDevice();
+
+        // Get a context to display our rendered image on the canvas
+        var canvas = document.getElementById("webgpu-canvas");
+        var context = canvas.getContext("webgpu");
+
+        function createMatrixTexture(matrix, width, height, minValue, maxValue) {
+          // Normalize the matrix data to the range [0, 1]
+          const normalizedMatrix = new Float32Array(matrix.length);
+          for (let i = 0; i < matrix.length; i++) {
+            normalizedMatrix[i] = (matrix[i] - minValue) / (maxValue - minValue);
+          }
+
+          const texture = device.createTexture({
+            size: { width, height, depth: 1 },
+            format: "rgba8unorm",
+            usage: GPUTextureUsage.SAMPLED | GPUTextureUsage.COPY_DST | GPUTextureUsage.TEXTURE_BINDING,
+          });
+
+          device.queue.writeTexture(
+            { texture },
+            normalizedMatrix.buffer,
+            { bytesPerRow: width * 4 * Float32Array.BYTES_PER_ELEMENT, rowsPerImage: height },
+            { width, height, depth: 1 }
+          );
+
+          return texture;
+        }
+
+        const matrixWidth = 4;
+        const matrixHeight = 4;
+        const matrix = new Float32Array(4 * matrixWidth * matrixHeight);
+        for (let i = 0; i < matrix.length; i++) {
+          matrix[i] = Math.random();
+        }
+
+        const matrixTexture = createMatrixTexture(matrix, matrixWidth, matrixHeight, 0, 1);
+
+        var shaderCode = `
+          alias float2 = vec2<f32>;
+          alias float4 = vec4<f32>;
+
+          const matrixMinValue: f32 = 0.0;
+          const matrixMaxValue: f32 = 1.0;
+
+          struct VertexInput {
+            @location(0) position: vec4<f32>,
+            @location(1) color: vec4<f32>,
+            @location(2) texCoord: vec2<f32>,
+          };
+
+          struct VertexOutput {
+            @builtin(position) position: vec4<f32>,
+            @location(0) color: vec4<f32>,
+            @location(1) texCoord: vec2<f32>,
+          };
+
+          @vertex
+          fn vertex_main(vert: VertexInput) -> VertexOutput {
+              var out: VertexOutput;
+              out.color = vert.color;
+              out.position = vert.position;
+              out.texCoord = vert.texCoord;
+              return out;
+          };
+
+          @group(0) @binding(0) var matrixSampler: sampler;
+          @group(0) @binding(1) var matrixTexture: texture_2d<f32>;
+
+
+          @fragment
+          fn fragment_main(in: VertexOutput) -> @location(0) float4 {
+            var texCoord: vec2<f32> = vec2<f32>(in.texCoord.x, 1.0 - in.texCoord.y);
+            var color: vec4<f32> = textureSample(matrixTexture, matrixSampler, texCoord);
+            color = color * (matrixMaxValue - matrixMinValue) + matrixMinValue;
+            return vec4<f32>(color.rgb, 1.0);
+          }
+        `;
+
+        // Setup shader modules
+        var shaderModule = device.createShaderModule({ code: shaderCode });
+        var compilationInfo = await shaderModule.getCompilationInfo();
+        if (compilationInfo.messages.length > 0) {
+          var hadError = false;
+          console.log("Shader compilation log:");
+          for (var i = 0; i < compilationInfo.messages.length; ++i) {
+            var msg = compilationInfo.messages[i];
+            console.log(`${msg.lineNum}:${msg.linePos} - ${msg.message}`);
+            hadError = hadError || msg.type == "error";
+          }
+          if (hadError) {
+            console.log("Shader failed to compile");
+            return;
+          }
+        }
+
+        function generateQuadGridVertices(width, height) {
+          const vertices = [];
+          for (let y = 0; y < height; y++) {
+            for (let x = 0; x < width; x++) {
+              const x1 = (x / width) * 2 - 1;
+              const x2 = ((x + 1) / width) * 2 - 1;
+              const y1 = (y / height) * 2 - 1;
+              const y2 = ((y + 1) / height) * 2 - 1;
+              const u1 = x / width;
+              const u2 = (x + 1) / width;
+              const v1 = y / height;
+              const v2 = (y + 1) / height;
+
+              vertices.push(x1, y1, u1, v1, x1, y2, u1, v2, x2, y1, u2, v1, x2, y1, u2, v1, x1, y2, u1, v2, x2, y2, u2, v2);
+            }
+          }
+          return new Float32Array(vertices);
+        }
+
+        const vertexData = generateQuadGridVertices(matrixWidth, matrixHeight);
+
+        const dataBuf = device.createBuffer({
+          size: vertexData.byteLength,
+          usage: GPUBufferUsage.VERTEX,
+          mappedAtCreation: true,
+        });
+
+        new Float32Array(dataBuf.getMappedRange()).set(vertexData);
+        dataBuf.unmap();
+
+        // Vertex attribute state and shader stage
+        var vertexState = {
+          module: shaderModule,
+          entryPoint: "vertex_main",
+          buffers: [
+            {
+              arrayStride: 8 * Float32Array.BYTES_PER_ELEMENT,
+              attributes: [
+                { format: "float32x4", offset: 0, shaderLocation: 0 },
+                { format: "float32x4", offset: 4 * Float32Array.BYTES_PER_ELEMENT, shaderLocation: 1 },
+                { format: "float32x4", offset: 8 * Float32Array.BYTES_PER_ELEMENT, shaderLocation: 2 },
+              ],
+            },
+          ],
+        };
+
+        // Setup render outputs
+        var swapChainFormat = "bgra8unorm";
+        context.configure({ device: device, format: swapChainFormat, usage: GPUTextureUsage.RENDER_ATTACHMENT });
+
+        var depthFormat = "depth24plus-stencil8";
+        var depthTexture = device.createTexture({
+          size: { width: canvas.width, height: canvas.height, depth: 1 },
+          format: depthFormat,
+          usage: GPUTextureUsage.RENDER_ATTACHMENT,
+        });
+
+        // Fragment output targets and shader stage
+        var fragmentState = {
+          module: shaderModule,
+          entryPoint: "fragment_main",
+          targets: [{ format: swapChainFormat }],
+        };
+
+        const sampler = device.createSampler({
+          magFilter: "linear",
+          minFilter: "linear",
+        });
+
+        const bindGroupLayout = device.createBindGroupLayout({
+          entries: [
+            { binding: 0, visibility: GPUShaderStage.FRAGMENT, sampler: { type: "filtering" } },
+            { binding: 1, visibility: GPUShaderStage.FRAGMENT, texture: { sampleType: "float" } },
+          ],
+        });
+
+        const bindGroup = device.createBindGroup({
+          layout: bindGroupLayout,
+          entries: [
+            { binding: 0, resource: sampler },
+            { binding: 1, resource: matrixTexture.createView() },
+          ],
+        });
+
+        const layout = device.createPipelineLayout({ bindGroupLayouts: [bindGroupLayout] });
+        var renderPipeline = device.createRenderPipeline({
+          layout: layout,
+          vertex: vertexState,
+          fragment: fragmentState,
+          depthStencil: { format: depthFormat, depthWriteEnabled: true, depthCompare: "less" },
+        });
+
+        var renderPassDesc = {
+          colorAttachments: [
+            {
+              view: undefined,
+              loadOp: "clear",
+              loadValue: [0.3, 0.3, 0.3, 1],
+              storeOp: "store",
+            },
+          ],
+          depthStencilAttachment: {
+            view: depthTexture.createView(),
+            depthLoadOp: "clear",
+            depthClearValue: 1.0,
+            depthStoreOp: "store",
+            stencilLoadOp: "clear",
+            stencilClearValue: 0,
+            stencilStoreOp: "store",
+          },
+        };
+
+        // Not covered in the tutorial: track when the canvas is visible
+        // on screen, and only render when it is visible.
+        var canvasVisible = false;
+        var observer = new IntersectionObserver(
+          function (e) {
+            if (e[0].isIntersecting) {
+              canvasVisible = true;
+            } else {
+              canvasVisible = false;
+            }
+          },
+          { threshold: [0] }
+        );
+        observer.observe(canvas);
+
+        var frame = function () {
+          if (canvasVisible) {
+            renderPassDesc.colorAttachments[0].view = context.getCurrentTexture().createView();
+
+            var commandEncoder = device.createCommandEncoder();
+
+            var renderPass = commandEncoder.beginRenderPass(renderPassDesc);
+
+            renderPass.setPipeline(renderPipeline);
+            renderPass.setBindGroup(0, bindGroup);
+            renderPass.setVertexBuffer(0, dataBuf);
+            renderPass.draw(6 * matrixWidth * matrixHeight, 1, 0, 0);
+
+            renderPass.end();
+            device.queue.submit([commandEncoder.finish()]);
+          }
+          requestAnimationFrame(frame);
+        };
+        requestAnimationFrame(frame);
+      })();
+    </script>
+  </body>
+</html>
