@@ -1,4 +1,3 @@
-
 # WebGPT
 
 ![webGPT](other/misc/header.png)
@@ -24,20 +23,21 @@ Note: **You'll need to use Git LFS** to download the model files, after cloning 
 
 ## Roadmap / Fixing Stupid Decisions
 
-- [X] Embeddings / de-embeddings on GPU.
-- [X] Initializing pipelines on every step is incredibly inefficient.
-- [X] Key-value caching.
-- [X] Reuse buffers.
-- [X] Kernel shared memory for matmul!
-- [X] Destroy buffers after use!
-- [X] Create kernel instruction classes + optimize pipeline creation.
+- [x] Embeddings / de-embeddings on GPU.
+- [x] Initializing pipelines on every step is incredibly inefficient.
+- [x] Key-value caching.
+- [x] Reuse buffers.
+- [x] Kernel shared memory for matmul!
+- [x] Destroy buffers after use!
+- [x] Create kernel instruction classes + optimize pipeline creation.
+- [ ] Run selection ops on GPU (topk, selection softmax)
 - [ ] Fuse all kernels.
 - [ ] Investigate why attention cache isn't giving proper speed-ups.
 - [ ] Make simple instructional version without special stuff.
 - [ ] Optimize workgroup sizes, specifically for single row/col operations.
 - [ ] Optimize all other kernels.
 - [ ] Convert into a package.
-- [ ] Compute pass splitting for larger models *(maxStorageBufferBindingSize)*
+- [ ] Compute pass splitting for larger models _(maxStorageBufferBindingSize)_
 - [ ] Write better comments + make Youtube explainer.
 
 ## Acknowledgements

@@ -87,6 +87,7 @@ class GPT {
     const fldr = `models/${folder}/`;
     const zeros = (dim) => new Float32Array(dim).fill(0);
 
+    console.log("Loading params...");
     const params = await (await fetch(`${fldr}/params_gpt.json`)).json();
     params.hidden_size = params.n_embd * 4;
     params.attentionDotProductScale = 1 / Math.sqrt(params.n_embd / params.n_head);
@@ -305,7 +306,6 @@ class GPT {
     // ---------------- Compute Passes ----------------
 
     const commandEncoder = this.device.createCommandEncoder();
-    console.log("Running:", this.computePasses);
     for (const pass of this.computePasses) {
       if (pass.flag === "compute") {
         const passEncoder = commandEncoder.beginComputePass();
