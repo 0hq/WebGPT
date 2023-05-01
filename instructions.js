@@ -2,7 +2,6 @@ class Block {
   constructor(device) {
     this.device = device;
     this.bufferDeletionStack = [];
-    this.unloadDeletionStack = [];
 
     this.initBindGroups();
   }
@@ -31,6 +30,7 @@ class Block {
     return Math.ceil((dimA * dimB * Float32Array.BYTES_PER_ELEMENT) / 1) * 1;
   }
 
+  // Could be removed with auto bind groups, currently initializing everytime so probably slowing things down.
   initBindGroups() {
     const bg = (types) =>
       this.device.createBindGroupLayout({
@@ -61,11 +61,6 @@ class Block {
     });
   }
 
-  unloadBuffers() {
-    this.unloadDeletionStack.map((buffer) => buffer.destroy());
-    this.unloadDeletionStack = [];
-  }
-
   destroyBuffers() {
     this.bufferDeletionStack.map((buffer) => buffer.destroy());
     this.bufferDeletionStack = [];
@@ -80,12 +75,10 @@ class FastMatMulBlock extends Block {
   }
 
   getPipeline(rows) {
-    // const div4 = rows % 4 === 0 && false;
-    const pipelineCacheKey = "fastMatMul";
-    // if (this.pipelineCache.has(pipelineCacheKey)) {
-    //   return this.pipelineCache.get(pipelineCacheKey);
-    // }
-    const kernel = this.fastMatMul;
+    const div4 = rows % 4 === 0 && false;
+    const pipelineCacheKey = div4 ? "fastMatMulNoCheck" : "fastMatMul";
+    if (this.pipelineCache.has(pipelineCacheKey)) return this.pipelineCache.get(pipelineCacheKey);
+    const kernel = div4 ? this.fastMatMulNoCheck : this.fastMatMul;
     const pipeline = this.initPipeline(kernel, [this.u_s_Layout, this.r_r_Layout], `${this.name}_Pipeline_${pipelineCacheKey}`);
     this.pipelineCache.set(pipelineCacheKey, pipeline);
     return pipeline;
@@ -579,7 +572,7 @@ class FastRowAddBlock extends Block {
 
   getPipeline() {
     const pipelineCacheKey = this.name; // No param optimization.
-    // if (this.pipelineCache.has(pipelineCacheKey)) return this.pipelineCache.get(pipelineCacheKey);
+    if (this.pipelineCache.has(pipelineCacheKey)) return this.pipelineCache.get(pipelineCacheKey);
     const pipeline = this.initPipeline(this.fastRowAddShader, [this.u_s_Layout, this.r_r_Layout], `${this.name}_Pipeline`);
     this.pipelineCache.set(pipelineCacheKey, pipeline);
     return pipeline;

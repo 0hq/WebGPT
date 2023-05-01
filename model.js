@@ -15,7 +15,6 @@ class GPT {
     this.defaultTemperature;
     this.defaultTokens;
 
-    this.bufferDeletionStack = [];
     this.unloadDeletionStack = [];
   }
 
@@ -30,9 +29,6 @@ class GPT {
     this.tokenizer = this.tokenizerType == "bpe" ? new GPT2Tokenizer() : new SimpleTokenizer();
     await this.tokenizer.load();
 
-    this.initBindGroups();
-    this.initPipelines();
-
     if (this.params.n_embd % 4 !== 0 || this.params.n_head % 4 !== 0) {
       throw new Error("Model incompatible. n_embd and n_head must be divisible by 4 for fast matmul.");
     }
@@ -46,7 +42,7 @@ class GPT {
       this.defaultPrompt = `WILL:\nAh, how dare you challenge me?\nHave you forgotten I built WebGPT?\n`;
       this.defaultTopK = 1;
       this.defaultTemperature = 1;
-      this.defaultTokens = 1;
+      this.defaultTokens = 20;
     }
 
     this.NaiveMatMulBlock = new NaiveMatMulBlock(this.device);
@@ -61,6 +57,22 @@ class GPT {
     this.LayerNormBlock = new LayerNormBlock(this.device);
     this.TransposeBlock = new TransposeBlock(this.device);
     this.SoftmaxBlock = new SoftmaxBlock(this.device);
+
+    // Needed for deletion.
+    this.operations = [
+      this.NaiveMatMulBlock,
+      this.FastMatMulBlock,
+      this.FastRowAddBlock,
+      this.FastFFNBlock,
+      this.AttentionBlock,
+      this.ResidualBlock,
+      this.EmbedBlock,
+      this.DeEmbedBlock,
+      this.GeluBlock,
+      this.LayerNormBlock,
+      this.TransposeBlock,
+      this.SoftmaxBlock,
+    ];
 
     this.initialized = true;
 
@@ -313,475 +325,9 @@ class GPT {
     const output = resultBuffer.getMappedRange();
     const outputArray = new Float32Array(output).slice(0); // Copy the array, otherwise it'll be destroyed.
 
-    this.destroyBuffers();
+    for (const operation of this.operations) operation.destroyBuffers();
 
     return outputArray;
-  }
-
-  maskedInlineSoftmax(commandEncoder, rows, cols, inputBuffer) {
-    const dimUniformBuffer = this.initBuffer(["uniform", "copy_to"], [4]);
-    this.device.queue.writeBuffer(dimUniformBuffer, 0, new Uint32Array([rows, cols]));
-
-    const maxResultBuffer = this.initBuffer(["storage", "copy_from"], [rows]);
-    const maxBindGroup = this.initBindGroup(this.u_s_Layout, [dimUniformBuffer, maxResultBuffer]);
-
-    const addExpResultBuffer = this.initBuffer(["storage", "copy_from"], [rows, cols]);
-    const addExpBindGroup = this.initBindGroup(this.u_s_Layout, [dimUniformBuffer, addExpResultBuffer]);
-
-    const sumResultBuffer = this.initBuffer(["storage", "copy_from"], [rows]);
-    const sumBindGroup = this.initBindGroup(this.u_s_Layout, [dimUniformBuffer, sumResultBuffer]);
-
-    const divResultBuffer = this.initBuffer(["storage", "copy_from"], [rows, cols]);
-    const divBindGroup = this.initBindGroup(this.u_s_Layout, [dimUniformBuffer, divResultBuffer]);
-
-    const passEncoder_max = commandEncoder.beginComputePass();
-    passEncoder_max.setPipeline(this.maskedMaxPipeline);
-    passEncoder_max.setBindGroup(0, maxBindGroup);
-    passEncoder_max.setBindGroup(1, this.initBindGroup(this.r_Layout, [inputBuffer]));
-    passEncoder_max.dispatchWorkgroups(wgSize(rows, 16));
-    passEncoder_max.end();
-
-    const passEncoder_addExp = commandEncoder.beginComputePass();
-    passEncoder_addExp.setPipeline(this.addExpPipeline);
-    passEncoder_addExp.setBindGroup(0, addExpBindGroup);
-    passEncoder_addExp.setBindGroup(1, this.initBindGroup(this.r_Layout, [inputBuffer]));
-    passEncoder_addExp.setBindGroup(2, this.initBindGroup(this.r_Layout, [maxResultBuffer]));
-    passEncoder_addExp.dispatchWorkgroups(wgSize(cols, 16), wgSize(rows, 16));
-    passEncoder_addExp.end();
-
-    const passEncoder_sum = commandEncoder.beginComputePass();
-    passEncoder_sum.setPipeline(this.sumPipeline);
-    passEncoder_sum.setBindGroup(0, sumBindGroup);
-    passEncoder_sum.setBindGroup(1, this.initBindGroup(this.r_Layout, [addExpResultBuffer]));
-    passEncoder_sum.dispatchWorkgroups(wgSize(rows, 16));
-    passEncoder_sum.end();
-
-    const passEncoder_div = commandEncoder.beginComputePass();
-    passEncoder_div.setPipeline(this.dividePipeline);
-    passEncoder_div.setBindGroup(0, divBindGroup);
-    passEncoder_div.setBindGroup(1, this.initBindGroup(this.r_Layout, [addExpResultBuffer]));
-    passEncoder_div.setBindGroup(2, this.initBindGroup(this.r_Layout, [sumResultBuffer]));
-    passEncoder_div.dispatchWorkgroups(wgSize(cols, 16), wgSize(rows, 16));
-    passEncoder_div.end();
-
-    return divResultBuffer;
-  }
-
-  inlineResidual(commandEncoder, rows, cols, layerOutputBuffer, residualBuffer) {
-    const residualUniformBuffer = this.initBuffer(["uniform", "copy_to"], [4]);
-    const residualResultBuffer = this.initBuffer(["storage", "copy_from"], [rows, cols]);
-    const residualBindGroup = this.initBindGroup(this.u_s_Layout, [residualUniformBuffer, residualResultBuffer]);
-    this.device.queue.writeBuffer(residualUniformBuffer, 0, new Uint32Array([rows, cols]));
-
-    const passEncoder = commandEncoder.beginComputePass();
-    passEncoder.setPipeline(this.elementAddPipeline);
-    passEncoder.setBindGroup(0, residualBindGroup);
-    passEncoder.setBindGroup(1, this.initBindGroup(this.r_Layout, [residualBuffer]));
-    passEncoder.setBindGroup(2, this.initBindGroup(this.r_Layout, [layerOutputBuffer]));
-    passEncoder.dispatchWorkgroups(wgSize(cols, 16), wgSize(rows, 16));
-    passEncoder.end();
-
-    return residualResultBuffer;
-  }
-
-  inlineMatMul(commandEncoder, Abuffer, Bbuffer, rows, cols, shared) {
-    const matmulUniformBuffer = this.initBuffer(["uniform", "copy_to"], [4]);
-    const matmulResultBuffer = this.initBuffer(["storage", "copy_from"], [rows, cols]);
-    const matMulBindGroup = this.initBindGroup(this.u_s_Layout, [matmulUniformBuffer, matmulResultBuffer]);
-    this.device.queue.writeBuffer(matmulUniformBuffer, 0, new Uint32Array([rows, cols, shared]));
-
-    const passEncoder = commandEncoder.beginComputePass();
-    passEncoder.setPipeline(this.matmulPipeline);
-    passEncoder.setBindGroup(0, matMulBindGroup);
-    passEncoder.setBindGroup(1, this.initBindGroup(this.r_r_Layout, [Abuffer, Bbuffer]));
-    passEncoder.dispatchWorkgroups(wgSize(cols, 16), wgSize(rows, 16));
-    passEncoder.end();
-
-    return matmulResultBuffer;
-  }
-
-  inlineFastMatMul(commandEncoder, Abuffer, Bbuffer, rows, cols, shared) {
-    if (cols % 4 !== 0 || shared % 4 !== 0) throw new Error(`cols and shared must be div by 4, got ${rows}x${cols}x${shared}`);
-
-    const matmulUniformBuffer = this.initBuffer(["uniform", "copy_to"], [4]);
-    const matmulResultBuffer = this.initBuffer(["storage", "copy_from"], [rows, cols]);
-    const matMulBindGroup = this.initBindGroup(this.u_s_Layout, [matmulUniformBuffer, matmulResultBuffer]);
-    this.device.queue.writeBuffer(matmulUniformBuffer, 0, new Uint32Array([rows, cols, Math.ceil(cols / 4), Math.ceil(shared / 4)]));
-
-    const passEncoder = commandEncoder.beginComputePass();
-    passEncoder.setPipeline(this.fastMatMulPipeline);
-    passEncoder.setBindGroup(0, matMulBindGroup);
-    passEncoder.setBindGroup(1, this.initBindGroup(this.r_r_Layout, [Abuffer, Bbuffer]));
-    passEncoder.dispatchWorkgroups(wgSize(cols, 64), wgSize(rows, 32));
-    passEncoder.end();
-
-    return matmulResultBuffer;
-  }
-
-  inlineTranspose(commandEncoder, inputBuffer, rows, cols) {
-    const transposeUniformBuffer = this.initBuffer(["uniform", "copy_to"], [4]);
-    const transposeResultBuffer = this.initBuffer(["storage", "copy_from"], [rows, cols]);
-    const transposeBindGroup = this.initBindGroup(this.u_s_Layout, [transposeUniformBuffer, transposeResultBuffer]);
-    this.device.queue.writeBuffer(transposeUniformBuffer, 0, new Uint32Array([rows, cols]));
-
-    const passEncoder = commandEncoder.beginComputePass();
-    passEncoder.setPipeline(this.transposePipeline);
-    passEncoder.setBindGroup(0, transposeBindGroup);
-    passEncoder.setBindGroup(1, this.initBindGroup(this.r_Layout, [inputBuffer]));
-    passEncoder.dispatchWorkgroups(wgSize(cols, 16), wgSize(rows, 16));
-    passEncoder.end();
-
-    return transposeResultBuffer;
-  }
-
-  inlineLayerNorm(commandEncoder, seq_length, n_embd, inputBuffer, gammaBuffer, betaBuffer) {
-    const statsUniformBuffer = this.initBuffer(["uniform", "copy_to"], [4]);
-    const statsResultBuffer = this.initBuffer(["storage", "copy_from"], [seq_length, 2]);
-    const statsBindGroup = this.initBindGroup(this.u_s_Layout, [statsUniformBuffer, statsResultBuffer]);
-    this.device.queue.writeBuffer(statsUniformBuffer, 0, new Uint32Array([seq_length, n_embd]));
-
-    const normUniformBuffer = this.initBuffer(["uniform", "copy_to"], [4]);
-    const normResultBuffer = this.initBuffer(["storage", "copy_from"], [seq_length, n_embd]);
-    const normBindGroup = this.initBindGroup(this.u_s_Layout, [normUniformBuffer, normResultBuffer]);
-    this.device.queue.writeBuffer(normUniformBuffer, 0, new Uint32Array([seq_length, n_embd]));
-
-    const passEncoder_stats = commandEncoder.beginComputePass();
-    passEncoder_stats.setPipeline(this.statsPipeline);
-    passEncoder_stats.setBindGroup(0, statsBindGroup);
-    passEncoder_stats.setBindGroup(1, this.initBindGroup(this.r_Layout, [inputBuffer]));
-    passEncoder_stats.dispatchWorkgroups(wgSize(seq_length, 16));
-    passEncoder_stats.end();
-
-    const passEncoder_norm = commandEncoder.beginComputePass();
-    passEncoder_norm.setPipeline(this.normPipeline);
-    passEncoder_norm.setBindGroup(0, normBindGroup);
-    passEncoder_norm.setBindGroup(1, this.initBindGroup(this.r_r_r_Layout, [inputBuffer, gammaBuffer, betaBuffer]));
-    passEncoder_norm.setBindGroup(2, this.initBindGroup(this.r_Layout, [statsResultBuffer]));
-    passEncoder_norm.dispatchWorkgroups(wgSize(n_embd, 16), wgSize(seq_length, 16));
-    passEncoder_norm.end();
-
-    return normResultBuffer;
-  }
-
-  inlineFastFFN(
-    commandEncoder,
-    seq_length,
-    n_embed,
-    hidden_size,
-    inputBuffer,
-    firstLayerWeightsBuffer,
-    firstLayerBiasBuffer,
-    secondLayerWeightsBuffer,
-    secondLayerBiasBuffer
-  ) {
-    const geluUniformBuffer = this.initBuffer(["uniform", "copy_to"], [4]);
-    const geluResultBuffer = this.initBuffer(["storage", "copy_from"], [seq_length, hidden_size]);
-    const geluBindGroup = this.initBindGroup(this.u_s_Layout, [geluUniformBuffer, geluResultBuffer]);
-    this.device.queue.writeBuffer(geluUniformBuffer, 0, new Uint32Array([seq_length, hidden_size]));
-
-    const firstLayerMatMulBuffer = this.inlineFastMatMul(commandEncoder, inputBuffer, firstLayerWeightsBuffer, seq_length, hidden_size, n_embed);
-    const firstLayerResultBuffer = this.inlineFastRowAdd(commandEncoder, firstLayerMatMulBuffer, firstLayerBiasBuffer, seq_length, hidden_size);
-
-    const passEncoder_gelu = commandEncoder.beginComputePass();
-    passEncoder_gelu.setPipeline(this.GELUpipeline);
-    passEncoder_gelu.setBindGroup(0, geluBindGroup);
-    passEncoder_gelu.setBindGroup(1, this.initBindGroup(this.r_Layout, [firstLayerResultBuffer]));
-    passEncoder_gelu.dispatchWorkgroups(wgSize(hidden_size, 16), wgSize(seq_length, 16));
-    passEncoder_gelu.end();
-
-    const secondLayerMatMulBuffer = this.inlineFastMatMul(commandEncoder, geluResultBuffer, secondLayerWeightsBuffer, seq_length, n_embed, hidden_size);
-    const secondLayerResultBuffer = this.inlineFastRowAdd(commandEncoder, secondLayerMatMulBuffer, secondLayerBiasBuffer, seq_length, n_embed);
-
-    return secondLayerResultBuffer;
-  }
-
-  inlineFastRowAdd(commandEncoder, inputBuffer, biasBuffer, rows, cols) {
-    if (cols % 4 !== 0) throw new Error(`cols must be a multiple of 4, got ${rows}x${cols}`);
-
-    const uniformBuffer = this.initBuffer(["uniform", "copy_to"], [4]);
-    const resultBuffer = this.initBuffer(["storage", "copy_from"], [rows, cols]);
-    const bindGroup = this.initBindGroup(this.u_s_Layout, [uniformBuffer, resultBuffer]);
-    this.device.queue.writeBuffer(uniformBuffer, 0, new Uint32Array([rows, cols, cols / 4]));
-
-    const passEncoder = commandEncoder.beginComputePass();
-    passEncoder.setPipeline(this.fastRowAddPipeline);
-    passEncoder.setBindGroup(0, bindGroup);
-    passEncoder.setBindGroup(1, this.initBindGroup(this.r_r_Layout, [inputBuffer, biasBuffer]));
-    passEncoder.dispatchWorkgroups(wgSize(cols, 32), wgSize(rows, 8));
-    passEncoder.end();
-
-    return resultBuffer;
-  }
-
-  inlineFastAttention(
-    commandEncoder,
-    seq_length,
-    n_embd,
-    attentionDotProductScale,
-    inputBuffer,
-    n_head,
-    qkvWeightsBuffer,
-    qkvBiasBuffer,
-    linearWeightsBuffer,
-    linearBiasBuffer,
-    attentionCacheBuffer
-  ) {
-    const splitQKVUniformBuffer = this.initBuffer(["uniform", "copy_to"], [4]);
-    const splitQResultBuffer = this.initBuffer(["storage", "copy_from"], [seq_length, n_embd]);
-    const splitKResultBuffer = this.initBuffer(["storage", "copy_from"], [seq_length, n_embd]);
-    const splitVResultBuffer = this.initBuffer(["storage", "copy_from"], [seq_length, n_embd]);
-    const splitQKVBindGroup = this.initBindGroup(this.u_s_s_s_Layout, [splitQKVUniformBuffer, splitQResultBuffer, splitKResultBuffer, splitVResultBuffer]);
-    this.device.queue.writeBuffer(splitQKVUniformBuffer, 0, new Uint32Array([seq_length, n_embd]));
-
-    const attentionWeightsUniformBuffer = this.initBuffer(["uniform", "copy_to"], [8]);
-    const attentionWeightsResultBuffer = this.initBuffer(["storage", "copy_from"], [seq_length, seq_length * n_head]);
-    const attentionWeightsBindGroup = this.initBindGroup(this.u_s_Layout, [attentionWeightsUniformBuffer, attentionWeightsResultBuffer]);
-    this.device.queue.writeBuffer(attentionWeightsUniformBuffer, 0, new Uint32Array([seq_length, seq_length * n_head, seq_length, n_embd / n_head, n_embd]));
-
-    const multiplyUniformBuffer = this.initBuffer(["uniform", "copy_to"], [4]);
-    const multiplyResultBuffer = this.initBuffer(["storage", "copy_from"], [seq_length, seq_length * n_head]);
-    const multiplyBindGroup = this.initBindGroup(this.u_s_Layout, [multiplyUniformBuffer, multiplyResultBuffer]);
-    this.device.queue.writeBuffer(multiplyUniformBuffer, 0, new Uint32Array([seq_length, seq_length * n_head]));
-    this.device.queue.writeBuffer(multiplyUniformBuffer, 8, new Float32Array([attentionDotProductScale]));
-
-    const causalMaskUniformBuffer = this.initBuffer(["uniform", "copy_to"], [4]);
-    const causalMaskResultBuffer = this.initBuffer(["storage", "copy_from"], [seq_length, seq_length * n_head]);
-    const causalMaskBindGroup = this.initBindGroup(this.u_s_Layout, [causalMaskUniformBuffer, causalMaskResultBuffer]);
-    this.device.queue.writeBuffer(causalMaskUniformBuffer, 0, new Uint32Array([seq_length * n_head, seq_length])); // Transposes! This is needed for softmax.
-
-    const attentionValuesUniformBuffer = this.initBuffer(["uniform", "copy_to"], [4]);
-    const attentionValuesResultBuffer = this.initBuffer(["storage", "copy_from"], [seq_length, n_embd]);
-    const attentionValuesBindGroup = this.initBindGroup(this.u_s_Layout, [attentionValuesUniformBuffer, attentionValuesResultBuffer]);
-    this.device.queue.writeBuffer(attentionValuesUniformBuffer, 0, new Uint32Array([seq_length, n_embd, n_head, n_embd / n_head]));
-
-    const qkvMatmulBuffer = this.inlineFastMatMul(commandEncoder, inputBuffer, qkvWeightsBuffer, seq_length, 3 * n_embd, n_embd);
-    const qkvResultBuffer = this.inlineFastRowAdd(commandEncoder, qkvMatmulBuffer, qkvBiasBuffer, seq_length, 3 * n_embd);
-
-    const passEncoder_splitQKV = commandEncoder.beginComputePass();
-    passEncoder_splitQKV.setPipeline(this.splitQKVpipeline);
-    passEncoder_splitQKV.setBindGroup(0, splitQKVBindGroup);
-    passEncoder_splitQKV.setBindGroup(1, this.initBindGroup(this.r_Layout, [qkvResultBuffer]));
-    passEncoder_splitQKV.dispatchWorkgroups(wgSize(n_embd, 16), wgSize(seq_length, 16));
-    passEncoder_splitQKV.end();
-
-    const passEncoder_attentionWeights = commandEncoder.beginComputePass();
-    passEncoder_attentionWeights.setPipeline(this.attentionWeightsPipeline);
-    passEncoder_attentionWeights.setBindGroup(0, attentionWeightsBindGroup);
-    passEncoder_attentionWeights.setBindGroup(1, this.initBindGroup(this.r_r_Layout, [splitQResultBuffer, splitKResultBuffer]));
-    passEncoder_attentionWeights.dispatchWorkgroups(wgSize(seq_length * n_head, 16), wgSize(seq_length, 16));
-    passEncoder_attentionWeights.end();
-
-    const passEncoder_multiply = commandEncoder.beginComputePass();
-    passEncoder_multiply.setPipeline(this.multiplyPipeline);
-    passEncoder_multiply.setBindGroup(0, multiplyBindGroup);
-    passEncoder_multiply.setBindGroup(1, this.initBindGroup(this.r_Layout, [attentionWeightsResultBuffer]));
-    passEncoder_multiply.dispatchWorkgroups(wgSize(seq_length * n_head, 16), wgSize(seq_length, 16));
-    passEncoder_multiply.end();
-
-    const passEncoder_causalMask = commandEncoder.beginComputePass();
-    passEncoder_causalMask.setPipeline(this.causalMaskPipeline);
-    passEncoder_causalMask.setBindGroup(0, causalMaskBindGroup);
-    passEncoder_causalMask.setBindGroup(1, this.initBindGroup(this.r_Layout, [multiplyResultBuffer]));
-    passEncoder_causalMask.dispatchWorkgroups(wgSize(seq_length, 16), wgSize(seq_length * n_head, 16));
-    passEncoder_causalMask.end();
-
-    // Save attention weights for next iteration's key value cache.
-    commandEncoder.copyBufferToBuffer(causalMaskResultBuffer, 0, attentionCacheBuffer, 0, this.bufferSize(seq_length * n_head, seq_length));
-
-    const softmaxOutputBuffer = this.maskedInlineSoftmax(commandEncoder, seq_length * n_head, seq_length, causalMaskResultBuffer);
-
-    const passEncoder_attentionValues = commandEncoder.beginComputePass();
-    passEncoder_attentionValues.setPipeline(this.attentionValuesPipeline);
-    passEncoder_attentionValues.setBindGroup(0, attentionValuesBindGroup);
-    passEncoder_attentionValues.setBindGroup(1, this.initBindGroup(this.r_r_Layout, [softmaxOutputBuffer, splitVResultBuffer]));
-    passEncoder_attentionValues.dispatchWorkgroups(wgSize(n_embd, 16), wgSize(seq_length, 16));
-    passEncoder_attentionValues.end();
-
-    const linearMatmulBuffer = this.inlineFastMatMul(commandEncoder, attentionValuesResultBuffer, linearWeightsBuffer, seq_length, n_embd, n_embd);
-    const linearResultBuffer = this.inlineFastRowAdd(commandEncoder, linearMatmulBuffer, linearBiasBuffer, seq_length, n_embd);
-
-    return linearResultBuffer;
-  }
-
-  // This really sucks (-20ms) and have no clue why.
-  // Copy instructions might be slower than presumed? Needs testing as theoretically sound.
-  inlineFastCachedAttention(
-    commandEncoder,
-    seq_length,
-    n_embd,
-    attentionDotProductScale,
-    inputBuffer,
-    n_head,
-    qkvWeightsBuffer,
-    qkvBiasBuffer,
-    linearWeightsBuffer,
-    linearBiasBuffer,
-    attentionCacheBuffer
-  ) {
-    // This can also be cached, unknown how much of a speedup it would be.
-    const splitQKVUniformBuffer = this.initBuffer(["uniform", "copy_to"], [4]);
-    const splitQResultBuffer = this.initBuffer(["storage", "copy_from"], [seq_length, n_embd]);
-    const splitKResultBuffer = this.initBuffer(["storage", "copy_from"], [seq_length, n_embd]);
-    const splitVResultBuffer = this.initBuffer(["storage", "copy_from"], [seq_length, n_embd]);
-    const splitQKVBindGroup = this.initBindGroup(this.u_s_s_s_Layout, [splitQKVUniformBuffer, splitQResultBuffer, splitKResultBuffer, splitVResultBuffer]);
-    this.device.queue.writeBuffer(splitQKVUniformBuffer, 0, new Uint32Array([seq_length, n_embd]));
-
-    const singleQResultBuffer = this.initBuffer(["storage", "copy_from", "copy_to"], [n_embd]);
-
-    const attentionWeightsUniformBuffer = this.initBuffer(["uniform", "copy_to"], [8]);
-    const attentionWeightsResultBuffer = this.initBuffer(["storage", "copy_from"], [seq_length * n_head]);
-    const attentionWeightsBindGroup = this.initBindGroup(this.u_s_Layout, [attentionWeightsUniformBuffer, attentionWeightsResultBuffer]);
-    this.device.queue.writeBuffer(attentionWeightsUniformBuffer, 0, new Uint32Array([1, seq_length * n_head, seq_length, n_embd / n_head, n_embd]));
-
-    const multiplyUniformBuffer = this.initBuffer(["uniform", "copy_to"], [4]);
-    const multiplyResultBuffer = this.initBuffer(["storage", "copy_from"], [seq_length * n_head]);
-    const multiplyBindGroup = this.initBindGroup(this.u_s_Layout, [multiplyUniformBuffer, multiplyResultBuffer]);
-    this.device.queue.writeBuffer(multiplyUniformBuffer, 0, new Uint32Array([1, seq_length * n_head]));
-    this.device.queue.writeBuffer(multiplyUniformBuffer, 8, new Float32Array([attentionDotProductScale]));
-
-    const causalMaskCachedResultBuffer = this.initBuffer(["storage", "copy_from", "copy_to"], [seq_length * n_head, seq_length]);
-
-    const attentionValuesUniformBuffer = this.initBuffer(["uniform", "copy_to"], [4]);
-    const attentionValuesResultBuffer = this.initBuffer(["storage", "copy_from"], [seq_length, n_embd]);
-    const attentionValuesBindGroup = this.initBindGroup(this.u_s_Layout, [attentionValuesUniformBuffer, attentionValuesResultBuffer]);
-    this.device.queue.writeBuffer(attentionValuesUniformBuffer, 0, new Uint32Array([seq_length, n_embd, n_head, n_embd / n_head]));
-
-    const qkvMatmulBuffer = this.inlineFastMatMul(commandEncoder, inputBuffer, qkvWeightsBuffer, seq_length, 3 * n_embd, n_embd);
-    const qkvResultBuffer = this.inlineFastRowAdd(commandEncoder, qkvMatmulBuffer, qkvBiasBuffer, seq_length, 3 * n_embd);
-
-    const passEncoder_splitQKV = commandEncoder.beginComputePass();
-    passEncoder_splitQKV.setPipeline(this.splitQKVpipeline);
-    passEncoder_splitQKV.setBindGroup(0, splitQKVBindGroup);
-    passEncoder_splitQKV.setBindGroup(1, this.initBindGroup(this.r_Layout, [qkvResultBuffer]));
-    passEncoder_splitQKV.dispatchWorkgroups(wgSize(n_embd, 16), wgSize(seq_length, 16));
-    passEncoder_splitQKV.end();
-
-    commandEncoder.copyBufferToBuffer(splitQResultBuffer, this.bufferSize(n_embd) * (seq_length - 1), singleQResultBuffer, 0, this.bufferSize(n_embd));
-
-    const passEncoder_attentionWeights = commandEncoder.beginComputePass();
-    passEncoder_attentionWeights.setPipeline(this.attentionWeightsPipeline);
-    passEncoder_attentionWeights.setBindGroup(0, attentionWeightsBindGroup);
-    passEncoder_attentionWeights.setBindGroup(1, this.initBindGroup(this.r_r_Layout, [singleQResultBuffer, splitKResultBuffer]));
-    passEncoder_attentionWeights.dispatchWorkgroups(wgSize(seq_length * n_head, 16), wgSize(1, 16));
-    passEncoder_attentionWeights.end();
-
-    const passEncoder_multiply = commandEncoder.beginComputePass();
-    passEncoder_multiply.setPipeline(this.multiplyPipeline);
-    passEncoder_multiply.setBindGroup(0, multiplyBindGroup);
-    passEncoder_multiply.setBindGroup(1, this.initBindGroup(this.r_Layout, [attentionWeightsResultBuffer]));
-    passEncoder_multiply.dispatchWorkgroups(wgSize(seq_length * n_head, 16), wgSize(1, 16));
-    passEncoder_multiply.end();
-
-    for (let i = 0; i < n_head; i++) {
-      commandEncoder.copyBufferToBuffer(
-        multiplyResultBuffer,
-        this.bufferSize(seq_length) * i,
-        causalMaskCachedResultBuffer,
-        this.bufferSize(seq_length, seq_length) * (i + 1) - this.bufferSize(seq_length),
-        this.bufferSize(seq_length)
-      );
-    }
-    for (let i = 0; i < n_head; i++) {
-      for (let j = 0; j < seq_length - 1; j++) {
-        commandEncoder.copyBufferToBuffer(
-          attentionCacheBuffer,
-          this.bufferSize(seq_length - 1) * j + this.bufferSize(seq_length - 1, seq_length - 1) * i,
-          causalMaskCachedResultBuffer,
-          this.bufferSize(seq_length) * j + this.bufferSize(seq_length, seq_length) * i,
-          this.bufferSize(seq_length - 1)
-        );
-      }
-    }
-
-    // Save for next iteration.
-    commandEncoder.copyBufferToBuffer(causalMaskCachedResultBuffer, 0, attentionCacheBuffer, 0, this.bufferSize(seq_length * n_head, seq_length));
-
-    const softmaxOutputBuffer = this.maskedInlineSoftmax(commandEncoder, seq_length * n_head, seq_length, causalMaskCachedResultBuffer);
-
-    const passEncoder_attentionValues = commandEncoder.beginComputePass();
-    passEncoder_attentionValues.setPipeline(this.attentionValuesPipeline);
-    passEncoder_attentionValues.setBindGroup(0, attentionValuesBindGroup);
-    passEncoder_attentionValues.setBindGroup(1, this.initBindGroup(this.r_r_Layout, [softmaxOutputBuffer, splitVResultBuffer]));
-    passEncoder_attentionValues.dispatchWorkgroups(wgSize(n_embd, 16), wgSize(seq_length, 16));
-    passEncoder_attentionValues.end();
-
-    const linearMatmulBuffer = this.inlineFastMatMul(commandEncoder, attentionValuesResultBuffer, linearWeightsBuffer, seq_length, n_embd, n_embd);
-    const linearResultBuffer = this.inlineFastRowAdd(commandEncoder, linearMatmulBuffer, linearBiasBuffer, seq_length, n_embd);
-
-    return linearResultBuffer;
-  }
-
-  initBindGroup(layout, buffers) {
-    return this.device.createBindGroup({
-      layout,
-      entries: buffers.map((buffer, i) => ({
-        binding: i,
-        resource: { buffer },
-      })),
-    });
-  }
-
-  initBindGroups() {
-    const bg = (types) =>
-      this.device.createBindGroupLayout({
-        entries: types.map((entry, i) => ({
-          binding: i,
-          visibility: GPUShaderStage.COMPUTE,
-          buffer: { type: entry },
-        })),
-      });
-
-    this.r_r_r_Layout = bg(["read-only-storage", "read-only-storage", "read-only-storage"]);
-    this.r_r_Layout = bg(["read-only-storage", "read-only-storage"]);
-    this.r_Layout = bg(["read-only-storage"]);
-    this.u_s_Layout = bg(["uniform", "storage"]);
-    this.u_s_s_s_Layout = bg(["uniform", "storage", "storage", "storage"]);
-  }
-
-  initPipelines() {
-    const p = (code, bindGroupLayouts) => {
-      return this.device.createComputePipeline({
-        layout: this.device.createPipelineLayout({ bindGroupLayouts }),
-        compute: {
-          module: this.device.createShaderModule({ code }),
-          entryPoint: "main",
-        },
-      });
-    };
-
-    this.statsPipeline = p(normStatsShader, [this.u_s_Layout, this.r_Layout]);
-    this.normPipeline = p(normShader, [this.u_s_Layout, this.r_r_r_Layout, this.r_Layout]);
-    this.GELUpipeline = p(GELUShader, [this.u_s_Layout, this.r_Layout]);
-    this.splitQKVpipeline = p(splitQKVShader, [this.u_s_s_s_Layout, this.r_Layout]);
-    this.attentionWeightsPipeline = p(attentionWeightsShader, [this.u_s_Layout, this.r_r_Layout]);
-    this.attentionValuesPipeline = p(attentionValuesShader, [this.u_s_Layout, this.r_r_Layout]);
-    this.multiplyPipeline = p(multiplyShader, [this.u_s_Layout, this.r_Layout]);
-    this.causalMaskPipeline = p(simpleCausalMaskShader, [this.u_s_Layout, this.r_Layout]);
-    this.matmulPipeline = p(matMulShader, [this.u_s_Layout, this.r_r_Layout]);
-    this.elementAddPipeline = p(elementWiseAdditionShader, [this.u_s_Layout, this.r_Layout, this.r_Layout]);
-    this.maskedMaxPipeline = p(maskedNegMaxShader, [this.u_s_Layout, this.r_Layout]);
-    this.addExpPipeline = p(addExpShader, [this.u_s_Layout, this.r_Layout, this.r_Layout]);
-    this.sumPipeline = p(sumShader, [this.u_s_Layout, this.r_Layout]);
-    this.dividePipeline = p(divideShader, [this.u_s_Layout, this.r_Layout, this.r_Layout]);
-    this.transposePipeline = p(transposeShader, [this.u_s_Layout, this.r_Layout]);
-    this.fastMatMulPipeline = p(fastMatMulShader, [this.u_s_Layout, this.r_r_Layout]);
-    this.fastRowAddPipeline = p(fastRowAddShader, [this.u_s_Layout, this.r_r_Layout]);
-    // this.fusedSoftmaxPipeline = p(fusedSoftmaxShader, [this.u_s_Layout, this.r_r_Layout]);
-  }
-
-  initOutputBuffer(commandEncoder, buffer, row, col) {
-    const outputBuffer = this.initBuffer(["map_read", "copy_to"], [row, col]);
-    commandEncoder.copyBufferToBuffer(buffer, 0, outputBuffer, 0, this.bufferSize(row, col));
-    return outputBuffer;
-  }
-
-  initBuffer(ops, dims) {
-    const buffer = this.device.createBuffer({
-      size: this.bufferSize(dims[0], dims[1] || 1, dims[2] || 1),
-      usage: ops.map((u) => bufferUsageDict[u]).reduce((a, b) => a | b),
-    });
-    this.bufferDeletionStack.push(buffer);
-    return buffer;
   }
 
   initTensor(data, dims, ops) {
@@ -799,11 +345,6 @@ class GPT {
   unloadBuffers() {
     this.unloadDeletionStack.map((buffer) => buffer.destroy());
     this.unloadDeletionStack = [];
-  }
-
-  destroyBuffers() {
-    this.bufferDeletionStack.map((buffer) => buffer.destroy());
-    this.bufferDeletionStack = [];
   }
 
   bufferSize(dimX, dimY = 1, dimZ = 1) {
