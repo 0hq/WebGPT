@@ -673,7 +673,7 @@ class LayerNormBlockClass extends Block {
 class SoftmaxBlockClass extends Block {
   constructor() {
     super();
-    this.name = "Softmax";
+    this.name = "softmax";
     this.pipelineCache = new Map();
   }
 
@@ -709,7 +709,40 @@ class SoftmaxBlockClass extends Block {
     return pipeline;
   }
 
+  getFusedPipeline(workgroups) {
+    const pipelineCacheKey = `${this.name}_fused_${workgroups}`;
+    if (this.pipelineCache.has(pipelineCacheKey)) return this.pipelineCache.get(pipelineCacheKey);
+    const pipeline = this.initPipeline(this.fusedShader(workgroups), [this.u_s_Layout, this.r_Layout], `${this.name}_Pipeline_Div`);
+    this.pipelineCache.set(pipelineCacheKey, pipeline);
+    return pipeline;
+  }
+
   newInstance(rows, cols, inputBuffer) {
+    const workgroupsX = cols > 4096 ? 256 : 64;
+    const fusedPipeline = this.getFusedPipeline(workgroupsX);
+
+    const uniformBuffer = this.initBuffer(["uniform", "copy_to"], [4]);
+    this.device.queue.writeBuffer(uniformBuffer, 0, new Uint32Array([cols]));
+
+    const resultBuffer = this.initBuffer(["storage", "copy_from"], [rows, cols], `${this.name}_ResultBuffer_`);
+    const bindGroup = this.initBindGroup(this.u_s_Layout, [uniformBuffer, resultBuffer], `${this.name}_BindGroup_`);
+    const inputBindGroup = this.initBindGroup(this.r_Layout, [inputBuffer], `${this.name}_BindGroup__Input`);
+    const workgroups = { x: 1, y: wgSize(rows, 1), z: 1 };
+
+    return {
+      resultBuffer: resultBuffer,
+      passes: [
+        {
+          flag: "compute",
+          pipeline: fusedPipeline,
+          groups: [bindGroup, inputBindGroup],
+          workgroups: workgroups,
+        },
+      ],
+    };
+  }
+
+  newOldInstance(rows, cols, inputBuffer) {
     const uniformBuffer = this.initBuffer(["uniform", "copy_to"], [4]);
 
     const maxPipeline = this.getMaxPipeline();
@@ -768,6 +801,80 @@ class SoftmaxBlockClass extends Block {
       ],
     };
   }
+
+  fusedShader = (workgroupX) => `
+    struct Meta {
+      N: u32, 
+    };
+
+    const minFloat: f32 = -3.402823e+38f;
+    const workgroupSize: u32 = ${workgroupX};
+
+    @group(0) @binding(0) var<uniform> uniforms: Meta;
+    @group(0) @binding(1) var<storage, read_write> result_array: array<f32>;
+    @group(1) @binding(0) var<storage, read> input_array: array<f32>;
+
+    var<workgroup> max_row: f32;
+    var<workgroup> sum_row: f32;
+    var<workgroup> max_buffer: array<f32, ${workgroupX}>;
+    var<workgroup> sum_buffer: array<f32, ${workgroupX}>;
+
+    @compute @workgroup_size(${workgroupX})
+    fn main (@builtin(global_invocation_id) global_id: vec3<u32>) {
+      let col: u32 = global_id.x;
+      let row: u32 = global_id.y;
+      let N: u32 = uniforms.N;
+
+      // Condense into 256 col max.
+      var thread_max = minFloat;
+      for (var i: u32 = col; i < N; i = i + workgroupSize) {
+        thread_max = max(thread_max, input_array[row * N + i]);
+      }
+      if (col < N) {
+        max_buffer[col] = thread_max;
+      }
+
+      workgroupBarrier();
+      
+      // Reduce to one value max. Optimize with bit shifts.
+      var reductionSize: u32 = min(N, workgroupSize);
+      for (var i: u32 = workgroupSize >> 1; i > 0; i = i >> 1) {
+        if (col < i) {
+          max_buffer[col] = max_buffer[col] + max_buffer[col + i];
+        }
+        workgroupBarrier();
+      }
+      
+      if (col == 0) {
+        max_row = max_buffer[0];
+      }
+      workgroupBarrier();
+
+      var threadSum: f32 = 0.0;
+      for (var i: u32 = col; i < N; i = i + workgroupSize) {
+        threadSum = threadSum + exp(input_array[row * N + i] - max_row);
+      }
+      sum_buffer[col] = threadSum;
+      workgroupBarrier();
+      
+      // Reduce to one value sum. Optimize with bit shifts.
+      for (var i: u32 = workgroupSize >> 1; i > 0; i = i >> 1) {
+        if (col < i) {
+          sum_buffer[col] = sum_buffer[col] + sum_buffer[col + i];
+        }
+        workgroupBarrier();
+      }
+      
+      if (col == 0) {
+        sum_row = sum_buffer[0];
+      }
+      workgroupBarrier();
+
+      for (var i: u32 = col; i < N; i = i + workgroupSize) {
+        result_array[row * N + i] = exp(input_array[row * N + i] - max_row) / sum_row;
+      }
+    }
+  `;
 
   maskedNegMaxShader = `
     struct Matrix {
