@@ -1114,10 +1114,18 @@ class AttentionBlockClass extends Block {
     return pipeline;
   }
 
+  getSimpleCausalMaskPipeline() {
+    const pipelineCacheKey = `${this.name}_simplecausalmask`; // No param optimization.
+    if (this.pipelineCache.has(pipelineCacheKey)) return this.pipelineCache.get(pipelineCacheKey);
+    const pipeline = this.initPipeline(this.simpleCausalMaskShader, [this.u_s_Layout, this.r_Layout], `${this.name}_Pipeline_CausalMask`);
+    this.pipelineCache.set(pipelineCacheKey, pipeline);
+    return pipeline;
+  }
+
   getCausalMaskPipeline() {
     const pipelineCacheKey = `${this.name}_causalmask`; // No param optimization.
     if (this.pipelineCache.has(pipelineCacheKey)) return this.pipelineCache.get(pipelineCacheKey);
-    const pipeline = this.initPipeline(this.simpleCausalMaskShader, [this.u_s_Layout, this.r_Layout], `${this.name}_Pipeline_CausalMask`);
+    const pipeline = this.initPipeline(this.causalMaskShader, [this.u_s_Layout, this.r_Layout], `${this.name}_Pipeline_CausalMask`);
     this.pipelineCache.set(pipelineCacheKey, pipeline);
     return pipeline;
   }
@@ -1187,7 +1195,7 @@ class AttentionBlockClass extends Block {
     this.device.queue.writeBuffer(causalMaskUniformBuffer, 0, new Uint32Array([seq_length * n_head, seq_length])); // Transposes! This is needed for softmax.
     const causalMaskWorkgroups = { x: wgSize(seq_length, 16), y: wgSize(seq_length * n_head, 16), z: 1 };
 
-    const { resultBuffer: softmaxOutputBuffer, passes: softmaxPasses } = SoftmaxBlock.newInstance(seq_length * n_head, seq_length, causalMaskResultBuffer);
+    const { resultBuffer: softmaxOutputBuffer, passes: softmaxPasses } = SoftmaxBlock.newOldInstance(seq_length * n_head, seq_length, causalMaskResultBuffer);
 
     const attentionValuesPipeline = this.getAttentionValuesPipeline();
     const attentionValuesUniformBuffer = this.initBuffer(["uniform", "copy_to"], [4]);
@@ -1351,6 +1359,42 @@ class AttentionBlockClass extends Block {
       let rowNum: u32 = row / dimX;
       Result.data[row * dimX + col] = Input.data[rowMask * dimY + col + rowNum * dimX];
 
+    }
+  `;
+
+  causalMaskShader = `
+    struct Matrix {
+        data: array<f32>,
+    }
+
+    struct Dimensions {
+      dimY: u32, // row dimension of input matrix
+      dimX: u32, // col dimension of input matrix
+    };
+
+    @group(0) @binding(0) var<uniform> DimBuffer: Dimensions;
+    @group(0) @binding(1) var<storage, read_write> Result: Matrix;
+
+    @group(1) @binding(0) var<storage, read> Input: Matrix;
+
+    @compute @workgroup_size(16, 16)
+    fn main (@builtin(global_invocation_id) global_id: vec3<u32>) {
+      let col: u32 = global_id.x;
+      let row: u32 = global_id.y;
+      let dimX: u32 = DimBuffer.dimX;
+      let dimY: u32 = DimBuffer.dimY;
+
+      if (row >= dimY) {
+        return;
+      }
+
+      let rowMask: u32 = row % dimX;
+      let rowNum: u32 = row / dimX;
+      let index = row * dimX + col;
+      let boundsCheck: bool = (row < dimY) && (col < dimX);
+      let causalMask: bool = (col <= rowMask);
+      let maskedValue = select(-1e9, Input.data[rowMask * dimY + col + rowNum * dimX], causalMask);
+      Result.data[index] = select(Result.data[index], maskedValue, boundsCheck);
     }
   `;
 
