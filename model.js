@@ -25,6 +25,8 @@ class GPT {
     const adapter = await navigator.gpu.requestAdapter();
     this.device = await adapter.requestDevice();
 
+    initializeOperations(this.device);
+
     [this.model, this.params] = await this.loadModel(this.folder);
     this.tokenizer = this.tokenizerType == "bpe" ? new GPT2Tokenizer() : new SimpleTokenizer();
     await this.tokenizer.load();
@@ -44,39 +46,6 @@ class GPT {
       this.defaultTemperature = 1;
       this.defaultTokens = 1;
     }
-
-    // TODO: Move this into global scope.
-    this.NaiveMatMulBlock = new NaiveMatMulBlock(this.device);
-    this.FastMatMulBlock = new FastMatMulBlock(this.device);
-    this.FastRowAddBlock = new FastRowAddBlock(this.device);
-    this.FastFFNBlock = new FastFFNBlock(this.device);
-    this.AttentionBlock = new AttentionBlock(this.device);
-    this.ResidualBlock = new ResidualBlock(this.device);
-    this.EmbedBlock = new EmbedBlock(this.device);
-    this.DeEmbedBlock = new DeEmbedBlock(this.device);
-    this.OldDeEmbedBlock = new OldDeEmbedBlock(this.device);
-    this.GeluBlock = new GeluBlock(this.device);
-    this.LayerNormBlock = new LayerNormBlock(this.device);
-    this.TransposeBlock = new TransposeBlock(this.device);
-    this.SoftmaxBlock = new SoftmaxBlock(this.device);
-
-    // TODO: Move this into global scope.
-    // Needed for deletion.
-    this.operations = [
-      this.NaiveMatMulBlock,
-      this.FastMatMulBlock,
-      this.FastRowAddBlock,
-      this.FastFFNBlock,
-      this.AttentionBlock,
-      this.ResidualBlock,
-      this.EmbedBlock,
-      this.DeEmbedBlock,
-      this.OldDeEmbedBlock,
-      this.GeluBlock,
-      this.LayerNormBlock,
-      this.TransposeBlock,
-      this.SoftmaxBlock,
-    ];
 
     this.initialized = true;
 
@@ -227,7 +196,7 @@ class GPT {
     let intermediateBuffer;
     let residualBuffer;
     {
-      const { passes, resultBuffer } = this.EmbedBlock.newInstance(idx, seq_length, n_embd, embeddingsBuffer, posEmbdBuffer, this.ResidualBlock);
+      const { passes, resultBuffer } = EmbedBlock.newInstance(idx, seq_length, n_embd, embeddingsBuffer, posEmbdBuffer, ResidualBlock);
       intermediateBuffer = resultBuffer;
       residualBuffer = resultBuffer;
       this.computePasses.push(...passes);
@@ -235,7 +204,7 @@ class GPT {
     for (let i = 0; i < n_layer; i++) {
       const buffers = layer_buffers[i];
       {
-        const { passes, resultBuffer } = this.LayerNormBlock.newInstance(
+        const { passes, resultBuffer } = LayerNormBlock.newInstance(
           seq_length,
           n_embd,
           intermediateBuffer,
@@ -246,7 +215,7 @@ class GPT {
         this.computePasses.push(...passes);
       }
       {
-        const { passes, resultBuffer } = this.AttentionBlock.newInstance(
+        const { passes, resultBuffer } = AttentionBlock.newInstance(
           seq_length,
           n_embd,
           attention_scale,
@@ -256,21 +225,21 @@ class GPT {
           buffers.qkvBiasBuffer,
           buffers.linearWeightsBuffer,
           buffers.linearBiasBuffer,
-          this.FastMatMulBlock,
-          this.FastRowAddBlock,
-          this.SoftmaxBlock
+          FastMatMulBlock,
+          FastRowAddBlock,
+          SoftmaxBlock
         );
         intermediateBuffer = resultBuffer;
         this.computePasses.push(...passes);
       }
       {
-        const { passes, resultBuffer } = this.ResidualBlock.newInstance(seq_length, n_embd, intermediateBuffer, residualBuffer);
+        const { passes, resultBuffer } = ResidualBlock.newInstance(seq_length, n_embd, intermediateBuffer, residualBuffer);
         intermediateBuffer = resultBuffer;
         residualBuffer = resultBuffer;
         this.computePasses.push(...passes);
       }
       {
-        const { passes, resultBuffer } = this.LayerNormBlock.newInstance(
+        const { passes, resultBuffer } = LayerNormBlock.newInstance(
           seq_length,
           n_embd,
           intermediateBuffer,
@@ -281,7 +250,7 @@ class GPT {
         this.computePasses.push(...passes);
       }
       {
-        const { passes, resultBuffer } = this.FastFFNBlock.newInstance(
+        const { passes, resultBuffer } = FastFFNBlock.newInstance(
           seq_length,
           n_embd,
           hidden_size,
@@ -290,39 +259,32 @@ class GPT {
           buffers.firstLayerBiasBuffer,
           buffers.secondLayerWeightsBuffer,
           buffers.secondLayerBiasBuffer,
-          this.FastMatMulBlock,
-          this.FastRowAddBlock,
-          this.GeluBlock
+          FastMatMulBlock,
+          FastRowAddBlock,
+          GeluBlock
         );
         intermediateBuffer = resultBuffer;
         this.computePasses.push(...passes);
       }
       {
-        const { passes, resultBuffer } = this.ResidualBlock.newInstance(seq_length, n_embd, intermediateBuffer, residualBuffer);
+        const { passes, resultBuffer } = ResidualBlock.newInstance(seq_length, n_embd, intermediateBuffer, residualBuffer);
         intermediateBuffer = resultBuffer;
         residualBuffer = resultBuffer;
         this.computePasses.push(...passes);
       }
     }
     {
-      const { passes, resultBuffer } = this.LayerNormBlock.newInstance(seq_length, n_embd, intermediateBuffer, normGammaBuffer, normBetaBuffer);
+      const { passes, resultBuffer } = LayerNormBlock.newInstance(seq_length, n_embd, intermediateBuffer, normGammaBuffer, normBetaBuffer);
       intermediateBuffer = resultBuffer;
       this.computePasses.push(...passes);
     }
     {
-      const { passes, resultBuffer } = this.OldDeEmbedBlock.newInstance(
-        vocab_size,
-        n_embd,
-        seq_length,
-        intermediateBuffer,
-        embeddingsBuffer,
-        this.NaiveMatMulBlock
-      );
+      const { passes, resultBuffer } = OldDeEmbedBlock.newInstance(vocab_size, n_embd, seq_length, intermediateBuffer, embeddingsBuffer, NaiveMatMulBlock);
       intermediateBuffer = resultBuffer;
       this.computePasses.push(...passes);
     }
     // {
-    //   const { passes, resultBuffer } = this.DeEmbedBlock.newInstance(
+    //   const { passes, resultBuffer } = DeEmbedBlock.newInstance(
     //     vocab_size,
     //     n_embd,
     //     seq_length,
@@ -357,9 +319,7 @@ class GPT {
     const output = resultBuffer.getMappedRange();
     const outputArray = new Float32Array(output).slice(0); // Copy the array, otherwise it'll be destroyed.
 
-    console.log(outputArray);
-
-    for (const operation of this.operations) operation.destroyBuffers();
+    destroyOperationBuffers();
 
     return outputArray;
   }
