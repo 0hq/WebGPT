@@ -631,8 +631,8 @@ class ResidualBlockClass extends Block {
     const resultBuffer = this.initBuffer(["storage", "copy_from"], [rows, cols]);
     const opBindGroup = this.initBindGroup(this.u_s_Layout, [uniformBuffer, resultBuffer], `${this.name}_OpG`);
     const inputBindGroup = this.initBindGroup(this.r_r_Layout, [outputBuf, residualBuf], `${this.name}_InputG`);
-    const workgroups = { x: wgSize(cols, 16), y: wgSize(rows, 16), z: 1 };
-    this.device.queue.writeBuffer(uniformBuffer, 0, new Uint32Array([rows, cols]));
+    const workgroups = { x: wgSize(cols, 32), y: wgSize(rows, 8), z: 1 };
+    this.device.queue.writeBuffer(uniformBuffer, 0, new Uint32Array([rows, Math.ceil(cols / 4)]));
 
     return {
       resultBuffer,
@@ -648,33 +648,29 @@ class ResidualBlockClass extends Block {
   }
 
   elementWiseAdditionShader = `
-    struct Matrix {
-        data: array<f32>,
+    struct Meta {
+      M: u32,
+      ND4: u32,
     }
 
-    struct Uniforms {
-      dimY: u32,
-      dimX: u32,
-    };
+    @group(1) @binding(0) var<storage, read> layer_out_array: array<vec4<f32>>;
+    @group(1) @binding(1) var<storage, read> residual_array: array<vec4<f32>>;
 
-    @group(1) @binding(0) var<storage, read> LayerOutput: Matrix;
-    @group(1) @binding(1) var<storage, read> Residual: Matrix;
+    @group(0) @binding(0) var<uniform> uniforms: Meta;
+    @group(0) @binding(1) var<storage, read_write> result_array: array<vec4<f32>>;
 
-    @group(0) @binding(0) var<uniform> dimBuffer: Uniforms;
-    @group(0) @binding(1) var<storage, read_write> Result: Matrix;
-
-    @compute @workgroup_size(16, 16)
+    @compute @workgroup_size(8, 8)
     fn main (@builtin(global_invocation_id) global_id: vec3<u32>) {
-      let col: u32 = global_id.x;
-      let row: u32 = global_id.y;
-      let dimX: u32 = dimBuffer.dimX;
-      let dimY: u32 = dimBuffer.dimY;
-
-      if (row >= dimY || col >= dimX) {
+      var col: u32 = global_id.x;
+      var row: u32 = global_id.y;
+      var ND4: u32 = uniforms.ND4;
+      var M: u32 = uniforms.M;
+      
+      if (row >= M || col >= ND4) {
         return;
       }
 
-      Result.data[row * dimX + col] = LayerOutput.data[row * dimX + col] + Residual.data[row * dimX + col];
+      result_array[row * ND4 + col] = layer_out_array[row * ND4 + col] + residual_array[row * ND4 + col];
     }
   `;
 }
@@ -1288,15 +1284,15 @@ class GeluBlockClass extends Block {
 
     @group(1) @binding(0) var<storage,read> array_matrix: array<vec4<f32>>;
 
-    @group(0) @binding(0) var<uniform> bmeta: Meta;
+    @group(0) @binding(0) var<uniform> uniforms: Meta;
     @group(0) @binding(1) var<storage,read_write> array_output: array<vec4<f32>>;
 
     @compute @workgroup_size(8, 8)
     fn main (@builtin(global_invocation_id) global_id: vec3<u32>) {
       var col: u32 = global_id.x;
       var row: u32 = global_id.y;
-      var ND4: u32 = bmeta.ND4;
-      var M: u32 = bmeta.M;
+      var ND4: u32 = uniforms.ND4;
+      var M: u32 = uniforms.M;
       
       if (row >= M || col >= ND4) {
         return;
@@ -1326,14 +1322,6 @@ class AttentionBlockClass extends Block {
     const pipelineCacheKey = `${this.name}_weights`; // No param optimization.
     if (this.pipelineCache.has(pipelineCacheKey)) return this.pipelineCache.get(pipelineCacheKey);
     const pipeline = this.initPipeline(this.attentionWeightsShader, [this.u_s_Layout, this.r_r_Layout], `${this.name}_Pipeline_AttWeights`);
-    this.pipelineCache.set(pipelineCacheKey, pipeline);
-    return pipeline;
-  }
-
-  getMultiplyPipeline() {
-    const pipelineCacheKey = `${this.name}_multiply`; // No param optimization.
-    if (this.pipelineCache.has(pipelineCacheKey)) return this.pipelineCache.get(pipelineCacheKey);
-    const pipeline = this.initPipeline(this.multiplyShader, [this.u_s_Layout, this.r_Layout], `${this.name}_Pipeline_Mult`);
     this.pipelineCache.set(pipelineCacheKey, pipeline);
     return pipeline;
   }
@@ -1401,7 +1389,6 @@ class AttentionBlockClass extends Block {
     const attentionWeightsInputBindGroup = this.initBindGroup(this.r_r_Layout, [splitQResultBuffer, splitKResultBuffer], `${this.name}_AttentionWeightsInputG`);
     this.device.queue.writeBuffer(attentionWeightsUniformBuffer, 0, new Uint32Array([seq_length, seq_length * n_head, seq_length, n_embd / n_head, n_embd]));
     this.device.queue.writeBuffer(attentionWeightsUniformBuffer, 20, new Float32Array([attentionDotProductScale]));
-
     const attentionWeightsWorkgroups = { x: wgSize(seq_length * n_head, 16), y: wgSize(seq_length, 16), z: 1 };
 
     const causalMaskPipeline = this.getCausalMaskPipeline();
@@ -1544,36 +1531,6 @@ class AttentionBlockClass extends Block {
 
       Result.data[row * dimX + col] = sum * DimBuffer.attentionScale;
     }
-  `;
-
-  multiplyShader = `
-    struct Matrix {
-        data: array<f32>,
-    }
-
-    struct Dimensions {
-      dimY: u32, // row dimension of input matrix
-      dimX: u32, // col dimension of input matrix
-      attentionScale: f32,
-    };
-
-    @group(0) @binding(0) var<uniform> DimBuffer: Dimensions;
-    @group(0) @binding(1) var<storage, read_write> Result: Matrix;
-
-    @group(1) @binding(0) var<storage, read> Input: Matrix;
-
-    @compute @workgroup_size(16, 16)
-    fn main (@builtin(global_invocation_id) global_id: vec3<u32>) {
-        let col: u32 = global_id.x;
-        let row: u32 = global_id.y;
-        let dimX: u32 = DimBuffer.dimX;
-
-        if (row >= DimBuffer.dimY || col >= dimX) {
-          return;
-        }
-
-        Result.data[row * dimX + col] = Input.data[row * dimX + col] * DimBuffer.attentionScale;
-      }
   `;
 
   simpleCausalMaskShader = `
@@ -1767,7 +1724,7 @@ class DeEmbedBlockClass extends Block {
   }
 
   deEmbedShader = `
-    struct BMeta {
+    struct uniforms {
       N: u32,
       MD4: u32,
       ND4: u32,
@@ -1775,15 +1732,15 @@ class DeEmbedBlockClass extends Block {
 
     @group(1) @binding(0) var<storage,read> embed_vector: array<vec4<f32>>;
     @group(1) @binding(1) var<storage,read> array_matrix: array<vec4<f32>>;
-    @group(0) @binding(0) var<uniform> bmeta: BMeta;
+    @group(0) @binding(0) var<uniform> uniforms: uniforms;
     @group(0) @binding(1) var<storage,read_write> array_output: array<vec4<f32>>;
 
     @compute @workgroup_size(4)
     fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
       var colD16: u32 = global_id.x;
-      var MD4: u32 = bmeta.MD4;
-      var ND4: u32 = bmeta.ND4;
-      var N: u32 = bmeta.N;
+      var MD4: u32 = uniforms.MD4;
+      var ND4: u32 = uniforms.ND4;
+      var N: u32 = uniforms.N;
       
       // Prevent out of bounds access + uneven matrix N dim sizes.
       if (colD16 * 16 >= N) {
