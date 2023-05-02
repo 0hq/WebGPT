@@ -492,3 +492,34 @@ async function test() {
   await GPU.initialize();
   await GPU.test();
 }
+
+/*
+
+
+fast row add shader for reference
+struct BMeta {
+      M: u32,
+      N: u32,
+      ND4: u32,
+    }
+
+    @group(1) @binding(0) var<storage,read> array_matrix: array<vec4<f32>>;
+    @group(1) @binding(1) var<storage,read> array_bias: array<vec4<f32>>;
+    @group(0) @binding(0) var<uniform> bmeta: BMeta;
+    @group(0) @binding(1) var<storage,read_write> array_output: array<vec4<f32>>;
+
+    @compute @workgroup_size(8,8)
+    fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
+      var col: u32 = global_id.x;
+      var row: u32 = global_id.y;
+      var ND4: u32 = bmeta.ND4;
+      var M: u32 = bmeta.M;
+      
+      if (row >= M || col >= ND4) {
+        return;
+      }
+
+      array_output[row * ND4 + col] = array_matrix[row * ND4 + col] + array_bias[col];
+    }
+
+    */

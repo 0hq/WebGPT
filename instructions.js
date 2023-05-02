@@ -330,6 +330,286 @@ class FastMatMulBlockClass extends Block {
   `;
 }
 
+class FastMLPBlockClass extends Block {
+  constructor() {
+    super();
+    this.name = "fastMLP";
+    this.pipelineCache = new Map();
+  }
+
+  getPipeline(rows) {
+    const div4 = rows % 4 === 0;
+    const pipelineCacheKey = div4 ? "fastMLPNoCheck" : "fastMLP";
+    if (this.pipelineCache.has(pipelineCacheKey)) return this.pipelineCache.get(pipelineCacheKey);
+    const kernel = div4 ? this.fastMLPNoCheck : this.fastMLP;
+    const pipeline = this.initPipeline(kernel, [this.u_s_Layout, this.r_r_r_Layout], `${this.name}_Pipeline_${pipelineCacheKey}`);
+    this.pipelineCache.set(pipelineCacheKey, pipeline);
+    return pipeline;
+  }
+
+  newInstance(rows, cols, shared, inputBuffer, weightsBuffer, biasBuffer) {
+    const pipeline = this.getPipeline(rows);
+    const uniformBuffer = this.initBuffer(["uniform", "copy_to"], [4]);
+    const resultBuffer = this.initBuffer(["storage", "copy_from"], [rows, cols]);
+    const opBindGroup = this.initBindGroup(this.u_s_Layout, [uniformBuffer, resultBuffer], `${this.name}_OpG`);
+    const inputBindGroup = this.initBindGroup(this.r_r_r_Layout, [inputBuffer, weightsBuffer, biasBuffer], `${this.name}_InputG`);
+    const workgroups = { x: wgSize(cols, 64), y: wgSize(rows, 32) };
+    this.device.queue.writeBuffer(uniformBuffer, 0, new Uint32Array([rows, cols, Math.ceil(cols / 4), Math.ceil(shared / 4)]));
+
+    return {
+      resultBuffer,
+      passes: [
+        {
+          flag: "compute",
+          pipeline,
+          groups: [opBindGroup, inputBindGroup],
+          workgroups,
+        },
+      ],
+    };
+  }
+
+  fastMLP = `
+    struct CMeta {
+      M: u32,
+      N: u32,
+      ND4: u32,
+      KD4: u32,
+    }
+
+    @group(1) @binding(0) var<storage,read> array_a: array<vec4<f32>>;
+    @group(1) @binding(1) var<storage,read> array_b: array<vec4<f32>>;
+    @group(1) @binding(2) var<storage,read> array_bias: array<vec4<f32>>;
+
+    @group(0) @binding(0) var<uniform> cmeta: CMeta;
+    @group(0) @binding(1) var<storage,read_write> array_c: array<vec4<f32>>;
+
+    @compute @workgroup_size(8, 8)
+    fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
+      var M: u32 = cmeta.M;
+      var N: u32 = cmeta.N;
+      var ND4: u32 = cmeta.ND4;
+      var KD4: u32 = cmeta.KD4;
+      var x: u32 = global_id.x;
+      var y: u32 = global_id.y;
+
+      if (x * 8 >= N || y * 4 >= M) {
+        return;
+      }
+
+      var sum00: vec4<f32> = vec4<f32>();
+      var sum01: vec4<f32> = vec4<f32>();
+      var sum02: vec4<f32> = vec4<f32>();
+      var sum03: vec4<f32> = vec4<f32>();
+      var sum10: vec4<f32> = vec4<f32>();
+      var sum11: vec4<f32> = vec4<f32>();
+      var sum12: vec4<f32> = vec4<f32>();
+      var sum13: vec4<f32> = vec4<f32>();
+
+      for(var k: u32 = 0u; k < KD4; k = k + 1u) {
+        var arow0: vec4<f32> = array_a[(y * 4u + 0u) * KD4 + k];
+        var arow1: vec4<f32> = array_a[(y * 4u + 1u) * KD4 + k];
+        var arow2: vec4<f32> = array_a[(y * 4u + 2u) * KD4 + k];
+        var arow3: vec4<f32> = array_a[(y * 4u + 3u) * KD4 + k];
+        var brow: vec4<f32>;
+
+        brow = array_b[(k * 4u + 0u) * ND4 + x * 2u + 0u];
+        sum00 = vec4<f32>(arow0.x) * brow + sum00;
+        sum01 = vec4<f32>(arow1.x) * brow + sum01;
+        sum02 = vec4<f32>(arow2.x) * brow + sum02;
+        sum03 = vec4<f32>(arow3.x) * brow + sum03;
+
+        brow = array_b[(k * 4u + 0u) * ND4 + x * 2u + 1u];
+        sum10 = vec4<f32>(arow0.x) * brow + sum10;
+        sum11 = vec4<f32>(arow1.x) * brow + sum11;
+        sum12 = vec4<f32>(arow2.x) * brow + sum12;
+        sum13 = vec4<f32>(arow3.x) * brow + sum13;
+
+        brow = array_b[(k * 4u + 1u) * ND4 + x * 2u + 0u];
+        sum00 = vec4<f32>(arow0.y) * brow + sum00;
+        sum01 = vec4<f32>(arow1.y) * brow + sum01;
+        sum02 = vec4<f32>(arow2.y) * brow + sum02;
+        sum03 = vec4<f32>(arow3.y) * brow + sum03;
+
+        brow = array_b[(k * 4u + 1u) * ND4 + x * 2u + 1u];
+        sum10 = vec4<f32>(arow0.y) * brow + sum10;
+        sum11 = vec4<f32>(arow1.y) * brow + sum11;
+        sum12 = vec4<f32>(arow2.y) * brow + sum12;
+        sum13 = vec4<f32>(arow3.y) * brow + sum13;
+
+        brow = array_b[(k * 4u + 2u) * ND4 + x * 2u + 0u];
+        sum00 = vec4<f32>(arow0.z) * brow + sum00;
+        sum01 = vec4<f32>(arow1.z) * brow + sum01;
+        sum02 = vec4<f32>(arow2.z) * brow + sum02;
+        sum03 = vec4<f32>(arow3.z) * brow + sum03;
+
+        brow = array_b[(k * 4u + 2u) * ND4 + x * 2u + 1u];
+        sum10 = vec4<f32>(arow0.z) * brow + sum10;
+        sum11 = vec4<f32>(arow1.z) * brow + sum11;
+        sum12 = vec4<f32>(arow2.z) * brow + sum12;
+        sum13 = vec4<f32>(arow3.z) * brow + sum13;
+
+        brow = array_b[(k * 4u + 3u) * ND4 + x * 2u + 0u];
+        sum00 = vec4<f32>(arow0.w) * brow + sum00;
+        sum01 = vec4<f32>(arow1.w) * brow + sum01;
+        sum02 = vec4<f32>(arow2.w) * brow + sum02;
+        sum03 = vec4<f32>(arow3.w) * brow + sum03;
+
+        brow = array_b[(k * 4u + 3u) * ND4 + x * 2u + 1u];
+        sum10 = vec4<f32>(arow0.w) * brow + sum10;
+        sum11 = vec4<f32>(arow1.w) * brow + sum11;
+        sum12 = vec4<f32>(arow2.w) * brow + sum12;
+        sum13 = vec4<f32>(arow3.w) * brow + sum13;
+      }
+
+      var array_bias_1: vec4<f32> = array_bias[x * 2u + 0u];
+      sum00 = sum00 + array_bias_1;
+      sum01 = sum01 + array_bias_1;
+      sum02 = sum02 + array_bias_1;
+      sum03 = sum03 + array_bias_1;
+
+      var array_bias_2: vec4<f32> = array_bias[x * 2u + 1u];
+      sum10 = sum10 + array_bias_2;
+      sum11 = sum11 + array_bias_2;
+      sum12 = sum12 + array_bias_2;
+      sum13 = sum13 + array_bias_2;
+
+      if (y * 4u + 0u < M) {
+        array_c[x * 2u + 0u + (y * 4u + 0u) * ND4] = sum00;
+        array_c[x * 2u + 1u + (y * 4u + 0u) * ND4] = sum10;
+      }
+      if (y * 4u + 1u < M) {
+        array_c[x * 2u + 0u + (y * 4u + 1u) * ND4] = sum01;
+        array_c[x * 2u + 1u + (y * 4u + 1u) * ND4] = sum11;
+      }
+      if (y * 4u + 2u < M) {
+        array_c[x * 2u + 0u + (y * 4u + 2u) * ND4] = sum02;
+        array_c[x * 2u + 1u + (y * 4u + 2u) * ND4] = sum12;
+      }
+      if (y * 4u + 3u < M) {
+        array_c[x * 2u + 0u + (y * 4u + 3u) * ND4] = sum03;
+        array_c[x * 2u + 1u + (y * 4u + 3u) * ND4] = sum13;
+      }
+    }
+  `;
+
+  fastMLPNoCheck = `
+    struct CMeta {
+      M: u32,
+      N: u32,
+      ND4: u32,
+      KD4: u32,
+    }
+
+    @group(1) @binding(0) var<storage,read> array_a: array<vec4<f32>>;
+    @group(1) @binding(1) var<storage,read> array_b: array<vec4<f32>>;
+    @group(1) @binding(2) var<storage,read> array_bias: array<vec4<f32>>;
+
+    @group(0) @binding(0) var<uniform> cmeta: CMeta;
+    @group(0) @binding(1) var<storage,read_write> array_c: array<vec4<f32>>;
+
+    @compute @workgroup_size(8, 8)
+    fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
+      var M: u32 = cmeta.M;
+      var N: u32 = cmeta.N;
+      var ND4: u32 = cmeta.ND4;
+      var KD4: u32 = cmeta.KD4;
+      var x: u32 = global_id.x;
+      var y: u32 = global_id.y;
+
+      if (x * 8 >= N || y * 4 >= M) {
+        return;
+      }
+
+      var sum00: vec4<f32> = vec4<f32>();
+      var sum01: vec4<f32> = vec4<f32>();
+      var sum02: vec4<f32> = vec4<f32>();
+      var sum03: vec4<f32> = vec4<f32>();
+      var sum10: vec4<f32> = vec4<f32>();
+      var sum11: vec4<f32> = vec4<f32>();
+      var sum12: vec4<f32> = vec4<f32>();
+      var sum13: vec4<f32> = vec4<f32>();
+
+      for(var k: u32 = 0u; k < KD4; k = k + 1u) {
+        var arow0: vec4<f32> = array_a[(y * 4u + 0u) * KD4 + k];
+        var arow1: vec4<f32> = array_a[(y * 4u + 1u) * KD4 + k];
+        var arow2: vec4<f32> = array_a[(y * 4u + 2u) * KD4 + k];
+        var arow3: vec4<f32> = array_a[(y * 4u + 3u) * KD4 + k];
+        var brow: vec4<f32>;
+
+        brow = array_b[(k * 4u + 0u) * ND4 + x * 2u + 0u];
+        sum00 = vec4<f32>(arow0.x) * brow + sum00;
+        sum01 = vec4<f32>(arow1.x) * brow + sum01;
+        sum02 = vec4<f32>(arow2.x) * brow + sum02;
+        sum03 = vec4<f32>(arow3.x) * brow + sum03;
+
+        brow = array_b[(k * 4u + 0u) * ND4 + x * 2u + 1u];
+        sum10 = vec4<f32>(arow0.x) * brow + sum10;
+        sum11 = vec4<f32>(arow1.x) * brow + sum11;
+        sum12 = vec4<f32>(arow2.x) * brow + sum12;
+        sum13 = vec4<f32>(arow3.x) * brow + sum13;
+
+        brow = array_b[(k * 4u + 1u) * ND4 + x * 2u + 0u];
+        sum00 = vec4<f32>(arow0.y) * brow + sum00;
+        sum01 = vec4<f32>(arow1.y) * brow + sum01;
+        sum02 = vec4<f32>(arow2.y) * brow + sum02;
+        sum03 = vec4<f32>(arow3.y) * brow + sum03;
+
+        brow = array_b[(k * 4u + 1u) * ND4 + x * 2u + 1u];
+        sum10 = vec4<f32>(arow0.y) * brow + sum10;
+        sum11 = vec4<f32>(arow1.y) * brow + sum11;
+        sum12 = vec4<f32>(arow2.y) * brow + sum12;
+        sum13 = vec4<f32>(arow3.y) * brow + sum13;
+
+        brow = array_b[(k * 4u + 2u) * ND4 + x * 2u + 0u];
+        sum00 = vec4<f32>(arow0.z) * brow + sum00;
+        sum01 = vec4<f32>(arow1.z) * brow + sum01;
+        sum02 = vec4<f32>(arow2.z) * brow + sum02;
+        sum03 = vec4<f32>(arow3.z) * brow + sum03;
+
+        brow = array_b[(k * 4u + 2u) * ND4 + x * 2u + 1u];
+        sum10 = vec4<f32>(arow0.z) * brow + sum10;
+        sum11 = vec4<f32>(arow1.z) * brow + sum11;
+        sum12 = vec4<f32>(arow2.z) * brow + sum12;
+        sum13 = vec4<f32>(arow3.z) * brow + sum13;
+
+        brow = array_b[(k * 4u + 3u) * ND4 + x * 2u + 0u];
+        sum00 = vec4<f32>(arow0.w) * brow + sum00;
+        sum01 = vec4<f32>(arow1.w) * brow + sum01;
+        sum02 = vec4<f32>(arow2.w) * brow + sum02;
+        sum03 = vec4<f32>(arow3.w) * brow + sum03;
+
+        brow = array_b[(k * 4u + 3u) * ND4 + x * 2u + 1u];
+        sum10 = vec4<f32>(arow0.w) * brow + sum10;
+        sum11 = vec4<f32>(arow1.w) * brow + sum11;
+        sum12 = vec4<f32>(arow2.w) * brow + sum12;
+        sum13 = vec4<f32>(arow3.w) * brow + sum13;
+      }
+
+      var array_bias_1: vec4<f32> = array_bias[x * 2u + 0u];
+      sum00 = sum00 + array_bias_1;
+      sum01 = sum01 + array_bias_1;
+      sum02 = sum02 + array_bias_1;
+      sum03 = sum03 + array_bias_1;
+
+      var array_bias_2: vec4<f32> = array_bias[x * 2u + 1u];
+      sum10 = sum10 + array_bias_2;
+      sum11 = sum11 + array_bias_2;
+      sum12 = sum12 + array_bias_2;
+      sum13 = sum13 + array_bias_2;
+
+      array_c[x * 2u + 0u + (y * 4u + 0u) * ND4] = sum00;
+      array_c[x * 2u + 1u + (y * 4u + 0u) * ND4] = sum10;
+      array_c[x * 2u + 0u + (y * 4u + 1u) * ND4] = sum01;
+      array_c[x * 2u + 1u + (y * 4u + 1u) * ND4] = sum11;
+      array_c[x * 2u + 0u + (y * 4u + 2u) * ND4] = sum02;
+      array_c[x * 2u + 1u + (y * 4u + 2u) * ND4] = sum12;
+      array_c[x * 2u + 0u + (y * 4u + 3u) * ND4] = sum03;
+      array_c[x * 2u + 1u + (y * 4u + 3u) * ND4] = sum13;
+    }
+  `;
+}
+
 class ResidualBlockClass extends Block {
   constructor() {
     super();
@@ -568,73 +848,6 @@ class TransposeBlockClass extends Block {
       }
 
       Result.data[row * dimX + col] = Input.data[col * dimY + row];
-    }
-  `;
-}
-
-class FastRowAddBlockClass extends Block {
-  constructor() {
-    super();
-    this.name = "fastRowAdd";
-    this.pipelineCache = new Map();
-  }
-
-  getPipeline() {
-    const pipelineCacheKey = this.name; // No param optimization.
-    if (this.pipelineCache.has(pipelineCacheKey)) return this.pipelineCache.get(pipelineCacheKey);
-    const pipeline = this.initPipeline(this.fastRowAddShader, [this.u_s_Layout, this.r_r_Layout], `${this.name}_Pipeline`);
-    this.pipelineCache.set(pipelineCacheKey, pipeline);
-    return pipeline;
-  }
-
-  newInstance(rows, cols, inputBuf, rowBuf) {
-    if (cols % 4 !== 0) throw new Error(`cols must be a multiple of 4, got ${rows}x${cols}`);
-
-    const pipeline = this.getPipeline();
-    const uniformBuffer = this.initBuffer(["uniform", "copy_to"], [4]);
-    const resultBuffer = this.initBuffer(["storage", "copy_from"], [rows, cols]);
-    const opBindGroup = this.initBindGroup(this.u_s_Layout, [uniformBuffer, resultBuffer], `${this.name}_OpG`);
-    const inputBindGroup = this.initBindGroup(this.r_r_Layout, [inputBuf, rowBuf], `${this.name}_InputG`);
-    const workgroups = { x: wgSize(cols, 32), y: wgSize(rows, 8), z: 1 };
-    this.device.queue.writeBuffer(uniformBuffer, 0, new Uint32Array([rows, cols, cols / 4]));
-
-    return {
-      resultBuffer,
-      passes: [
-        {
-          flag: "compute",
-          pipeline,
-          groups: [opBindGroup, inputBindGroup],
-          workgroups,
-        },
-      ],
-    };
-  }
-
-  fastRowAddShader = `
-    struct BMeta {
-      M: u32,
-      N: u32,
-      ND4: u32,
-    }
-
-    @group(1) @binding(0) var<storage,read> array_matrix: array<vec4<f32>>;
-    @group(1) @binding(1) var<storage,read> array_bias: array<vec4<f32>>;
-    @group(0) @binding(0) var<uniform> bmeta: BMeta;
-    @group(0) @binding(1) var<storage,read_write> array_output: array<vec4<f32>>;
-
-    @compute @workgroup_size(8,8)
-    fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
-      var col: u32 = global_id.x;
-      var row: u32 = global_id.y;
-      var ND4: u32 = bmeta.ND4;
-      var M: u32 = bmeta.M;
-      
-      if (row >= M || col >= ND4) {
-        return;
-      }
-
-      array_output[row * ND4 + col] = array_matrix[row * ND4 + col] + array_bias[col];
     }
   `;
 }
@@ -1033,8 +1246,8 @@ class GeluBlockClass extends Block {
     const resultBuffer = this.initBuffer(["storage", "copy_from"], [rows, cols]);
     const opBindGroup = this.initBindGroup(this.u_s_Layout, [uniformBuffer, resultBuffer], `${this.name}_OpG`);
     const inputBindGroup = this.initBindGroup(this.r_Layout, [inputBuf], `${this.name}_InputG`);
-    const workgroups = { x: wgSize(cols, 16), y: wgSize(rows, 16), z: 1 };
-    this.device.queue.writeBuffer(uniformBuffer, 0, new Uint32Array([rows, cols]));
+    const workgroups = { x: wgSize(cols, 32), y: wgSize(rows, 8), z: 1 };
+    this.device.queue.writeBuffer(uniformBuffer, 0, new Uint32Array([rows, cols, Math.ceil(cols / 4)]));
 
     return {
       resultBuffer,
@@ -1050,44 +1263,52 @@ class GeluBlockClass extends Block {
   }
 
   GELUShader = `
-    struct Matrix {
-        data: array<f32>,
+    struct Meta {
+      M: u32,
+      N: u32,
+      ND4: u32,
     }
 
-    struct Dimensions {
-      dimY: u32, // row dimension of input matrix
-      dimX: u32, // col dimension of input matrix
-    };
-
     const SQRPI: f32 = 0.7978845608;
+    const MAGIC: f32 = 0.044715;
     fn gelu(x: f32) -> f32 {
       if (x < -10.0) {
         return 0.0;
       } else if (x > 10.0) {
         return x;
       } else {
-        let cdf_approx: f32 = 0.5 * (1.0 + tanh(SQRPI * (x + 0.044715 * pow(x, 3))));
+        let cdf_approx: f32 = 0.5 * (1.0 + tanh(SQRPI * (x + MAGIC * pow(x, 3))));
         return x * cdf_approx;
       }
     }
 
-    @group(0) @binding(0) var<uniform> DimBuffer: Dimensions;
-    @group(0) @binding(1) var<storage, read_write> Result: Matrix;
+    @group(1) @binding(0) var<storage,read> array_matrix: array<vec4<f32>>;
 
-    @group(1) @binding(0) var<storage, read> Input: Matrix;
+    @group(0) @binding(0) var<uniform> bmeta: Meta;
+    @group(0) @binding(1) var<storage,read_write> array_output: array<vec4<f32>>;
 
-    @compute @workgroup_size(16, 16)
+    @compute @workgroup_size(8, 8)
     fn main (@builtin(global_invocation_id) global_id: vec3<u32>) {
-      let col: u32 = global_id.x;
-      let row: u32 = global_id.y;
-      let dimX: u32 = DimBuffer.dimX;
-      let dimY: u32 = DimBuffer.dimY;
-
-      if (row >= dimY || col >= dimX) {
+      var col: u32 = global_id.x;
+      var row: u32 = global_id.y;
+      var ND4: u32 = bmeta.ND4;
+      var M: u32 = bmeta.M;
+      
+      if (row >= M || col >= ND4) {
         return;
       }
 
-      Result.data[row * dimX + col] = gelu(Input.data[row * dimX + col]);
+      // Can I do this with vector ops?
+      // var test vec4<f32> = array_matrix[row * ND4 + col];
+      // var clip vec4<f32> = clamp(test, -10.0, 10.0);
+      // var pow vec4<f32> = (0.5 + 0.5 * tanh(SQRPI * (test + MAGIC * pow(test, 3.0)))) * test;
+
+      array_output[row * ND4 + col] = vec4<f32>(
+        gelu(array_matrix[row * ND4 + col].x),
+        gelu(array_matrix[row * ND4 + col].y),
+        gelu(array_matrix[row * ND4 + col].z),
+        gelu(array_matrix[row * ND4 + col].w)
+      );
     }
   `;
 }
@@ -1149,18 +1370,17 @@ class AttentionBlockClass extends Block {
     qkvBiasBuffer,
     linearWeightsBuffer,
     linearBiasBuffer,
-    FastMatMulBlock,
-    FastRowAddBlock,
+    FastMLPBlock,
     SoftmaxBlock
   ) {
-    const { resultBuffer: qkvMatMulResult, passes: qkvMatMulPasses } = FastMatMulBlock.newInstance(
+    const { resultBuffer: qkvMLPResult, passes: qkvMLPPasses } = FastMLPBlock.newInstance(
       seq_length,
       3 * n_embd,
       n_embd,
       inputBuffer,
-      qkvWeightsBuffer
+      qkvWeightsBuffer,
+      qkvBiasBuffer
     );
-    const { resultBuffer: qkvBiasAddResult, passes: qkvBiasAddPasses } = FastRowAddBlock.newInstance(seq_length, 3 * n_embd, qkvMatMulResult, qkvBiasBuffer);
 
     const splitQKVPipeline = this.getSplitQKVPipeline();
     const splitQKVUniformBuffer = this.initBuffer(["uniform", "copy_to"], [4]);
@@ -1172,7 +1392,7 @@ class AttentionBlockClass extends Block {
       [splitQKVUniformBuffer, splitQResultBuffer, splitKResultBuffer, splitVResultBuffer],
       `${this.name}_SplitQKVG`
     );
-    const splitQKVInputBindGroup = this.initBindGroup(this.r_Layout, [qkvBiasAddResult], `${this.name}_SplitQKVInputG`);
+    const splitQKVInputBindGroup = this.initBindGroup(this.r_Layout, [qkvMLPResult], `${this.name}_SplitQKVInputG`);
     this.device.queue.writeBuffer(splitQKVUniformBuffer, 0, new Uint32Array([seq_length, n_embd]));
     const splitQKVWorkgroups = { x: wgSize(n_embd, 16), y: wgSize(seq_length, 16), z: 1 };
 
@@ -1215,20 +1435,19 @@ class AttentionBlockClass extends Block {
     this.device.queue.writeBuffer(attentionValuesUniformBuffer, 0, new Uint32Array([seq_length, n_embd, n_head, n_embd / n_head]));
     const attentionValuesWorkgroups = { x: wgSize(n_embd, 16), y: wgSize(seq_length, 16), z: 1 };
 
-    const { resultBuffer: linearMatmulResult, passes: linearMatmulPasses } = FastMatMulBlock.newInstance(
+    const { resultBuffer: linearMLPResult, passes: linearMLPPasses } = FastMLPBlock.newInstance(
       seq_length,
       n_embd,
       n_embd,
       attentionValuesResultBuffer,
-      linearWeightsBuffer
+      linearWeightsBuffer,
+      linearBiasBuffer
     );
-    const { resultBuffer: linearBiasResult, passes: linearBiasPasses } = FastRowAddBlock.newInstance(seq_length, n_embd, linearMatmulResult, linearBiasBuffer);
 
     return {
-      resultBuffer: linearBiasResult,
+      resultBuffer: linearMLPResult,
       passes: [
-        ...qkvMatMulPasses,
-        ...qkvBiasAddPasses,
+        ...qkvMLPPasses,
         {
           flag: "compute",
           pipeline: splitQKVPipeline,
@@ -1260,8 +1479,7 @@ class AttentionBlockClass extends Block {
           groups: [attentionValuesBindGroup, attentionValuesInputBindGroup],
           workgroups: attentionValuesWorkgroups,
         },
-        ...linearMatmulPasses,
-        ...linearBiasPasses,
+        ...linearMLPPasses,
       ],
     };
   }
@@ -1716,43 +1934,32 @@ class FastFFNBlockClass extends Block {
     firstLayerBiasBuffer,
     secondLayerWeightsBuffer,
     secondLayerBiasBuffer,
-    FastMatMulBlock,
-    FastRowAddBlock,
+    FastMLPBlock,
     GeluBlock
   ) {
-    const { resultBuffer: firstMatmulResult, passes: firstMatmulPasses } = FastMatMulBlock.newInstance(
+    const { resultBuffer: firstMLPResult, passes: firstMLPPasses } = FastMLPBlock.newInstance(
       seq_length,
       hidden_size,
       n_embd,
       inputBuffer,
-      firstLayerWeightsBuffer
-    );
-    const { resultBuffer: firstBiasResult, passes: firstBiasPasses } = FastRowAddBlock.newInstance(
-      seq_length,
-      hidden_size,
-      firstMatmulResult,
+      firstLayerWeightsBuffer,
       firstLayerBiasBuffer
     );
 
-    const { resultBuffer: geluResult, passes: geluPasses } = GeluBlock.newInstance(seq_length, hidden_size, firstBiasResult);
+    const { resultBuffer: geluResult, passes: geluPasses } = GeluBlock.newInstance(seq_length, hidden_size, firstMLPResult);
 
-    const { resultBuffer: secondMatmulResult, passes: secondMatmulPasses } = FastMatMulBlock.newInstance(
+    const { resultBuffer: secondMLPResult, passes: secondMLPPasses } = FastMLPBlock.newInstance(
       seq_length,
       n_embd,
       hidden_size,
       geluResult,
-      secondLayerWeightsBuffer
-    );
-    const { resultBuffer: secondBiasResult, passes: secondBiasPasses } = FastRowAddBlock.newInstance(
-      seq_length,
-      n_embd,
-      secondMatmulResult,
+      secondLayerWeightsBuffer,
       secondLayerBiasBuffer
     );
 
     return {
-      resultBuffer: secondBiasResult,
-      passes: [...firstMatmulPasses, ...firstBiasPasses, ...geluPasses, ...secondMatmulPasses, ...secondBiasPasses],
+      resultBuffer: secondMLPResult,
+      passes: [...firstMLPPasses, ...geluPasses, ...secondMLPPasses],
     };
   }
 }

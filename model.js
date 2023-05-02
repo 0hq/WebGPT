@@ -131,8 +131,7 @@ class GPT {
           buffers.qkvBiasBuffer,
           buffers.linearWeightsBuffer,
           buffers.linearBiasBuffer,
-          FastMatMulBlock,
-          FastRowAddBlock,
+          FastMLPBlock,
           SoftmaxBlock
         );
         intermediateBuffer = resultBuffer;
@@ -165,8 +164,7 @@ class GPT {
           buffers.firstLayerBiasBuffer,
           buffers.secondLayerWeightsBuffer,
           buffers.secondLayerBiasBuffer,
-          FastMatMulBlock,
-          FastRowAddBlock,
+          FastMLPBlock,
           GeluBlock
         );
         intermediateBuffer = resultBuffer;

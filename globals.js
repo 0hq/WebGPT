@@ -1,6 +1,6 @@
 const NaiveMatMulBlock = new NaiveMatMulBlockClass();
 const FastMatMulBlock = new FastMatMulBlockClass();
-const FastRowAddBlock = new FastRowAddBlockClass();
+const FastMLPBlock = new FastMLPBlockClass();
 const FastFFNBlock = new FastFFNBlockClass();
 const AttentionBlock = new AttentionBlockClass();
 const ResidualBlock = new ResidualBlockClass();
@@ -16,7 +16,7 @@ const SoftmaxBlock = new SoftmaxBlockClass();
 const operations = [
   NaiveMatMulBlock,
   FastMatMulBlock,
-  FastRowAddBlock,
+  FastMLPBlock,
   FastFFNBlock,
   AttentionBlock,
   ResidualBlock,
