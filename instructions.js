@@ -825,6 +825,10 @@ class SoftmaxBlockClass extends Block {
       let row: u32 = global_id.y;
       let N: u32 = uniforms.N;
 
+      // Still figuring out how to do this.
+      let rowMask: u32 = row % N;
+      let mask: bool = col > rowMask;
+
       // Condense into 256 col max.
       var thread_max = minFloat;
       for (var i: u32 = col; i < N; i = i + workgroupSize) {
