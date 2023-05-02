@@ -1,5 +1,4 @@
 const NaiveMatMulBlock = new NaiveMatMulBlockClass();
-const FastMatMulBlock = new FastMatMulBlockClass();
 const FastMLPBlock = new FastMLPBlockClass();
 const AttentionBlock = new AttentionBlockClass();
 const ResidualBlock = new ResidualBlockClass();
@@ -8,13 +7,11 @@ const DeEmbedBlock = new DeEmbedBlockClass();
 const OldDeEmbedBlock = new OldDeEmbedBlockClass();
 const GeluBlock = new GeluBlockClass();
 const LayerNormBlock = new LayerNormBlockClass();
-const TransposeBlock = new TransposeBlockClass();
 const SoftmaxBlock = new SoftmaxBlockClass();
 
 // Needed for deletion.
 const operations = [
   NaiveMatMulBlock,
-  FastMatMulBlock,
   FastMLPBlock,
   AttentionBlock,
   ResidualBlock,
@@ -23,7 +20,6 @@ const operations = [
   OldDeEmbedBlock,
   GeluBlock,
   LayerNormBlock,
-  TransposeBlock,
   SoftmaxBlock,
 ];
 
