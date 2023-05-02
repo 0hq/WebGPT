@@ -94,6 +94,7 @@ class FastMLPBlockClass extends Block {
   }
 
   newInstance(rows, cols, shared, inputBuffer, weightsBuffer, biasBuffer) {
+    if (cols % 4 !== 0) throw new Error("Cols must be divisible by 4.");
     const pipeline = this.getPipeline(rows);
     const uniformBuffer = this.initBuffer(["uniform", "copy_to"], [4]);
     const resultBuffer = this.initBuffer(["storage", "copy_from"], [rows, cols]);
@@ -372,6 +373,7 @@ class ResidualBlockClass extends Block {
   }
 
   newInstance(rows, cols, outputBuf, residualBuf) {
+    if (cols % 4 !== 0) throw new Error("Cols must be divisible by 4.");
     const pipeline = this.getPipeline();
     const uniformBuffer = this.initBuffer(["uniform", "copy_to"], [4]);
     const resultBuffer = this.initBuffer(["storage", "copy_from"], [rows, cols]);
@@ -411,11 +413,13 @@ class ResidualBlockClass extends Block {
       var row: u32 = global_id.y;
       var ND4: u32 = uniforms.ND4;
       var M: u32 = uniforms.M;
+
+      if (row >= M || col >= ND4) {
+        return;
+      }
       
-      // Unsure if this is any faster than if return bounds check.
-      let mask = (row < M) && (col < ND4);
       let index = row * ND4 + col;
-      result_array[index] = select(result_array[index], layer_out_array[index] + residual_array[index], mask);
+      result_array[index] =  layer_out_array[index] + residual_array[index];
     }
   `;
 }
@@ -1025,6 +1029,7 @@ class GeluBlockClass extends Block {
   }
 
   newInstance(rows, cols, inputBuf) {
+    if (cols % 4 !== 0) throw new Error("Cols must be divisible by 4.");
     const pipeline = this.getPipeline();
     const uniformBuffer = this.initBuffer(["uniform", "copy_to"], [4]);
     const resultBuffer = this.initBuffer(["storage", "copy_from"], [rows, cols]);
@@ -1187,7 +1192,7 @@ class AttentionBlockClass extends Block {
     this.device.queue.writeBuffer(attentionWeightsUniformBuffer, 20, new Float32Array([attentionDotProductScale]));
     const attentionWeightsWorkgroups = { x: wgSize(seq_length * n_head, 16), y: wgSize(seq_length, 16), z: 1 };
 
-    const causalMaskPipeline = this.getCausalMaskPipeline();
+    const causalMaskPipeline = this.getSimpleCausalMaskPipeline();
     const causalMaskUniformBuffer = this.initBuffer(["uniform", "copy_to"], [4]);
     const causalMaskResultBuffer = this.initBuffer(["storage", "copy_from"], [seq_length, seq_length * n_head]);
     const causalMaskBindGroup = this.initBindGroup(this.u_s_Layout, [causalMaskUniformBuffer, causalMaskResultBuffer], `${this.name}_CausalMaskG`);
@@ -1352,13 +1357,52 @@ class AttentionBlockClass extends Block {
       let dimY: u32 = DimBuffer.dimY;
 
       let rowMask: u32 = row % dimX;
-      if (row >= dimY || col > rowMask) {
+      if (row >= dimY || col >= dimX) {
         return;
       }
 
-      let rowNum: u32 = row / dimX;
-      Result.data[row * dimX + col] = Input.data[rowMask * dimY + col + rowNum * dimX];
+      if (col > rowMask) {
+        Result.data[row * dimX + col] = -1e9;
+      } else {
+        let rowNum: u32 = row / dimX;
+        Result.data[row * dimX + col] = Input.data[rowMask * dimY + col + rowNum * dimX];
+      }
+    }
+  `;
 
+  simpleCausalMaskShaderX = `
+    struct Matrix {
+        data: array<f32>,
+    }
+
+    struct Dimensions {
+      dimY: u32, // row dimension of input matrix
+      dimX: u32, // col dimension of input matrix
+    };
+
+    @group(0) @binding(0) var<uniform> DimBuffer: Dimensions;
+    @group(0) @binding(1) var<storage, read_write> Result: Matrix;
+
+    @group(1) @binding(0) var<storage, read> Input: Matrix;
+
+    @compute @workgroup_size(16, 16)
+    fn main (@builtin(global_invocation_id) global_id: vec3<u32>) {
+      let col: u32 = global_id.x;
+      let row: u32 = global_id.y;
+      let dimX: u32 = DimBuffer.dimX;
+      let dimY: u32 = DimBuffer.dimY;
+
+      let rowMask: u32 = row % dimX;
+      if (row >= dimY) {
+        return;
+      }
+
+      if (col > rowMask) {
+        Result.data[row * dimX + col] = 0.0;
+      } else {
+        let rowNum: u32 = row / dimX;
+        Result.data[row * dimX + col] = Input.data[rowMask * dimY + col + rowNum * dimX];
+      }
     }
   `;
 
@@ -1384,17 +1428,19 @@ class AttentionBlockClass extends Block {
       let dimX: u32 = DimBuffer.dimX;
       let dimY: u32 = DimBuffer.dimY;
 
-      if (row >= dimY) {
+      if (row >= dimY || col >= dimX) {
         return;
       }
+
+      let outOfBoundsCheck = (row < dimY) && (col < dimX);
 
       let rowMask: u32 = row % dimX;
       let rowNum: u32 = row / dimX;
       let index = row * dimX + col;
-      let boundsCheck: bool = (row < dimY) && (col < dimX);
       let causalMask: bool = (col <= rowMask);
-      let maskedValue = select(-1e9, Input.data[rowMask * dimY + col + rowNum * dimX], causalMask);
-      Result.data[index] = select(Result.data[index], maskedValue, boundsCheck);
+      let maskedValue = select(0, Input.data[rowMask * dimY + col + rowNum * dimX], causalMask);
+      Result.data[index] = select(Result.data[index], maskedValue, outOfBoundsCheck);
+
     }
   `;
 
@@ -1685,6 +1731,31 @@ class OldDeEmbedBlockClass extends Block {
     return {
       resultBuffer: deEmbedOutputBuffer,
       passes: [sliceEmbedCopyCommand, ...deEmbedPasses],
+    };
+  }
+}
+
+class OutputBlockClass extends Block {
+  constructor() {
+    super();
+    this.name = "output";
+  }
+
+  newInstance(row, col, inputBuffer) {
+    const outputBuffer = this.initBuffer(["map_read", "copy_to"], [row, col]);
+
+    const copyCommand = {
+      flag: "copy",
+      src: inputBuffer,
+      srcOffset: 0,
+      dst: outputBuffer,
+      dstOffset: 0,
+      size: this.bufferSize(row, col),
+    };
+
+    return {
+      resultBuffer: outputBuffer,
+      passes: [copyCommand],
     };
   }
 }
