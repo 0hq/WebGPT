@@ -1247,7 +1247,7 @@ class GeluBlockClass extends Block {
     const opBindGroup = this.initBindGroup(this.u_s_Layout, [uniformBuffer, resultBuffer], `${this.name}_OpG`);
     const inputBindGroup = this.initBindGroup(this.r_Layout, [inputBuf], `${this.name}_InputG`);
     const workgroups = { x: wgSize(cols, 32), y: wgSize(rows, 8), z: 1 };
-    this.device.queue.writeBuffer(uniformBuffer, 0, new Uint32Array([rows, cols, Math.ceil(cols / 4)]));
+    this.device.queue.writeBuffer(uniformBuffer, 0, new Uint32Array([rows, Math.ceil(cols / 4)]));
 
     return {
       resultBuffer,
@@ -1265,21 +1265,25 @@ class GeluBlockClass extends Block {
   GELUShader = `
     struct Meta {
       M: u32,
-      N: u32,
       ND4: u32,
     }
 
-    const SQRPI: f32 = 0.7978845608;
-    const MAGIC: f32 = 0.044715;
-    fn gelu(x: f32) -> f32 {
-      if (x < -10.0) {
-        return 0.0;
-      } else if (x > 10.0) {
-        return x;
-      } else {
-        let cdf_approx: f32 = 0.5 * (1.0 + tanh(SQRPI * (x + MAGIC * pow(x, 3))));
-        return x * cdf_approx;
-      }
+    const LOW_THRESHOLD: vec4<f32> = vec4<f32>(-10.0);
+    const HIGH_THRESHOLD: vec4<f32> = vec4<f32>(10.0);
+    const ZERO: vec4<f32> = vec4<f32>(0.0);
+    const HALF: vec4<f32> = vec4<f32>(0.5);
+    const SQRPI: vec4<f32> = vec4<f32>(0.7978845608);
+    const COEFF: vec4<f32> = vec4<f32>(0.044715);
+    fn gelu_vec4(x: vec4<f32>) -> vec4<f32> {
+      let x_cubed: vec4<f32> = pow(x, vec4<f32>(3.0));
+      let cdf_approx: vec4<f32> = HALF * (vec4<f32>(1.0) + tanh(SQRPI * (x + COEFF * x_cubed)));
+  
+      let result: vec4<f32> = x * cdf_approx;
+  
+      let lt_mask: vec4<bool> = x < LOW_THRESHOLD;
+      let gt_mask: vec4<bool> = x > HIGH_THRESHOLD;
+  
+      return select(select(result, ZERO, lt_mask), x, gt_mask);
     }
 
     @group(1) @binding(0) var<storage,read> array_matrix: array<vec4<f32>>;
@@ -1298,17 +1302,7 @@ class GeluBlockClass extends Block {
         return;
       }
 
-      // Can I do this with vector ops?
-      // var test vec4<f32> = array_matrix[row * ND4 + col];
-      // var clip vec4<f32> = clamp(test, -10.0, 10.0);
-      // var pow vec4<f32> = (0.5 + 0.5 * tanh(SQRPI * (test + MAGIC * pow(test, 3.0)))) * test;
-
-      array_output[row * ND4 + col] = vec4<f32>(
-        gelu(array_matrix[row * ND4 + col].x),
-        gelu(array_matrix[row * ND4 + col].y),
-        gelu(array_matrix[row * ND4 + col].z),
-        gelu(array_matrix[row * ND4 + col].w)
-      );
+      array_output[row * ND4 + col] = gelu_vec4(array_matrix[row * ND4 + col]);
     }
   `;
 }
