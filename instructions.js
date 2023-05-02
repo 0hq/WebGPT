@@ -1400,22 +1400,15 @@ class AttentionBlockClass extends Block {
     );
     const attentionWeightsInputBindGroup = this.initBindGroup(this.r_r_Layout, [splitQResultBuffer, splitKResultBuffer], `${this.name}_AttentionWeightsInputG`);
     this.device.queue.writeBuffer(attentionWeightsUniformBuffer, 0, new Uint32Array([seq_length, seq_length * n_head, seq_length, n_embd / n_head, n_embd]));
-    const attentionWeightsWorkgroups = { x: wgSize(seq_length * n_head, 16), y: wgSize(seq_length, 16), z: 1 };
+    this.device.queue.writeBuffer(attentionWeightsUniformBuffer, 20, new Float32Array([attentionDotProductScale]));
 
-    const multiplyPipeline = this.getMultiplyPipeline();
-    const multiplyUniformBuffer = this.initBuffer(["uniform", "copy_to"], [4]);
-    const multiplyResultBuffer = this.initBuffer(["storage", "copy_from"], [seq_length, seq_length * n_head]);
-    const multiplyBindGroup = this.initBindGroup(this.u_s_Layout, [multiplyUniformBuffer, multiplyResultBuffer]);
-    const multiplyInputBindGroup = this.initBindGroup(this.r_Layout, [attentionWeightsResultBuffer], `${this.name}_MultiplyInputG`);
-    this.device.queue.writeBuffer(multiplyUniformBuffer, 0, new Uint32Array([seq_length, seq_length * n_head]));
-    this.device.queue.writeBuffer(multiplyUniformBuffer, 8, new Float32Array([attentionDotProductScale]));
-    const multiplyWorkgroups = { x: wgSize(seq_length * n_head, 16), y: wgSize(seq_length, 16), z: 1 };
+    const attentionWeightsWorkgroups = { x: wgSize(seq_length * n_head, 16), y: wgSize(seq_length, 16), z: 1 };
 
     const causalMaskPipeline = this.getCausalMaskPipeline();
     const causalMaskUniformBuffer = this.initBuffer(["uniform", "copy_to"], [4]);
     const causalMaskResultBuffer = this.initBuffer(["storage", "copy_from"], [seq_length, seq_length * n_head]);
     const causalMaskBindGroup = this.initBindGroup(this.u_s_Layout, [causalMaskUniformBuffer, causalMaskResultBuffer], `${this.name}_CausalMaskG`);
-    const causalMaskInputBindGroup = this.initBindGroup(this.r_Layout, [multiplyResultBuffer], `${this.name}_CausalMaskInputG`);
+    const causalMaskInputBindGroup = this.initBindGroup(this.r_Layout, [attentionWeightsResultBuffer], `${this.name}_CausalMaskInputG`);
     this.device.queue.writeBuffer(causalMaskUniformBuffer, 0, new Uint32Array([seq_length * n_head, seq_length])); // Transposes! This is needed for softmax.
     const causalMaskWorkgroups = { x: wgSize(seq_length, 16), y: wgSize(seq_length * n_head, 16), z: 1 };
 
@@ -1453,12 +1446,6 @@ class AttentionBlockClass extends Block {
           pipeline: attentionWeightsPipeline,
           groups: [attentionWeightsBindGroup, attentionWeightsInputBindGroup],
           workgroups: attentionWeightsWorkgroups,
-        },
-        {
-          flag: "compute",
-          pipeline: multiplyPipeline,
-          groups: [multiplyBindGroup, multiplyInputBindGroup],
-          workgroups: multiplyWorkgroups,
         },
         {
           flag: "compute",
@@ -1525,6 +1512,7 @@ class AttentionBlockClass extends Block {
       seqLength: u32, // seq_length or K col dim (Q can be different)
       qkvCols: u32, // head col dim for Q, K or n_embd / n_heads
       embedDim: u32, // n_embd or total Q col dim & K row dim
+      attentionScale: f32,
     };
 
     @group(1) @binding(0) var<storage, read> Queries: Matrix;
@@ -1554,7 +1542,7 @@ class AttentionBlockClass extends Block {
           sum = sum + Queries.data[row * embedDim + i + head * qkvCols] * Keys.data[col_r * embedDim + i + head * qkvCols];
       }
 
-      Result.data[row * dimX + col] = sum;
+      Result.data[row * dimX + col] = sum * DimBuffer.attentionScale;
     }
   `;
 
