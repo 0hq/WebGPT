@@ -25,6 +25,8 @@ class GPT {
     const adapter = await navigator.gpu.requestAdapter();
     this.device = await adapter.requestDevice();
 
+    initializeOperations(this.device);
+
     [this.model, this.params] = await this.loadModel(this.folder);
     this.tokenizer = this.tokenizerType == "bpe" ? new GPT2Tokenizer() : new SimpleTokenizer();
     await this.tokenizer.load();
@@ -42,44 +44,180 @@ class GPT {
       this.defaultPrompt = `WILL:\nAh, how dare you challenge me?\nHave you forgotten I built WebGPT?\n`;
       this.defaultTopK = 1;
       this.defaultTemperature = 1;
-      this.defaultTokens = 20;
+      this.defaultTokens = 80;
     }
-
-    this.NaiveMatMulBlock = new NaiveMatMulBlock(this.device);
-    this.FastMatMulBlock = new FastMatMulBlock(this.device);
-    this.FastRowAddBlock = new FastRowAddBlock(this.device);
-    this.FastFFNBlock = new FastFFNBlock(this.device);
-    this.AttentionBlock = new AttentionBlock(this.device);
-    this.ResidualBlock = new ResidualBlock(this.device);
-    this.EmbedBlock = new EmbedBlock(this.device);
-    this.DeEmbedBlock = new DeEmbedBlock(this.device);
-    this.GeluBlock = new GeluBlock(this.device);
-    this.LayerNormBlock = new LayerNormBlock(this.device);
-    this.TransposeBlock = new TransposeBlock(this.device);
-    this.SoftmaxBlock = new SoftmaxBlock(this.device);
-
-    // Needed for deletion.
-    this.operations = [
-      this.NaiveMatMulBlock,
-      this.FastMatMulBlock,
-      this.FastRowAddBlock,
-      this.FastFFNBlock,
-      this.AttentionBlock,
-      this.ResidualBlock,
-      this.EmbedBlock,
-      this.DeEmbedBlock,
-      this.GeluBlock,
-      this.LayerNormBlock,
-      this.TransposeBlock,
-      this.SoftmaxBlock,
-    ];
 
     this.initialized = true;
 
     console.log("Model initialized");
   }
 
-  // Fetch bin should be parallelized for big loading time reduction.
+  async *generate(prompt, max_new_tokens, top_k, temperature) {
+    if (!this.initialized) {
+      console.error("Model not loaded yet");
+      return;
+    }
+
+    let history = this.tokenizer.encode(prompt);
+    console.log(`Prompt (${history.length} tokens):\n${prompt}`);
+
+    let totalTime = 0;
+
+    for (let i = 0; i < max_new_tokens; i++) {
+      const idx_cond = history.slice(-this.params.block_size);
+      const useAttCache = i !== 0 && history.length <= this.params.block_size && this.doAttentionCache;
+
+      const startTime = performance.now();
+      const logits = await this.run(idx_cond, useAttCache);
+      const endTime = performance.now();
+
+      console.log(`\nIteration ${i + 1} of ${max_new_tokens}`);
+      console.log(`Using attention cache? ${useAttCache}`);
+      console.log(`Kernel execution time: ${endTime - startTime} ms`);
+      totalTime += endTime - startTime;
+
+      const { topKIndices, topKProbs } = selectTopK(logits, top_k);
+      const probs = cpuSoftmax(topKProbs, temperature);
+      const idx_next = topKIndices[sampleFromDistribution(probs)];
+
+      history = history.concat(idx_next);
+
+      console.log(`Output:\n${this.tokenizer.decode(history)}`);
+
+      yield this.tokenizer.decode([idx_next]);
+    }
+
+    console.log(`Average kernel execution time: ${totalTime / max_new_tokens} ms`);
+  }
+
+  async run(idx) {
+    const { posEmbdBuffer, layer_buffers, normGammaBuffer, normBetaBuffer, embeddingsBuffer } = this.model;
+    const { attention_scale, n_embd, n_head, n_layer, vocab_size, hidden_size, vocab_chunk_size } = this.params;
+    const seq_length = idx.length;
+
+    // ---------------- Create Passes ---------------- //
+    // Note: These are re-initialized because everytime seq_length changes buffers are different sizes.
+
+    this.computePasses = [];
+    let intermediateBuffer;
+    let residualBuffer;
+    {
+      const { passes, resultBuffer } = EmbedBlock.newInstance(idx, seq_length, n_embd, embeddingsBuffer, posEmbdBuffer, ResidualBlock);
+      intermediateBuffer = resultBuffer;
+      residualBuffer = resultBuffer;
+      this.computePasses.push(...passes);
+    }
+    for (let i = 0; i < n_layer; i++) {
+      const buffers = layer_buffers[i];
+      {
+        const { passes, resultBuffer } = LayerNormBlock.newInstance(
+          seq_length,
+          n_embd,
+          intermediateBuffer,
+          buffers.normAttentionGammaBuffer,
+          buffers.normAttentionBetaBuffer
+        );
+        intermediateBuffer = resultBuffer;
+        this.computePasses.push(...passes);
+      }
+      {
+        const { passes, resultBuffer } = AttentionBlock.newInstance(
+          seq_length,
+          n_embd,
+          attention_scale,
+          n_head,
+          intermediateBuffer,
+          buffers.qkvWeightsBuffer,
+          buffers.qkvBiasBuffer,
+          buffers.linearWeightsBuffer,
+          buffers.linearBiasBuffer,
+          FastMatMulBlock,
+          FastRowAddBlock,
+          SoftmaxBlock
+        );
+        intermediateBuffer = resultBuffer;
+        this.computePasses.push(...passes);
+      }
+      {
+        const { passes, resultBuffer } = ResidualBlock.newInstance(seq_length, n_embd, intermediateBuffer, residualBuffer);
+        intermediateBuffer = resultBuffer;
+        residualBuffer = resultBuffer;
+        this.computePasses.push(...passes);
+      }
+      {
+        const { passes, resultBuffer } = LayerNormBlock.newInstance(
+          seq_length,
+          n_embd,
+          intermediateBuffer,
+          buffers.normLinearGammaBuffer,
+          buffers.normLinearBetaBuffer
+        );
+        intermediateBuffer = resultBuffer;
+        this.computePasses.push(...passes);
+      }
+      {
+        const { passes, resultBuffer } = FastFFNBlock.newInstance(
+          seq_length,
+          n_embd,
+          hidden_size,
+          intermediateBuffer,
+          buffers.firstLayerWeightsBuffer,
+          buffers.firstLayerBiasBuffer,
+          buffers.secondLayerWeightsBuffer,
+          buffers.secondLayerBiasBuffer,
+          FastMatMulBlock,
+          FastRowAddBlock,
+          GeluBlock
+        );
+        intermediateBuffer = resultBuffer;
+        this.computePasses.push(...passes);
+      }
+      {
+        const { passes, resultBuffer } = ResidualBlock.newInstance(seq_length, n_embd, intermediateBuffer, residualBuffer);
+        intermediateBuffer = resultBuffer;
+        residualBuffer = resultBuffer;
+        this.computePasses.push(...passes);
+      }
+    }
+    {
+      const { passes, resultBuffer } = LayerNormBlock.newInstance(seq_length, n_embd, intermediateBuffer, normGammaBuffer, normBetaBuffer);
+      intermediateBuffer = resultBuffer;
+      this.computePasses.push(...passes);
+    }
+    {
+      const { passes, resultBuffer } = OldDeEmbedBlock.newInstance(vocab_size, n_embd, seq_length, intermediateBuffer, embeddingsBuffer, NaiveMatMulBlock);
+      intermediateBuffer = resultBuffer;
+      this.computePasses.push(...passes);
+    }
+    const resultBuffer = intermediateBuffer;
+
+    // ---------------- Compute Passes ----------------
+
+    const commandEncoder = this.device.createCommandEncoder();
+    for (const pass of this.computePasses) {
+      if (pass.flag === "compute") {
+        const passEncoder = commandEncoder.beginComputePass();
+        passEncoder.setPipeline(pass.pipeline);
+        for (let i = 0; i < pass.groups.length; i++) passEncoder.setBindGroup(i, pass.groups[i]);
+        passEncoder.dispatchWorkgroups(pass.workgroups.x, pass.workgroups.y);
+        passEncoder.end();
+      } else if (pass.flag === "copy") {
+        commandEncoder.copyBufferToBuffer(pass.src, pass.srcOffset, pass.dst, pass.dstOffset, pass.size);
+      }
+    }
+    this.device.queue.submit([commandEncoder.finish()]);
+
+    // ---------------- Read Results ----------------
+
+    await resultBuffer.mapAsync(GPUMapMode.READ);
+    const output = resultBuffer.getMappedRange();
+    const outputArray = new Float32Array(output).slice(0); // Copy the array, otherwise it'll be destroyed.
+
+    destroyOperationBuffers();
+
+    return outputArray;
+  }
+
   async loadModel(folder) {
     if (this.initialized) return console.error("Model already loaded");
 
@@ -90,8 +228,11 @@ class GPT {
     console.log("Loading params...");
     const params = await (await fetch(`${fldr}/params_gpt.json`)).json();
     params.hidden_size = params.n_embd * 4;
-    params.attentionDotProductScale = 1 / Math.sqrt(params.n_embd / params.n_head);
-    const { block_size, n_embd, n_head, n_layer, bias, vocab_size, hidden_size } = params;
+    params.attention_scale = 1 / Math.sqrt(params.n_embd / params.n_head);
+    var numBuffers = Math.ceil(this.bufferSize(params.vocab_size, params.n_embd) / this.device.limits.maxStorageBufferBindingSize); // Assumes that vocab_size has a decent least prime factor.
+    params.num_instances = numBuffers > 1 ? leastPrimeFactor(params.vocab_size, numBuffers) : 1;
+    params.vocab_chunk_size = params.vocab_size / numBuffers;
+    const { block_size, n_embd, n_head, n_layer, bias, vocab_size, hidden_size, vocab_chunk_size, num_instances } = params;
     console.log("Params:", params);
 
     // Did you enable GitHub LFS? Won't work without it.
@@ -99,7 +240,7 @@ class GPT {
 
     console.log("Loading token embeddings...");
     const embeddingWeights = await fetchBin(`${fldr}/transformer.wte.weight_gpt.bin`);
-    const embeddingWeightsBuffer = this.initTensor(embeddingWeights, [vocab_size, n_embd], ["copy_from"]);
+    const embeddingsBuffer = this.initTensor(embeddingWeights, [vocab_size, n_embd], ["copy_from"]);
 
     console.log("Loading positional embeddings...");
     const posEmbeddings = await fetchBin(`${fldr}/transformer.wpe.weight_gpt.bin`);
@@ -153,181 +294,9 @@ class GPT {
     const normGammaBuffer = this.initTensor(layerNormGamma, [n_embd], ["storage"]);
     const normBetaBuffer = this.initTensor(layerNormBeta, [n_embd], ["storage"]);
 
-    const output = { layer_buffers, embeddingWeightsBuffer, posEmbdBuffer, normGammaBuffer, normBetaBuffer };
+    const output = { layer_buffers, embeddingsBuffer, posEmbdBuffer, normGammaBuffer, normBetaBuffer };
     console.log("Finished loading model.", output, params);
     return [output, params];
-  }
-
-  async *generate(prompt, max_new_tokens, top_k, temperature) {
-    if (!this.initialized) {
-      console.error("Model not loaded yet");
-      return;
-    }
-
-    let history = this.tokenizer.encode(prompt);
-    console.log(`Prompt (${history.length} tokens):\n${prompt}`);
-
-    let totalTime = 0;
-
-    for (let i = 0; i < max_new_tokens; i++) {
-      const idx_cond = history.slice(-this.params.block_size);
-      const useAttCache = i !== 0 && history.length <= this.params.block_size && this.doAttentionCache;
-
-      const startTime = performance.now();
-      const logits = await this.run(idx_cond, useAttCache);
-      const endTime = performance.now();
-
-      console.log(`\nIteration ${i + 1} of ${max_new_tokens}`);
-      console.log(`Using attention cache? ${useAttCache}`);
-      console.log(`Kernel execution time: ${endTime - startTime} ms`);
-      totalTime += endTime - startTime;
-
-      const { topKIndices, topKProbs } = selectTopK(logits, top_k);
-      const probs = cpuSoftmax(topKProbs, temperature);
-      const idx_next = topKIndices[sampleFromDistribution(probs)];
-
-      history = history.concat(idx_next);
-
-      console.log(`Output:\n${this.tokenizer.decode(history)}`);
-
-      yield this.tokenizer.decode([idx_next]);
-    }
-
-    console.log(`Average kernel execution time: ${totalTime / max_new_tokens} ms`);
-  }
-
-  async run(idx) {
-    const { posEmbdBuffer, layer_buffers, normGammaBuffer, normBetaBuffer, embeddingWeightsBuffer } = this.model;
-    const { attentionDotProductScale, n_embd, n_head, n_layer, vocab_size, hidden_size, block_size } = this.params;
-    const seq_length = idx.length;
-
-    // ---------------- Create Passes ----------------
-
-    this.computePasses = [];
-    let intermediateBuffer;
-    let residualBuffer;
-    {
-      const { passes, resultBuffer } = this.EmbedBlock.newInstance(idx, seq_length, n_embd, embeddingWeightsBuffer, posEmbdBuffer, this.ResidualBlock);
-      intermediateBuffer = resultBuffer;
-      residualBuffer = resultBuffer;
-      this.computePasses.push(...passes);
-    }
-    for (let i = 0; i < n_layer; i++) {
-      const buffers = layer_buffers[i];
-      {
-        const { passes, resultBuffer } = this.LayerNormBlock.newInstance(
-          seq_length,
-          n_embd,
-          intermediateBuffer,
-          buffers.normAttentionGammaBuffer,
-          buffers.normAttentionBetaBuffer
-        );
-        intermediateBuffer = resultBuffer;
-        this.computePasses.push(...passes);
-      }
-      {
-        const { passes, resultBuffer } = this.AttentionBlock.newInstance(
-          seq_length,
-          n_embd,
-          attentionDotProductScale,
-          n_head,
-          intermediateBuffer,
-          buffers.qkvWeightsBuffer,
-          buffers.qkvBiasBuffer,
-          buffers.linearWeightsBuffer,
-          buffers.linearBiasBuffer,
-          this.FastMatMulBlock,
-          this.FastRowAddBlock,
-          this.SoftmaxBlock
-        );
-        intermediateBuffer = resultBuffer;
-        this.computePasses.push(...passes);
-      }
-      {
-        const { passes, resultBuffer } = this.ResidualBlock.newInstance(seq_length, n_embd, intermediateBuffer, residualBuffer);
-        intermediateBuffer = resultBuffer;
-        residualBuffer = resultBuffer;
-        this.computePasses.push(...passes);
-      }
-      {
-        const { passes, resultBuffer } = this.LayerNormBlock.newInstance(
-          seq_length,
-          n_embd,
-          intermediateBuffer,
-          buffers.normLinearGammaBuffer,
-          buffers.normLinearBetaBuffer
-        );
-        intermediateBuffer = resultBuffer;
-        this.computePasses.push(...passes);
-      }
-      {
-        const { passes, resultBuffer } = this.FastFFNBlock.newInstance(
-          seq_length,
-          n_embd,
-          hidden_size,
-          intermediateBuffer,
-          buffers.firstLayerWeightsBuffer,
-          buffers.firstLayerBiasBuffer,
-          buffers.secondLayerWeightsBuffer,
-          buffers.secondLayerBiasBuffer,
-          this.FastMatMulBlock,
-          this.FastRowAddBlock,
-          this.GeluBlock
-        );
-        intermediateBuffer = resultBuffer;
-        this.computePasses.push(...passes);
-      }
-      {
-        const { passes, resultBuffer } = this.ResidualBlock.newInstance(seq_length, n_embd, intermediateBuffer, residualBuffer);
-        intermediateBuffer = resultBuffer;
-        residualBuffer = resultBuffer;
-        this.computePasses.push(...passes);
-      }
-    }
-    {
-      const { passes, resultBuffer } = this.LayerNormBlock.newInstance(seq_length, n_embd, intermediateBuffer, normGammaBuffer, normBetaBuffer);
-      intermediateBuffer = resultBuffer;
-      this.computePasses.push(...passes);
-    }
-    {
-      const { passes, resultBuffer } = this.DeEmbedBlock.newInstance(
-        vocab_size,
-        n_embd,
-        seq_length,
-        intermediateBuffer,
-        embeddingWeightsBuffer,
-        this.NaiveMatMulBlock
-      );
-      intermediateBuffer = resultBuffer;
-      this.computePasses.push(...passes);
-    }
-    const resultBuffer = intermediateBuffer;
-
-    // ---------------- Compute Passes ----------------
-
-    const commandEncoder = this.device.createCommandEncoder();
-    for (const pass of this.computePasses) {
-      if (pass.flag === "compute") {
-        const passEncoder = commandEncoder.beginComputePass();
-        passEncoder.setPipeline(pass.pipeline);
-        for (let i = 0; i < pass.groups.length; i++) passEncoder.setBindGroup(i, pass.groups[i]);
-        passEncoder.dispatchWorkgroups(pass.workgroups.x, pass.workgroups.y);
-        passEncoder.end();
-      } else if (pass.flag === "copy") {
-        commandEncoder.copyBufferToBuffer(pass.src, pass.srcOffset, pass.dst, pass.dstOffset, pass.size);
-      }
-    }
-    this.device.queue.submit([commandEncoder.finish()]);
-
-    // ---------------- Read Results ----------------
-
-    await resultBuffer.mapAsync(GPUMapMode.READ);
-    const output = resultBuffer.getMappedRange();
-    const outputArray = new Float32Array(output).slice(0); // Copy the array, otherwise it'll be destroyed.
-
-    for (const operation of this.operations) operation.destroyBuffers();
-
-    return outputArray;
   }
 
   initTensor(data, dims, ops) {
