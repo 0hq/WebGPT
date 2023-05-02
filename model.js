@@ -42,9 +42,10 @@ class GPT {
       this.defaultPrompt = `WILL:\nAh, how dare you challenge me?\nHave you forgotten I built WebGPT?\n`;
       this.defaultTopK = 1;
       this.defaultTemperature = 1;
-      this.defaultTokens = 80;
+      this.defaultTokens = 1;
     }
 
+    // TODO: Move this into global scope.
     this.NaiveMatMulBlock = new NaiveMatMulBlock(this.device);
     this.FastMatMulBlock = new FastMatMulBlock(this.device);
     this.FastRowAddBlock = new FastRowAddBlock(this.device);
@@ -53,11 +54,13 @@ class GPT {
     this.ResidualBlock = new ResidualBlock(this.device);
     this.EmbedBlock = new EmbedBlock(this.device);
     this.DeEmbedBlock = new DeEmbedBlock(this.device);
+    this.OldDeEmbedBlock = new OldDeEmbedBlock(this.device);
     this.GeluBlock = new GeluBlock(this.device);
     this.LayerNormBlock = new LayerNormBlock(this.device);
     this.TransposeBlock = new TransposeBlock(this.device);
     this.SoftmaxBlock = new SoftmaxBlock(this.device);
 
+    // TODO: Move this into global scope.
     // Needed for deletion.
     this.operations = [
       this.NaiveMatMulBlock,
@@ -68,6 +71,7 @@ class GPT {
       this.ResidualBlock,
       this.EmbedBlock,
       this.DeEmbedBlock,
+      this.OldDeEmbedBlock,
       this.GeluBlock,
       this.LayerNormBlock,
       this.TransposeBlock,
@@ -90,8 +94,11 @@ class GPT {
     console.log("Loading params...");
     const params = await (await fetch(`${fldr}/params_gpt.json`)).json();
     params.hidden_size = params.n_embd * 4;
-    params.attentionDotProductScale = 1 / Math.sqrt(params.n_embd / params.n_head);
-    const { block_size, n_embd, n_head, n_layer, bias, vocab_size, hidden_size } = params;
+    params.attention_scale = 1 / Math.sqrt(params.n_embd / params.n_head);
+    var numBuffers = Math.ceil(this.bufferSize(params.vocab_size, params.n_embd) / this.device.limits.maxStorageBufferBindingSize); // Assumes that vocab_size has a decent least prime factor.
+    params.num_instances = numBuffers > 1 ? leastPrimeFactor(params.vocab_size, numBuffers) : 1;
+    params.vocab_chunk_size = params.vocab_size / numBuffers;
+    const { block_size, n_embd, n_head, n_layer, bias, vocab_size, hidden_size, vocab_chunk_size, num_instances } = params;
     console.log("Params:", params);
 
     // Did you enable GitHub LFS? Won't work without it.
@@ -99,7 +106,20 @@ class GPT {
 
     console.log("Loading token embeddings...");
     const embeddingWeights = await fetchBin(`${fldr}/transformer.wte.weight_gpt.bin`);
-    const embeddingWeightsBuffer = this.initTensor(embeddingWeights, [vocab_size, n_embd], ["copy_from"]);
+    const embeddingsBuffer = this.initTensor(embeddingWeights, [vocab_size, n_embd], ["copy_from"]);
+
+    const deEmbeddingsBuffers = [];
+    for (let i = 0; i < num_instances; i++) {
+      const offset = i * vocab_chunk_size;
+      const size = i == num_instances - 1 ? vocab_size - offset : vocab_chunk_size;
+
+      // Chunks are stored in row-major order and are of dimensions n_embd x vocab_chunk_size.
+      // Embedding weights are stored in column-major order and are of dimensions vocab_size x n_embd.
+      // We pre-transpose the chunk for the deEmbedding process. Could do this on GPU later.
+      const chunk = transpose(embeddingWeights.subarray(offset * n_embd, offset * n_embd + size * n_embd), n_embd, size);
+      // const chunk = new Float32Array(size * n_embd).fill(1);
+      deEmbeddingsBuffers.push(this.initTensor(chunk, [size, n_embd], ["storage"]));
+    }
 
     console.log("Loading positional embeddings...");
     const posEmbeddings = await fetchBin(`${fldr}/transformer.wpe.weight_gpt.bin`);
@@ -153,7 +173,7 @@ class GPT {
     const normGammaBuffer = this.initTensor(layerNormGamma, [n_embd], ["storage"]);
     const normBetaBuffer = this.initTensor(layerNormBeta, [n_embd], ["storage"]);
 
-    const output = { layer_buffers, embeddingWeightsBuffer, posEmbdBuffer, normGammaBuffer, normBetaBuffer };
+    const output = { layer_buffers, embeddingsBuffer, deEmbeddingsBuffers, posEmbdBuffer, normGammaBuffer, normBetaBuffer };
     console.log("Finished loading model.", output, params);
     return [output, params];
   }
@@ -197,8 +217,8 @@ class GPT {
   }
 
   async run(idx) {
-    const { posEmbdBuffer, layer_buffers, normGammaBuffer, normBetaBuffer, embeddingWeightsBuffer } = this.model;
-    const { attentionDotProductScale, n_embd, n_head, n_layer, vocab_size, hidden_size, block_size } = this.params;
+    const { posEmbdBuffer, layer_buffers, normGammaBuffer, normBetaBuffer, embeddingsBuffer, deEmbeddingsBuffers } = this.model;
+    const { attention_scale, n_embd, n_head, n_layer, vocab_size, hidden_size, vocab_chunk_size } = this.params;
     const seq_length = idx.length;
 
     // ---------------- Create Passes ----------------
@@ -207,7 +227,7 @@ class GPT {
     let intermediateBuffer;
     let residualBuffer;
     {
-      const { passes, resultBuffer } = this.EmbedBlock.newInstance(idx, seq_length, n_embd, embeddingWeightsBuffer, posEmbdBuffer, this.ResidualBlock);
+      const { passes, resultBuffer } = this.EmbedBlock.newInstance(idx, seq_length, n_embd, embeddingsBuffer, posEmbdBuffer, this.ResidualBlock);
       intermediateBuffer = resultBuffer;
       residualBuffer = resultBuffer;
       this.computePasses.push(...passes);
@@ -229,7 +249,7 @@ class GPT {
         const { passes, resultBuffer } = this.AttentionBlock.newInstance(
           seq_length,
           n_embd,
-          attentionDotProductScale,
+          attention_scale,
           n_head,
           intermediateBuffer,
           buffers.qkvWeightsBuffer,
@@ -290,17 +310,29 @@ class GPT {
       this.computePasses.push(...passes);
     }
     {
-      const { passes, resultBuffer } = this.DeEmbedBlock.newInstance(
+      const { passes, resultBuffer } = this.OldDeEmbedBlock.newInstance(
         vocab_size,
         n_embd,
         seq_length,
         intermediateBuffer,
-        embeddingWeightsBuffer,
+        embeddingsBuffer,
         this.NaiveMatMulBlock
       );
       intermediateBuffer = resultBuffer;
       this.computePasses.push(...passes);
     }
+    // {
+    //   const { passes, resultBuffer } = this.DeEmbedBlock.newInstance(
+    //     vocab_size,
+    //     n_embd,
+    //     seq_length,
+    //     vocab_chunk_size,
+    //     intermediateBuffer,
+    //     deEmbeddingsBuffers,
+    //   );
+    //   intermediateBuffer = resultBuffer;
+    //   this.computePasses.push(...passes);
+    // }
     const resultBuffer = intermediateBuffer;
 
     // ---------------- Compute Passes ----------------
@@ -324,6 +356,8 @@ class GPT {
     await resultBuffer.mapAsync(GPUMapMode.READ);
     const output = resultBuffer.getMappedRange();
     const outputArray = new Float32Array(output).slice(0); // Copy the array, otherwise it'll be destroyed.
+
+    console.log(outputArray);
 
     for (const operation of this.operations) operation.destroyBuffers();
 
