@@ -155,17 +155,30 @@ class GPT {
         this.computePasses.push(...passes);
       }
       {
-        const { passes, resultBuffer } = FastFFNBlock.newInstance(
+        const { resultBuffer, passes } = FastMLPBlock.newInstance(
+          seq_length,
+          hidden_size,
+          n_embd,
+          intermediateBuffer,
+          buffers.firstLayerWeightsBuffer,
+          buffers.firstLayerBiasBuffer
+        );
+        intermediateBuffer = resultBuffer;
+        this.computePasses.push(...passes);
+      }
+      {
+        const { resultBuffer, passes } = GeluBlock.newInstance(seq_length, hidden_size, intermediateBuffer);
+        intermediateBuffer = resultBuffer;
+        this.computePasses.push(...passes);
+      }
+      {
+        const { resultBuffer, passes } = FastMLPBlock.newInstance(
           seq_length,
           n_embd,
           hidden_size,
           intermediateBuffer,
-          buffers.firstLayerWeightsBuffer,
-          buffers.firstLayerBiasBuffer,
           buffers.secondLayerWeightsBuffer,
-          buffers.secondLayerBiasBuffer,
-          FastMLPBlock,
-          GeluBlock
+          buffers.secondLayerBiasBuffer
         );
         intermediateBuffer = resultBuffer;
         this.computePasses.push(...passes);

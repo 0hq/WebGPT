@@ -1,7 +1,6 @@
 const NaiveMatMulBlock = new NaiveMatMulBlockClass();
 const FastMatMulBlock = new FastMatMulBlockClass();
 const FastMLPBlock = new FastMLPBlockClass();
-const FastFFNBlock = new FastFFNBlockClass();
 const AttentionBlock = new AttentionBlockClass();
 const ResidualBlock = new ResidualBlockClass();
 const EmbedBlock = new EmbedBlockClass();
@@ -17,7 +16,6 @@ const operations = [
   NaiveMatMulBlock,
   FastMatMulBlock,
   FastMLPBlock,
-  FastFFNBlock,
   AttentionBlock,
   ResidualBlock,
   EmbedBlock,

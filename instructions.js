@@ -666,11 +666,10 @@ class ResidualBlockClass extends Block {
       var ND4: u32 = uniforms.ND4;
       var M: u32 = uniforms.M;
       
-      if (row >= M || col >= ND4) {
-        return;
-      }
-
-      result_array[row * ND4 + col] = layer_out_array[row * ND4 + col] + residual_array[row * ND4 + col];
+      // Unsure if this is any faster than if return bounds check.
+      let mask = (row < M) && (col < ND4);
+      let index = row * ND4 + col;
+      result_array[index] = select(result_array[index], layer_out_array[index] + residual_array[index], mask);
     }
   `;
 }
@@ -1853,52 +1852,6 @@ class OldDeEmbedBlockClass extends Block {
     return {
       resultBuffer: deEmbedOutputBuffer,
       passes: [sliceEmbedCopyCommand, ...deEmbedPasses],
-    };
-  }
-}
-
-class FastFFNBlockClass extends Block {
-  constructor() {
-    super();
-    this.name = "fastffn";
-    this.pipelineCache = new Map();
-  }
-
-  newInstance(
-    seq_length,
-    n_embd,
-    hidden_size,
-    inputBuffer,
-    firstLayerWeightsBuffer,
-    firstLayerBiasBuffer,
-    secondLayerWeightsBuffer,
-    secondLayerBiasBuffer,
-    FastMLPBlock,
-    GeluBlock
-  ) {
-    const { resultBuffer: firstMLPResult, passes: firstMLPPasses } = FastMLPBlock.newInstance(
-      seq_length,
-      hidden_size,
-      n_embd,
-      inputBuffer,
-      firstLayerWeightsBuffer,
-      firstLayerBiasBuffer
-    );
-
-    const { resultBuffer: geluResult, passes: geluPasses } = GeluBlock.newInstance(seq_length, hidden_size, firstMLPResult);
-
-    const { resultBuffer: secondMLPResult, passes: secondMLPPasses } = FastMLPBlock.newInstance(
-      seq_length,
-      n_embd,
-      hidden_size,
-      geluResult,
-      secondLayerWeightsBuffer,
-      secondLayerBiasBuffer
-    );
-
-    return {
-      resultBuffer: secondMLPResult,
-      passes: [...firstMLPPasses, ...geluPasses, ...secondMLPPasses],
     };
   }
 }
