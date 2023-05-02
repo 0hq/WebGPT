@@ -12,7 +12,7 @@ https://user-images.githubusercontent.com/30643741/233488471-0cd93d38-af27-4648-
 
 ## Running WebGPT
 
-Running WebGPT is remarkably simple, as it's just a set of HTML + JS files. Since WebGPU is still in the process of being released, you'll need to open with a compatible browser. WebGPU is currently available on Chrome v113 but the most straightforward way to ensure proper functionality is to install [Chrome Canary](https://www.google.com/chrome/canary/) or Edge Canary.
+Running WebGPT is remarkably simple, as it's just a set of HTML + JS files. Since WebGPU is still in the process of being adopted, you'll need to [make sure you have a compatible browser](https://caniuse.com/webgpu). WebGPU is only currently available on Chrome desktop v113 and newer.
 
 I've included two different models: a toy GPT-Shakespeare model (which is severly undertrained haha) and GPT-2 117M. See main.js for more information on how to run these models. If you want to import custom models, take a look at misc/conversion_scripts.
 
