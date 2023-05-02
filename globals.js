@@ -5,6 +5,7 @@ const FastFFNBlock = new FastFFNBlockClass();
 const AttentionBlock = new AttentionBlockClass();
 const ResidualBlock = new ResidualBlockClass();
 const EmbedBlock = new EmbedBlockClass();
+const DeEmbedBlock = new DeEmbedBlockClass();
 const OldDeEmbedBlock = new OldDeEmbedBlockClass();
 const GeluBlock = new GeluBlockClass();
 const LayerNormBlock = new LayerNormBlockClass();
@@ -20,6 +21,7 @@ const operations = [
   AttentionBlock,
   ResidualBlock,
   EmbedBlock,
+  DeEmbedBlock,
   OldDeEmbedBlock,
   GeluBlock,
   LayerNormBlock,

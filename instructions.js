@@ -1495,6 +1495,146 @@ class EmbedBlockClass extends Block {
   }
 }
 
+class DeEmbedBlockClass extends Block {
+  constructor() {
+    super();
+    this.name = "deembed";
+    this.pipelineCache = new Map();
+  }
+
+  getPipeline() {
+    const pipelineCacheKey = this.name; // No param optimization.
+    if (this.pipelineCache.has(pipelineCacheKey)) return this.pipelineCache.get(pipelineCacheKey);
+    const pipeline = this.initPipeline(this.deEmbedShader, [this.u_s_Layout, this.r_r_Layout], `${this.name}_Pipeline`);
+    this.pipelineCache.set(pipelineCacheKey, pipeline);
+    return pipeline;
+  }
+
+  newInstance(vocab_size, n_embd, seq_length, vocab_chunk_size, embedBuffer, deEmbeddingsBuffers) {
+    const deEmbedPipeline = this.getPipeline();
+    const slicedEmbedOutputBuffer = this.initBuffer(["storage", "copy_to"], [n_embd]);
+    const deEmbedOutputBuffer = this.initBuffer(["map_read", "copy_to"], [vocab_size]);
+    console.log(vocab_size, n_embd, seq_length, vocab_chunk_size, embedBuffer, deEmbeddingsBuffers);
+
+    const sliceEmbedCopyCommand = {
+      flag: "copy",
+      src: embedBuffer,
+      srcOffset: this.bufferSize(seq_length - 1, n_embd),
+      dst: slicedEmbedOutputBuffer,
+      dstOffset: 0,
+      size: this.bufferSize(1, n_embd),
+    };
+
+    const deEmbedPasses = deEmbeddingsBuffers.flatMap((embdBuffer, i) => {
+      // Some future optimizations where we can assume that vocab_size is consistent.
+      // Each chunk must be divisible by 4.
+      const padded_vocab_chunk_size = Math.ceil(vocab_chunk_size / 4) * 4;
+      const uniformBuffer = this.initBuffer(["uniform", "copy_to"], [4]);
+      const resultBuffer = this.initBuffer(["storage", "copy_from"], [padded_vocab_chunk_size]);
+      const opBindGroup = this.initBindGroup(this.u_s_Layout, [uniformBuffer, resultBuffer], `${this.name}_OpG`);
+      const inputBindGroup = this.initBindGroup(this.r_r_Layout, [slicedEmbedOutputBuffer, embdBuffer], `${this.name}_InputG`);
+      const workgroups = { x: wgSize(padded_vocab_chunk_size, 64), y: 1, z: 1 };
+      this.device.queue.writeBuffer(
+        uniformBuffer,
+        0,
+        new Uint32Array([padded_vocab_chunk_size, Math.ceil(n_embd / 4), Math.ceil(padded_vocab_chunk_size / 4)])
+      );
+
+      return [
+        {
+          flag: "compute",
+          pipeline: deEmbedPipeline,
+          groups: [opBindGroup, inputBindGroup],
+          workgroups,
+        },
+        {
+          flag: "copy",
+          src: resultBuffer,
+          srcOffset: 0,
+          dst: deEmbedOutputBuffer,
+          dstOffset: i * this.bufferSize(vocab_chunk_size),
+          size: this.bufferSize(vocab_chunk_size),
+        },
+      ];
+    });
+
+    console.log([sliceEmbedCopyCommand, ...deEmbedPasses]);
+
+    return {
+      resultBuffer: deEmbedOutputBuffer,
+      passes: [sliceEmbedCopyCommand, ...deEmbedPasses],
+    };
+  }
+
+  deEmbedShader = `
+    struct BMeta {
+      N: u32,
+      MD4: u32,
+      ND4: u32,
+    }
+
+    @group(1) @binding(0) var<storage,read> embed_vector: array<vec4<f32>>;
+    @group(1) @binding(1) var<storage,read> array_matrix: array<vec4<f32>>;
+    @group(0) @binding(0) var<uniform> bmeta: BMeta;
+    @group(0) @binding(1) var<storage,read_write> array_output: array<vec4<f32>>;
+
+    @compute @workgroup_size(4)
+    fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
+      var colD16: u32 = global_id.x;
+      var MD4: u32 = bmeta.MD4;
+      var ND4: u32 = bmeta.ND4;
+      var N: u32 = bmeta.N;
+      
+      // Prevent out of bounds access + uneven matrix N dim sizes.
+      if (colD16 * 16 >= N) {
+        return;
+      }
+
+      var sum00: vec4<f32> = vec4<f32>(0.0);
+      var sum01: vec4<f32> = vec4<f32>(0.0);
+      var sum02: vec4<f32> = vec4<f32>(0.0);
+      var sum03: vec4<f32> = vec4<f32>(1.0);
+
+      for (var i: u32 = 0u; i < MD4; i = i + 1u) {
+        var embedChunk = embed_vector[i];
+ 
+        sum00 = sum00 + vec4<f32>(embedChunk.x) * array_matrix[(i * 4u + 0u) * ND4 + colD16 * 4 + 0u];
+        sum01 = sum01 + vec4<f32>(embedChunk.x) * array_matrix[(i * 4u + 0u) * ND4 + colD16 * 4 + 1u];
+        sum02 = sum02 + vec4<f32>(embedChunk.x) * array_matrix[(i * 4u + 0u) * ND4 + colD16 * 4 + 2u];
+        sum03 = sum03 + vec4<f32>(embedChunk.x) * array_matrix[(i * 4u + 0u) * ND4 + colD16 * 4 + 3u];
+
+        sum00 = sum00 + vec4<f32>(embedChunk.y) * array_matrix[(i * 4u + 1u) * ND4 + colD16 * 4 + 0u];
+        sum01 = sum01 + vec4<f32>(embedChunk.y) * array_matrix[(i * 4u + 1u) * ND4 + colD16 * 4 + 1u];
+        sum02 = sum02 + vec4<f32>(embedChunk.y) * array_matrix[(i * 4u + 1u) * ND4 + colD16 * 4 + 2u];
+        sum03 = sum03 + vec4<f32>(embedChunk.y) * array_matrix[(i * 4u + 1u) * ND4 + colD16 * 4 + 3u];
+
+        sum00 = sum00 + vec4<f32>(embedChunk.z) * array_matrix[(i * 4u + 2u) * ND4 + colD16 * 4 + 0u];
+        sum01 = sum01 + vec4<f32>(embedChunk.z) * array_matrix[(i * 4u + 2u) * ND4 + colD16 * 4 + 1u];
+        sum02 = sum02 + vec4<f32>(embedChunk.z) * array_matrix[(i * 4u + 2u) * ND4 + colD16 * 4 + 2u];
+        sum03 = sum03 + vec4<f32>(embedChunk.z) * array_matrix[(i * 4u + 2u) * ND4 + colD16 * 4 + 3u];
+
+        sum00 = sum00 + vec4<f32>(embedChunk.w) * array_matrix[(i * 4u + 3u) * ND4 + colD16 * 4 + 0u];
+        sum01 = sum01 + vec4<f32>(embedChunk.w) * array_matrix[(i * 4u + 3u) * ND4 + colD16 * 4 + 1u];
+        sum02 = sum02 + vec4<f32>(embedChunk.w) * array_matrix[(i * 4u + 3u) * ND4 + colD16 * 4 + 2u];
+        sum03 = sum03 + vec4<f32>(embedChunk.w) * array_matrix[(i * 4u + 3u) * ND4 + colD16 * 4 + 3u];
+      }
+
+      if (colD16 * 4u + 0u < N) {
+        array_output[colD16 * 4u + 0u] = sum00;
+      }
+      if (colD16 * 4u + 1u < N) {
+        array_output[colD16 * 4u + 1u] = sum01;
+      }
+      if (colD16 * 4u + 2u < N) {
+        array_output[colD16 * 4u + 2u] = sum02;
+      }
+      if (colD16 * 4u + 3u < N) {
+        array_output[colD16 * 4u + 3u] = sum03;
+      }
+    }
+  `;
+}
+
 class OldDeEmbedBlockClass extends Block {
   constructor() {
     super();

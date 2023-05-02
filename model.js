@@ -91,7 +91,7 @@ class GPT {
   }
 
   async run(idx) {
-    const { posEmbdBuffer, layer_buffers, normGammaBuffer, normBetaBuffer, embeddingsBuffer } = this.model;
+    const { posEmbdBuffer, layer_buffers, normGammaBuffer, normBetaBuffer, embeddingsBuffer, deEmbeddingsBuffers } = this.model;
     const { attention_scale, n_embd, n_head, n_layer, vocab_size, hidden_size, vocab_chunk_size } = this.params;
     const seq_length = idx.length;
 
@@ -242,6 +242,19 @@ class GPT {
     const embeddingWeights = await fetchBin(`${fldr}/transformer.wte.weight_gpt.bin`);
     const embeddingsBuffer = this.initTensor(embeddingWeights, [vocab_size, n_embd], ["copy_from"]);
 
+    // const deEmbeddingsBuffers = [];
+    // for (let i = 0; i < num_instances; i++) {
+    //   const offset = i * vocab_chunk_size;
+    //   const size = i == num_instances - 1 ? vocab_size - offset : vocab_chunk_size;
+
+    //   // Chunks are stored in row-major order and are of dimensions n_embd x vocab_chunk_size.
+    //   // Embedding weights are stored in column-major order and are of dimensions vocab_size x n_embd.
+    //   // We pre-transpose the chunk for the deEmbedding process. Could do this on GPU later.
+    //   const chunk = transpose(embeddingWeights.subarray(offset * n_embd, offset * n_embd + size * n_embd), n_embd, size);
+    //   // const chunk = new Float32Array(size * n_embd).fill(1);
+    //   deEmbeddingsBuffers.push(this.initTensor(chunk, [size, n_embd], ["storage"]));
+    // }
+
     console.log("Loading positional embeddings...");
     const posEmbeddings = await fetchBin(`${fldr}/transformer.wpe.weight_gpt.bin`);
     const posEmbdBuffer = this.initTensor(posEmbeddings, [block_size, n_embd], ["copy_from"]);
@@ -294,7 +307,7 @@ class GPT {
     const normGammaBuffer = this.initTensor(layerNormGamma, [n_embd], ["storage"]);
     const normBetaBuffer = this.initTensor(layerNormBeta, [n_embd], ["storage"]);
 
-    const output = { layer_buffers, embeddingsBuffer, posEmbdBuffer, normGammaBuffer, normBetaBuffer };
+    const output = { layer_buffers, embeddingsBuffer, deEmbeddingsBuffers: null, posEmbdBuffer, normGammaBuffer, normBetaBuffer };
     console.log("Finished loading model.", output, params);
     return [output, params];
   }
