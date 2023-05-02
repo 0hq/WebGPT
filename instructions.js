@@ -1119,14 +1119,6 @@ class AttentionBlockClass extends Block {
     return pipeline;
   }
 
-  getSimpleCausalMaskPipeline() {
-    const pipelineCacheKey = `${this.name}_simplecausalmask`; // No param optimization.
-    if (this.pipelineCache.has(pipelineCacheKey)) return this.pipelineCache.get(pipelineCacheKey);
-    const pipeline = this.initPipeline(this.simpleCausalMaskShader, [this.u_s_Layout, this.r_Layout], `${this.name}_Pipeline_CausalMask`);
-    this.pipelineCache.set(pipelineCacheKey, pipeline);
-    return pipeline;
-  }
-
   getCausalMaskPipeline() {
     const pipelineCacheKey = `${this.name}_causalmask`; // No param optimization.
     if (this.pipelineCache.has(pipelineCacheKey)) return this.pipelineCache.get(pipelineCacheKey);
@@ -1192,7 +1184,7 @@ class AttentionBlockClass extends Block {
     this.device.queue.writeBuffer(attentionWeightsUniformBuffer, 20, new Float32Array([attentionDotProductScale]));
     const attentionWeightsWorkgroups = { x: wgSize(seq_length * n_head, 16), y: wgSize(seq_length, 16), z: 1 };
 
-    const causalMaskPipeline = this.getSimpleCausalMaskPipeline();
+    const causalMaskPipeline = this.getCausalMaskPipeline();
     const causalMaskUniformBuffer = this.initBuffer(["uniform", "copy_to"], [4]);
     const causalMaskResultBuffer = this.initBuffer(["storage", "copy_from"], [seq_length, seq_length * n_head]);
     const causalMaskBindGroup = this.initBindGroup(this.u_s_Layout, [causalMaskUniformBuffer, causalMaskResultBuffer], `${this.name}_CausalMaskG`);
@@ -1334,78 +1326,6 @@ class AttentionBlockClass extends Block {
     }
   `;
 
-  simpleCausalMaskShader = `
-    struct Matrix {
-        data: array<f32>,
-    }
-
-    struct Dimensions {
-      dimY: u32, // row dimension of input matrix
-      dimX: u32, // col dimension of input matrix
-    };
-
-    @group(0) @binding(0) var<uniform> DimBuffer: Dimensions;
-    @group(0) @binding(1) var<storage, read_write> Result: Matrix;
-
-    @group(1) @binding(0) var<storage, read> Input: Matrix;
-
-    @compute @workgroup_size(16, 16)
-    fn main (@builtin(global_invocation_id) global_id: vec3<u32>) {
-      let col: u32 = global_id.x;
-      let row: u32 = global_id.y;
-      let dimX: u32 = DimBuffer.dimX;
-      let dimY: u32 = DimBuffer.dimY;
-
-      let rowMask: u32 = row % dimX;
-      if (row >= dimY || col >= dimX) {
-        return;
-      }
-
-      if (col > rowMask) {
-        Result.data[row * dimX + col] = -1e9;
-      } else {
-        let rowNum: u32 = row / dimX;
-        Result.data[row * dimX + col] = Input.data[rowMask * dimY + col + rowNum * dimX];
-      }
-    }
-  `;
-
-  simpleCausalMaskShaderX = `
-    struct Matrix {
-        data: array<f32>,
-    }
-
-    struct Dimensions {
-      dimY: u32, // row dimension of input matrix
-      dimX: u32, // col dimension of input matrix
-    };
-
-    @group(0) @binding(0) var<uniform> DimBuffer: Dimensions;
-    @group(0) @binding(1) var<storage, read_write> Result: Matrix;
-
-    @group(1) @binding(0) var<storage, read> Input: Matrix;
-
-    @compute @workgroup_size(16, 16)
-    fn main (@builtin(global_invocation_id) global_id: vec3<u32>) {
-      let col: u32 = global_id.x;
-      let row: u32 = global_id.y;
-      let dimX: u32 = DimBuffer.dimX;
-      let dimY: u32 = DimBuffer.dimY;
-
-      let rowMask: u32 = row % dimX;
-      if (row >= dimY) {
-        return;
-      }
-
-      if (col > rowMask) {
-        Result.data[row * dimX + col] = 0.0;
-      } else {
-        let rowNum: u32 = row / dimX;
-        Result.data[row * dimX + col] = Input.data[rowMask * dimY + col + rowNum * dimX];
-      }
-    }
-  `;
-
   causalMaskShader = `
     struct Matrix {
         data: array<f32>,
@@ -1432,15 +1352,11 @@ class AttentionBlockClass extends Block {
         return;
       }
 
-      let outOfBoundsCheck = (row < dimY) && (col < dimX);
-
       let rowMask: u32 = row % dimX;
       let rowNum: u32 = row / dimX;
       let index = row * dimX + col;
       let causalMask: bool = (col <= rowMask);
-      let maskedValue = select(0, Input.data[rowMask * dimY + col + rowNum * dimX], causalMask);
-      Result.data[index] = select(Result.data[index], maskedValue, outOfBoundsCheck);
-
+      Result.data[index] = select(-1e9, Input.data[rowMask * dimY + col + rowNum * dimX], causalMask);
     }
   `;
 
@@ -1731,31 +1647,6 @@ class OldDeEmbedBlockClass extends Block {
     return {
       resultBuffer: deEmbedOutputBuffer,
       passes: [sliceEmbedCopyCommand, ...deEmbedPasses],
-    };
-  }
-}
-
-class OutputBlockClass extends Block {
-  constructor() {
-    super();
-    this.name = "output";
-  }
-
-  newInstance(row, col, inputBuffer) {
-    const outputBuffer = this.initBuffer(["map_read", "copy_to"], [row, col]);
-
-    const copyCommand = {
-      flag: "copy",
-      src: inputBuffer,
-      srcOffset: 0,
-      dst: outputBuffer,
-      dstOffset: 0,
-      size: this.bufferSize(row, col),
-    };
-
-    return {
-      resultBuffer: outputBuffer,
-      passes: [copyCommand],
     };
   }
 }

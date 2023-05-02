@@ -8,10 +8,9 @@ const OldDeEmbedBlock = new OldDeEmbedBlockClass();
 const GeluBlock = new GeluBlockClass();
 const LayerNormBlock = new LayerNormBlockClass();
 const SoftmaxBlock = new SoftmaxBlockClass();
-const OutputBlock = new OutputBlockClass();
 
 // Needed for deletion.
-const operations = [
+let operations = [
   NaiveMatMulBlock,
   FastMLPBlock,
   AttentionBlock,
@@ -22,7 +21,6 @@ const operations = [
   GeluBlock,
   LayerNormBlock,
   SoftmaxBlock,
-  OutputBlock,
 ];
 
 function initializeOperations(device) {

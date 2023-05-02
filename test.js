@@ -1,3 +1,181 @@
+class OutputBlockClass extends Block {
+  constructor() {
+    super();
+    this.name = "output";
+  }
+
+  newInstance(row, col, inputBuffer) {
+    const outputBuffer = this.initBuffer(["map_read", "copy_to"], [row, col]);
+
+    const copyCommand = {
+      flag: "copy",
+      src: inputBuffer,
+      srcOffset: 0,
+      dst: outputBuffer,
+      dstOffset: 0,
+      size: this.bufferSize(row, col),
+    };
+
+    return {
+      resultBuffer: outputBuffer,
+      passes: [copyCommand],
+    };
+  }
+}
+
+class CausalMaskBlockClass extends Block {
+  constructor() {
+    super();
+    this.name = "causal_mask";
+    this.pipelineCache = new Map();
+  }
+
+  getSimpleCausalMaskPipeline() {
+    const pipelineCacheKey = `${this.name}_simplecausalmask`; // No param optimization.
+    if (this.pipelineCache.has(pipelineCacheKey)) return this.pipelineCache.get(pipelineCacheKey);
+    const pipeline = this.initPipeline(this.origCausalMaskShader, [this.u_s_Layout, this.r_Layout], `${this.name}_Pipeline_CausalMask`);
+    this.pipelineCache.set(pipelineCacheKey, pipeline);
+    return pipeline;
+  }
+
+  getCausalMaskPipeline() {
+    const pipelineCacheKey = `${this.name}_causalmask`; // No param optimization.
+    if (this.pipelineCache.has(pipelineCacheKey)) return this.pipelineCache.get(pipelineCacheKey);
+    const pipeline = this.initPipeline(this.causalMaskShader, [this.u_s_Layout, this.r_Layout], `${this.name}_Pipeline_CausalMask`);
+    this.pipelineCache.set(pipelineCacheKey, pipeline);
+    return pipeline;
+  }
+
+  newInstance(rows, cols, inputBuffer) {
+    const causalMaskPipeline = this.getCausalMaskPipeline();
+    const causalMaskUniformBuffer = this.initBuffer(["uniform", "copy_to"], [4]);
+    const causalMaskResultBuffer = this.initBuffer(["storage", "copy_from"], [rows, cols]);
+    const causalMaskBindGroup = this.initBindGroup(this.u_s_Layout, [causalMaskUniformBuffer, causalMaskResultBuffer], `${this.name}_CausalMaskG`);
+    const causalMaskInputBindGroup = this.initBindGroup(this.r_Layout, [inputBuffer], `${this.name}_CausalMaskInputG`);
+    this.device.queue.writeBuffer(causalMaskUniformBuffer, 0, new Uint32Array([cols, rows])); // Transposes! This is needed for softmax.
+    const causalMaskWorkgroups = { x: wgSize(rows, 16), y: wgSize(cols, 16), z: 1 };
+
+    return {
+      resultBuffer: causalMaskResultBuffer,
+      passes: [
+        {
+          flag: "compute",
+          pipeline: causalMaskPipeline,
+          groups: [causalMaskBindGroup, causalMaskInputBindGroup],
+          workgroups: causalMaskWorkgroups,
+        },
+      ],
+    };
+  }
+
+  simpleCausalMaskShader = `
+    struct Matrix {
+        data: array<f32>,
+    }
+
+    struct Dimensions {
+      dimY: u32, // row dimension of input matrix
+      dimX: u32, // col dimension of input matrix
+    };
+
+    @group(0) @binding(0) var<uniform> DimBuffer: Dimensions;
+    @group(0) @binding(1) var<storage, read_write> Result: Matrix;
+
+    @group(1) @binding(0) var<storage, read> Input: Matrix;
+
+    @compute @workgroup_size(16, 16)
+    fn main (@builtin(global_invocation_id) global_id: vec3<u32>) {
+      let col: u32 = global_id.x;
+      let row: u32 = global_id.y;
+      let dimX: u32 = DimBuffer.dimX;
+      let dimY: u32 = DimBuffer.dimY;
+
+      let rowMask: u32 = row % dimX;
+      if (row >= dimY || col >= dimX) {
+        return;
+      }
+
+      if (col > rowMask) {
+        Result.data[row * dimX + col] = 0.0;
+      } else {
+        let rowNum: u32 = row / dimX;
+        Result.data[row * dimX + col] = Input.data[rowMask * dimY + col + rowNum * dimX];
+      }
+    }
+  `;
+
+  origCausalMaskShader = `
+    struct Matrix {
+        data: array<f32>,
+    }
+
+    struct Dimensions {
+      dimY: u32, // row dimension of input matrix
+      dimX: u32, // col dimension of input matrix
+    };
+
+    @group(0) @binding(0) var<uniform> DimBuffer: Dimensions;
+    @group(0) @binding(1) var<storage, read_write> Result: Matrix;
+
+    @group(1) @binding(0) var<storage, read> Input: Matrix;
+
+    @compute @workgroup_size(16, 16)
+    fn main (@builtin(global_invocation_id) global_id: vec3<u32>) {
+      let row: u32 = global_id.x;
+      let col: u32 = global_id.y;
+      let dimX: u32 = DimBuffer.dimX;
+      let dimY: u32 = DimBuffer.dimY;
+
+      let rowMask: u32 = row % dimX;
+      if (row >= dimY || col > rowMask) {
+        return;
+      }
+
+      let rowNum: u32 = row / dimX;
+      Result.data[row * dimX + col] = Input.data[rowMask * dimY + col + rowNum * dimX];
+    }
+  `;
+
+  causalMaskShader = `
+    struct Matrix {
+        data: array<f32>,
+    }
+
+    struct Dimensions {
+      dimY: u32, // row dimension of input matrix
+      dimX: u32, // col dimension of input matrix
+    };
+
+    @group(0) @binding(0) var<uniform> DimBuffer: Dimensions;
+    @group(0) @binding(1) var<storage, read_write> Result: Matrix;
+
+    @group(1) @binding(0) var<storage, read> Input: Matrix;
+
+    @compute @workgroup_size(16, 16)
+    fn main (@builtin(global_invocation_id) global_id: vec3<u32>) {
+      let col: u32 = global_id.x;
+      let row: u32 = global_id.y;
+      let dimX: u32 = DimBuffer.dimX;
+      let dimY: u32 = DimBuffer.dimY;
+
+      if (row >= dimY || col >= dimX) {
+        return;
+      }
+
+      let rowMask: u32 = row % dimX;
+      let rowNum: u32 = row / dimX;
+      let index = row * dimX + col;
+      let causalMask: bool = (col <= rowMask);
+      Result.data[index] = select(-1e9, Input.data[rowMask * dimY + col + rowNum * dimX], causalMask);
+    }
+  `;
+}
+
+const CausalMaskBlock = new CausalMaskBlockClass();
+const OutputBlock = new OutputBlockClass();
+
+operations.push(CausalMaskBlock, OutputBlock);
+
 class TestShader {
   constructor(folder, type) {
     this.folder = folder;
@@ -29,9 +207,12 @@ class TestShader {
 
   async test() {
     // ---------------- Create Passes ---------------- //
-    const { M, N } = { M: 100, N: 100 };
-    const input_array = new Float32Array(M * N).fill(1);
+    const { M, N } = { M: 100, N: 300 };
+    const input_array = new Float32Array(M * N);
     const weight_array = new Float32Array(M * N).fill(1);
+
+    for (let i = 0; i < M * N; i++) input_array[i] = i;
+    console.log(formatAsMatrix(input_array, M, N));
 
     const inputBuffer = this.initTensor(input_array, [M, N], ["storage"]);
     const weightBuffer = this.initTensor(weight_array, [M, N], ["storage"]);
@@ -39,7 +220,7 @@ class TestShader {
     this.computePasses = [];
     let intermediateBuffer = inputBuffer;
     {
-      const { passes, resultBuffer } = ResidualBlock.newInstance(M, N, intermediateBuffer, weightBuffer);
+      const { passes, resultBuffer } = CausalMaskBlock.newInstance(M, N, intermediateBuffer);
       intermediateBuffer = resultBuffer;
       this.computePasses.push(...passes);
     }
@@ -71,7 +252,7 @@ class TestShader {
     await resultBuffer.mapAsync(GPUMapMode.READ);
     const output = resultBuffer.getMappedRange();
     const outputArray = new Float32Array(output).slice(0); // Copy the array, otherwise it'll be destroyed.
-    console.log(formatAsMatrix(outputArray, M, N));
+    console.log(formatAsMatrix(outputArray, N, M));
 
     destroyOperationBuffers();
     this.unloadBuffers();
