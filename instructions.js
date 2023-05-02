@@ -7,10 +7,12 @@
 */
 
 class Block {
-  constructor(device) {
-    this.device = device;
+  constructor() {
     this.bufferDeletionStack = [];
+  }
 
+  initialize(device) {
+    this.device = device;
     this.initBindGroups();
   }
 
@@ -75,9 +77,9 @@ class Block {
   }
 }
 
-class FastMatMulBlock extends Block {
-  constructor(device) {
-    super(device);
+class FastMatMulBlockClass extends Block {
+  constructor() {
+    super();
     this.name = "fastMatMul";
     this.pipelineCache = new Map();
   }
@@ -329,9 +331,9 @@ class FastMatMulBlock extends Block {
   `;
 }
 
-class ResidualBlock extends Block {
-  constructor(device) {
-    super(device);
+class ResidualBlockClass extends Block {
+  constructor() {
+    super();
     this.name = "residual";
     this.pipelineCache = new Map();
   }
@@ -398,9 +400,9 @@ class ResidualBlock extends Block {
   `;
 }
 
-class NaiveMatMulBlock extends Block {
-  constructor(device) {
-    super(device);
+class NaiveMatMulBlockClass extends Block {
+  constructor() {
+    super();
     this.name = "naiveMatMul";
     this.pipelineCache = new Map();
   }
@@ -503,9 +505,9 @@ class NaiveMatMulBlock extends Block {
   `;
 }
 
-class TransposeBlock extends Block {
-  constructor(device) {
-    super(device);
+class TransposeBlockClass extends Block {
+  constructor() {
+    super();
     this.name = "transpose";
     this.pipelineCache = new Map();
   }
@@ -571,9 +573,9 @@ class TransposeBlock extends Block {
   `;
 }
 
-class FastRowAddBlock extends Block {
-  constructor(device) {
-    super(device);
+class FastRowAddBlockClass extends Block {
+  constructor() {
+    super();
     this.name = "fastRowAdd";
     this.pipelineCache = new Map();
   }
@@ -638,9 +640,9 @@ class FastRowAddBlock extends Block {
   `;
 }
 
-class LayerNormBlock extends Block {
-  constructor(device) {
-    super(device);
+class LayerNormBlockClass extends Block {
+  constructor() {
+    super();
     this.name = "layerNorm";
     this.pipelineCache = new Map();
   }
@@ -783,9 +785,9 @@ class LayerNormBlock extends Block {
   `;
 }
 
-class SoftmaxBlock extends Block {
-  constructor(device) {
-    super(device);
+class SoftmaxBlockClass extends Block {
+  constructor() {
+    super();
     this.name = "Softmax";
     this.pipelineCache = new Map();
   }
@@ -1011,9 +1013,9 @@ class SoftmaxBlock extends Block {
   `;
 }
 
-class GeluBlock extends Block {
-  constructor(device) {
-    super(device);
+class GeluBlockClass extends Block {
+  constructor() {
+    super();
     this.name = "gelu";
     this.pipelineCache = new Map();
   }
@@ -1091,9 +1093,9 @@ class GeluBlock extends Block {
   `;
 }
 
-class AttentionBlock extends Block {
-  constructor(device) {
-    super(device);
+class AttentionBlockClass extends Block {
+  constructor() {
+    super();
     this.name = "attention";
     this.pipelineCache = new Map();
   }
@@ -1450,9 +1452,9 @@ class AttentionBlock extends Block {
   `;
 }
 
-class EmbedBlock extends Block {
-  constructor(device) {
-    super(device);
+class EmbedBlockClass extends Block {
+  constructor() {
+    super();
     this.name = "embed";
     this.pipelineCache = new Map();
   }
@@ -1494,9 +1496,9 @@ class EmbedBlock extends Block {
   }
 }
 
-class DeEmbedBlock extends Block {
-  constructor(device) {
-    super(device);
+class OldDeEmbedBlockClass extends Block {
+  constructor() {
+    super();
     this.name = "deembed";
     this.pipelineCache = new Map();
   }
@@ -1612,9 +1614,9 @@ class DeEmbedBlock extends Block {
   `;
 }
 
-class FastFFNBlock extends Block {
-  constructor(device) {
-    super(device);
+class FastFFNBlockClass extends Block {
+  constructor() {
+    super();
     this.name = "fastffn";
     this.pipelineCache = new Map();
   }
