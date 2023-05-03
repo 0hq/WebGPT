@@ -78,25 +78,25 @@ class FastMLPBlockClass extends Block {
     this.pipelineCache = new Map();
   }
 
-  getPipeline(rows, attentionMode) {
-    const doCheck = rows % 4 !== 0;
-    const pipelineCacheKey = `${this.name}_${doCheck}`;
+  getPipeline(rows) {
+    const settings = rows % 4 !== 0 ? "withCheck" : "noCheck";
+    const pipelineCacheKey = `${this.name}_${settings}}`;
     if (this.pipelineCache.has(pipelineCacheKey)) return this.pipelineCache.get(pipelineCacheKey);
-    const kernel = this.fastMLP(doCheck);
+    const kernel = this.fastMLP(settings);
     const pipeline = this.initPipeline(kernel, [this.u_s_Layout, this.r_r_r_Layout], `${this.name}_Pipeline_${pipelineCacheKey}`);
     this.pipelineCache.set(pipelineCacheKey, pipeline);
     return pipeline;
   }
 
-  newInstance(rows, cols, shared, inputBuffer, weightsBuffer, biasBuffer, headOffset = null) {
-    if (cols % 4 !== 0) throw new Error("Cols must be divisible by 4.");
-    const pipeline = this.getPipeline(rows, attentionMode);
+  newInstance(rows, cols, shared, inputBuffer, weightsBuffer, biasBuffer) {
+    if (cols % 16 !== 0) throw new Error("Cols must be divisible by 16.");
+    const pipeline = this.getPipeline(rows, headOffset);
     const uniformBuffer = this.initBuffer(["uniform", "copy_to"], [4]);
     const resultBuffer = this.initBuffer(["storage", "copy_from"], [rows, cols]);
     const opBindGroup = this.initBindGroup(this.u_s_Layout, [uniformBuffer, resultBuffer], `${this.name}_OpG`);
     const inputBindGroup = this.initBindGroup(this.r_r_r_Layout, [inputBuffer, weightsBuffer, biasBuffer], `${this.name}_InputG`);
     const workgroups = { x: wgSize(cols, 64), y: wgSize(rows, 32) };
-    this.device.queue.writeBuffer(uniformBuffer, 0, new Uint32Array([rows, cols, Math.ceil(cols / 4), Math.ceil(shared / 4)]));
+    this.device.queue.writeBuffer(uniformBuffer, 0, new Uint32Array([rows, cols, Math.ceil(cols / 4), Math.ceil(shared / 4), headOffset || 0]));
 
     return {
       resultBuffer,
@@ -111,8 +111,10 @@ class FastMLPBlockClass extends Block {
     };
   }
 
-  fastMLP(doCheck) {
-    const withCheck = `
+  fastMLP(flag) {
+    console.log(flag);
+    const outputCode = {
+      withCheck: `
       if (y * 4u + 0u < M) {
         array_c[x * 2u + 0u + (y * 4u + 0u) * ND4] = sum00;
         array_c[x * 2u + 1u + (y * 4u + 0u) * ND4] = sum10;
@@ -129,8 +131,8 @@ class FastMLPBlockClass extends Block {
         array_c[x * 2u + 0u + (y * 4u + 3u) * ND4] = sum03;
         array_c[x * 2u + 1u + (y * 4u + 3u) * ND4] = sum13;
       }
-    `;
-    const noCheck = `
+    `,
+      noCheck: `
       array_c[x * 2u + 0u + (y * 4u + 0u) * ND4] = sum00;
       array_c[x * 2u + 1u + (y * 4u + 0u) * ND4] = sum10;
       array_c[x * 2u + 0u + (y * 4u + 1u) * ND4] = sum01;
@@ -139,11 +141,11 @@ class FastMLPBlockClass extends Block {
       array_c[x * 2u + 1u + (y * 4u + 2u) * ND4] = sum12;
       array_c[x * 2u + 0u + (y * 4u + 3u) * ND4] = sum03;
       array_c[x * 2u + 1u + (y * 4u + 3u) * ND4] = sum13;
-    `;
-    const outputCode = doCheck ? withCheck : noCheck;
+    `,
+    };
 
     return `
-    struct CMeta {
+    struct Meta {
       M: u32,
       N: u32,
       ND4: u32,
@@ -154,15 +156,15 @@ class FastMLPBlockClass extends Block {
     @group(1) @binding(1) var<storage,read> array_b: array<vec4<f32>>;
     @group(1) @binding(2) var<storage,read> array_bias: array<vec4<f32>>;
 
-    @group(0) @binding(0) var<uniform> cmeta: CMeta;
+    @group(0) @binding(0) var<uniform> uniforms: Meta;
     @group(0) @binding(1) var<storage,read_write> array_c: array<vec4<f32>>;
 
     @compute @workgroup_size(8, 8)
     fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
-      var M: u32 = cmeta.M;
-      var N: u32 = cmeta.N;
-      var ND4: u32 = cmeta.ND4;
-      var KD4: u32 = cmeta.KD4;
+      var M: u32 = uniforms.M;
+      var N: u32 = uniforms.N;
+      var ND4: u32 = uniforms.ND4;
+      var KD4: u32 = uniforms.KD4;
       var x: u32 = global_id.x;
       var y: u32 = global_id.y;
 
@@ -247,7 +249,7 @@ class FastMLPBlockClass extends Block {
       sum12 = sum12 + array_bias_2;
       sum13 = sum13 + array_bias_2;
 
-      ${outputCode}
+      ${outputCode[flag]}
     }
   `;
   }
@@ -897,7 +899,6 @@ class AttentionBlockClass extends Block {
       dimX: u32, // col dimension of Q, K, V
     };
 
-    @group(1) @binding(0) var<storage, read> Input: Matrix;
 
     @group(0) @binding(0) var<uniform> DimBuffer: Dimensions;
     @group(0) @binding(1) var<storage, read_write> Q: Matrix;
@@ -1155,48 +1156,71 @@ class AttentionBlockClass extends Block {
     };
   }
 
-  fusedAttentionShader = `
-    struct Matrix {
-      data: array<f32>,
+  splitShader = `
+    struct Meta {
+      M: u32,
+      N: u32,
+      HSize: u32,
     }
 
-    struct Dimensions {
-      dimY: u32, // output row dim, Q row dim
-      seqHeads: u32, // output col dim, seq_length * heads
-      seqLength: u32, // seq_length or K col dim (Q can be different)
-      qkvCols: u32, // head col dim for Q, K or n_embd / n_heads
-      embedDim: u32, // n_embd or total Q col dim & K row dim
-      attentionScale: f32,
-    };
+    @group(1) @binding(0) var<storage, read> input_array: array<f32>;
 
-    @group(1) @binding(0) var<storage, read> Queries: Matrix;
-    @group(1) @binding(1) var<storage, read> Keys: Matrix;
+    @group(0) @binding(0) var<uniform> uniforms: Meta;
+    @group(0) @binding(1) var<storage, read_write> result_array: array<f32>;
 
-    @group(0) @binding(0) var<uniform> DimBuffer: Dimensions;
-    @group(0) @binding(1) var<storage, read_write> Result: Matrix;
-
-    @compute @workgroup_size(16, 16)
+    @compute @workgroup_size(8, 8)
     fn main (@builtin(global_invocation_id) global_id: vec3<u32>) {
-      let col: u32 = global_id.x;
-      let row: u32 = global_id.y;
-      let dimY: u32 = DimBuffer.dimY;
-      let dimX: u32 = DimBuffer.dimX;
-      let seqLength: u32 = DimBuffer.seqLength;
-      let qkvCols: u32 = DimBuffer.qkvCols;
-      let embedDim: u32 = DimBuffer.embedDim;
+      var col: u32 = global_id.x;
+      var row: u32 = global_id.y;
+      var N: u32 = uniforms.N;
+      var M: u32 = uniforms.M;
+      var HSize: u32 = uniforms.HSize;
 
-      if (row >= dimY || col >= dimX) {
+      if (row >= M || col >= N) {
         return;
       }
 
-      var head: u32 = col / seqLength;
-      var col_r: u32 = col % seqLength;
-      var sum: f32 = 0.0;
-      for (var i: u32 = 0; i < qkvCols; i = i + 1) {
-          sum = sum + Queries.data[row * embedDim + i + head * qkvCols] * Keys.data[col_r * embedDim + i + head * qkvCols];
+      var xOffset: u32 = x % uniforms.HSize;
+      var yOffset: u32 = y * uniforms.HSize + (x / uniforms.HSize) * uniforms.HSize * M;
+      
+      result_array[yOffset + xOffset] = input_array[row * N + col];
+    }
+  `;
+
+  fusedAttentionShader = `
+    struct Meta {
+      M: u32, 
+      N: u32, 
+      HSize: u32,
+      attentionScale: f32,
+    };
+
+    @group(1) @binding(0) var<storage, read> query_array: array<f32>;
+    @group(1) @binding(1) var<storage, read> key_array: array<f32>;
+
+    @group(0) @binding(0) var<uniform> uniforms: Meta;
+    @group(0) @binding(1) var<storage, read_write> result_array: array<f32>;
+
+    @compute @workgroup_size(8, 8)
+    fn main (@builtin(global_invocation_id) global_id: vec3<u32>) {
+      let col: u32 = global_id.x;
+      let row: u32 = global_id.y;
+      let M: u32 = uniforms.M;
+      let N: u32 = uniforms.N;
+      let HSize: u32 = uniforms.HSize;
+      let attentionScale: u32 = uniforms.attentionScale;
+
+      if (row >= M || col >= N) {
+        return;
       }
 
-      Result.data[row * dimX + col] = sum * DimBuffer.attentionScale;
+      let head: u32 = row / N;
+      var sum: f32 = 0.0;
+      for (var i: u32 = 0; i < HSize; i = i + 1) {
+          sum = sum + query_array[row * HSize + i + head * HSize * N] * key_array[row * HSize + i + head * HSize * N];
+      }
+
+      result_array[row * N + col] = sum * uniforms.attentionScale;
     }
   `;
 

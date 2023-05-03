@@ -207,16 +207,17 @@ class TestShader {
 
   async test() {
     // ---------------- Create Passes ---------------- //
-    const { M, N } = { M: 100, N: 100 };
+    const { M, N } = { M: 64, N: 64 };
     const input_array = new Float32Array(M * N);
-    const gamma_array = new Float32Array(N).fill(1);
+    const weight_array = new Float32Array(N * N);
     const beta_array = new Float32Array(N).fill(1);
 
     for (let i = 0; i < M * N; i++) input_array[i] = i;
+    for (let i = 0; i < N; i++) weight_array[i * N + i] = 1;
     console.log(formatAsMatrix(input_array, M, N));
 
     const inputBuffer = this.initTensor(input_array, [M, N], ["storage"]);
-    const gammaBuffer = this.initTensor(gamma_array, [N], ["storage"]);
+    const weightBuffer = this.initTensor(weight_array, [N, N], ["storage"]);
     const betaBuffer = this.initTensor(beta_array, [N], ["storage"]);
 
     this.computePasses = [];
@@ -226,8 +227,8 @@ class TestShader {
     };
 
     let intermediateBuffer = inputBuffer;
-    intermediateBuffer = push(LayerNormBlock.newInstance(M, N, intermediateBuffer, gammaBuffer, betaBuffer));
-    intermediateBuffer = push(OutputBlock.newInstance(M, N, intermediateBuffer));
+    intermediateBuffer = push(FastMLPBlock.newInstance(M, N, N, intermediateBuffer, weightBuffer, betaBuffer, N / 4 / 4));
+    intermediateBuffer = push(OutputBlock.newInstance(M * 4, N / 4, intermediateBuffer));
     let resultBuffer = intermediateBuffer;
 
     // ---------------- Compute Passes ----------------
@@ -251,7 +252,7 @@ class TestShader {
     await resultBuffer.mapAsync(GPUMapMode.READ);
     const output = resultBuffer.getMappedRange();
     const outputArray = new Float32Array(output).slice(0); // Copy the array, otherwise it'll be destroyed.
-    console.log(formatAsMatrix(outputArray, N, M));
+    console.log(formatAsMatrix(outputArray, M * 4, N / 4));
 
     // ---------------- Create Passes ---------------- //
 

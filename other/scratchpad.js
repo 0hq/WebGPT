@@ -845,4 +845,29 @@ class TransposeBlockClass extends Block {
   `;
 }
 
+
+  // In progress.
+  //    withCheckOffset: `
+  //    var x1Offset: u32 = ((x * 2u + 0u) / uniforms.TOffset) * uniforms.TOffset * M;
+  //    var x2Offset: u32 = ((x * 2u + 1u) / uniforms.TOffset) * uniforms.TOffset * M;
+  //
+
+  //    if (y * 4u + 0u < M) {
+  //      array_c[xMod * 2u + 0u + x1Offset + (y * 4u + 0u) * uniforms.TOffset] = vec4<f32>(1.0);
+  //      array_c[xMod * 2u + 1u + x2Offset + (y * 4u + 0u) * uniforms.TOffset] = vec4<f32>(f32(x1Offset));
+  //    }
+  //    if (y * 4u + 1u < M) {
+  //      array_c[xMod * 2u + 0u + x1Offset + (y * 4u + 1u) * uniforms.TOffset] = vec4<f32>(2.0);
+  //      array_c[xMod * 2u + 1u + x2Offset + (y * 4u + 1u) * uniforms.TOffset] = vec4<f32>(f32(x2Offset));
+  //    }
+  //    if (y * 4u + 2u < M) {
+  //      array_c[xMod * 2u + 0u + x1Offset + (y * 4u + 2u) * uniforms.TOffset] = vec4<f32>(3.0);
+  //      array_c[xMod * 2u + 1u + x2Offset + (y * 4u + 2u) * uniforms.TOffset] = vec4<f32>(3.0);
+  //    }
+  //    if (y * 4u + 3u < M) {
+  //      array_c[xMod * 2u + 0u + x1Offset + (y * 4u + 3u) * uniforms.TOffset] = vec4<f32>(4.0);
+  //      array_c[xMod * 2u + 1u + x2Offset + (y * 4u + 3u) * uniforms.TOffset] = vec4<f32>(4.0);
+  //    }
+  //  `,
+  
 */
