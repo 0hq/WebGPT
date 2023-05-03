@@ -44,7 +44,7 @@ class GPT {
       this.defaultPrompt = `WILL:\nAh, how dare you challenge me?\nHave you forgotten I built WebGPT?\n`;
       this.defaultTopK = 1;
       this.defaultTemperature = 1;
-      this.defaultTokens = 1;
+      this.defaultTokens = 20;
     }
 
     this.initialized = true;

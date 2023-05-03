@@ -536,10 +536,10 @@ class LayerNormBlockClass extends Block {
     this.pipelineCache = new Map();
   }
 
-  getStatsPipeline() {
-    const pipelineCacheKey = `${this.name}_stats`; // No param optimization.
+  getStatsPipeline(workgroups) {
+    const pipelineCacheKey = `${this.name}_stats_${workgroups}`;
     if (this.pipelineCache.has(pipelineCacheKey)) return this.pipelineCache.get(pipelineCacheKey);
-    const pipeline = this.initPipeline(this.normStatsShader, [this.u_s_Layout, this.r_Layout], `${this.name}_Pipeline_Stats`);
+    const pipeline = this.initPipeline(this.normStatsShader(workgroups), [this.u_s_Layout, this.r_Layout], `${this.name}_Pipeline_Stats`);
     this.pipelineCache.set(pipelineCacheKey, pipeline);
     return pipeline;
   }
@@ -553,13 +553,14 @@ class LayerNormBlockClass extends Block {
   }
 
   newInstance(rows, cols, inputBuffer, gammaBuffer, betaBuffer) {
-    const statsPipeline = this.getStatsPipeline();
+    const workgroupsX = cols > 4096 ? 256 : 64;
+    const statsPipeline = this.getStatsPipeline(workgroupsX);
     const statsUniformBuffer = this.initBuffer(["uniform", "copy_to"], [4]);
     const statsResultBuffer = this.initBuffer(["storage", "copy_from"], [rows, 2]);
     const statsBindGroup = this.initBindGroup(this.u_s_Layout, [statsUniformBuffer, statsResultBuffer], `${this.name}_BindGroup_stats`);
     const statsInputBindGroup = this.initBindGroup(this.r_Layout, [inputBuffer], `${this.name}_InputG`);
-    const statsWorkgroups = { x: wgSize(cols, 16), y: 1, z: 1 };
-    this.device.queue.writeBuffer(statsUniformBuffer, 0, new Uint32Array([rows, cols]));
+    const statsWorkgroups = { x: 1, y: wgSize(rows, 1), z: 1 };
+    this.device.queue.writeBuffer(statsUniformBuffer, 0, new Uint32Array([cols]));
 
     const normPipeline = this.getNormPipeline();
     const normUniformBuffer = this.initBuffer(["uniform", "copy_to"], [4]);
@@ -592,45 +593,71 @@ class LayerNormBlockClass extends Block {
     };
   }
 
-  normStatsShader = `
-    struct Matrix {
-      data: array<f32>,
-    }
-
-    struct Dimensions {
-      dimY: u32, // row dimension
-      dimX: u32, // col dimension
+  // I'm pretty sure this breaks for col < workgroupSize? Needs testing.
+  normStatsShader = (wg_size) => `
+    struct Meta {
+      N: u32, 
     };
 
-    @group(1) @binding(0) var<storage, read> Input: Matrix;
+    const wg_size: u32 = ${wg_size};
 
-    @group(0) @binding(0) var<uniform> DimBuffer: Dimensions;
-    @group(0) @binding(1) var<storage, read_write> Result: Matrix;
+    @group(1) @binding(0) var<storage, read> input_array: array<f32>;
 
-    @compute @workgroup_size(16)
+    @group(0) @binding(0) var<uniform> uniforms: Meta;
+    @group(0) @binding(1) var<storage, read_write> result_array: array<f32>;
+
+    var<workgroup> row_mean: f32;
+    var<workgroup> op_buffer: array<f32, ${wg_size}>;
+
+    @compute @workgroup_size(${wg_size})
     fn main (@builtin(global_invocation_id) global_id: vec3<u32>) {
-      let row: u32 = global_id.x;
-      let dimX: u32 = DimBuffer.dimX;
+      let col: u32 = global_id.x;
+      let row: u32 = global_id.y;
+      let N: u32 = uniforms.N;
 
-      if (row >= DimBuffer.dimY) {
-        return;
+      // Condense.
+      var threadSum: f32 = 0.0;
+      for (var i: u32 = col; i < N; i = i + wg_size) {
+        threadSum = threadSum + input_array[row * N + i];
       }
-
-      var sum: f32 = 0.0;
-      for (var i: u32 = 0; i < dimX; i = i + 1) {
-          sum = sum + Input.data[row * dimX + i];
+      op_buffer[col] = threadSum;
+      workgroupBarrier();
+      
+      // Reduce to one value sum. Optimize with bit shifts.
+      for (var i: u32 = wg_size >> 1; i > 0; i = i >> 1) {
+        if (col < i) {
+          op_buffer[col] = op_buffer[col] + op_buffer[col + i];
+        }
+        workgroupBarrier();
       }
-      var mean: f32 = sum / f32(dimX);
-
-      var variance: f32 = 0.0;
-      for (var i: u32 = 0; i < dimX; i = i + 1) {
-          variance = variance + (Input.data[row * dimX + i] - mean) * (Input.data[row * dimX + i] - mean);
+      
+      if (col == 0) {
+        row_mean = op_buffer[0] / f32(N);
       }
-      variance = variance / f32(dimX);
-      var stdev: f32 = sqrt(variance + 1e-5);
+      workgroupBarrier();
 
-      Result.data[row * 2] = mean;
-      Result.data[row * 2 + 1] = stdev;
+      // Condense.
+      var threadVariance: f32 = 0.0;
+      for (var i: u32 = col; i < N; i = i + wg_size) {
+        threadVariance = threadVariance + pow(input_array[row * N + i] - row_mean, 2);
+      }
+      op_buffer[col] = threadVariance / f32(N);
+      workgroupBarrier();
+      
+      // Reduce to one value sum. Optimize with bit shifts.
+      for (var i: u32 = wg_size >> 1; i > 0; i = i >> 1) {
+        if (col < i) {
+          op_buffer[col] = op_buffer[col] + op_buffer[col + i];
+        }
+        workgroupBarrier();
+      }
+      
+      var stdev: f32 = sqrt(op_buffer[0] + 1e-5);
+
+      if (col == 0) {
+        result_array[row * 2] = row_mean;
+        result_array[row * 2 + 1] = stdev;
+      }
     }
   `;
 
@@ -714,13 +741,16 @@ class SoftmaxBlockClass extends Block {
     };
   }
 
-  fusedShader = (workgroupX) => `
+  /*
+    Possible improvements: Vectorization? Modify input buffer to coalesce better?
+  */
+  fusedShader = (wg_size) => `
     struct Meta {
       N: u32, 
     };
 
     const minFloat: f32 = -3.402823e+38f;
-    const workgroupSize: u32 = ${workgroupX};
+    const wg_size: u32 = ${wg_size};
 
     @group(0) @binding(0) var<uniform> uniforms: Meta;
     @group(0) @binding(1) var<storage, read_write> result_array: array<f32>;
@@ -728,10 +758,9 @@ class SoftmaxBlockClass extends Block {
 
     var<workgroup> max_row: f32;
     var<workgroup> sum_row: f32;
-    var<workgroup> max_buffer: array<f32, ${workgroupX}>;
-    var<workgroup> sum_buffer: array<f32, ${workgroupX}>;
+    var<workgroup> op_buffer: array<f32, ${wg_size}>;
 
-    @compute @workgroup_size(${workgroupX})
+    @compute @workgroup_size(${wg_size})
     fn main (@builtin(global_invocation_id) global_id: vec3<u32>) {
       let col: u32 = global_id.x;
       let row: u32 = global_id.y;
@@ -739,49 +768,49 @@ class SoftmaxBlockClass extends Block {
 
       // Condense into 256 col max.
       var thread_max = minFloat;
-      for (var i: u32 = col; i < N; i = i + workgroupSize) {
+      for (var i: u32 = col; i < N; i = i + wg_size) {
         thread_max = max(thread_max, input_array[row * N + i]);
       }
       if (col < N) {
-        max_buffer[col] = thread_max;
+        op_buffer[col] = thread_max;
       }
       workgroupBarrier();
       
       // Reduce to one value max. Optimize with bit shifts.
-      var reductionSize: u32 = min(N, workgroupSize);
+      var reductionSize: u32 = min(N, wg_size);
       for (var i: u32 = reductionSize >> 1; i > 0; i = reductionSize >> 1) {
         reductionSize = i + (reductionSize & 1); // Ensure odd numbers are rounded up.
         if (col < i) {
-          max_buffer[col] = max(max_buffer[col], max_buffer[col + reductionSize]);
+          op_buffer[col] = max(op_buffer[col], op_buffer[col + reductionSize]);
         }
         workgroupBarrier();
       }
       if (col == 0) {
-        max_row = max_buffer[0];
+        max_row = op_buffer[0];
       }
       workgroupBarrier();
 
       var threadSum: f32 = 0.0;
-      for (var i: u32 = col; i < N; i = i + workgroupSize) {
+      for (var i: u32 = col; i < N; i = i + wg_size) {
         threadSum = threadSum + exp(input_array[row * N + i] - max_row);
       }
-      sum_buffer[col] = threadSum;
+      op_buffer[col] = threadSum;
       workgroupBarrier();
       
       // Reduce to one value sum. Optimize with bit shifts.
-      for (var i: u32 = workgroupSize >> 1; i > 0; i = i >> 1) {
+      for (var i: u32 = wg_size >> 1; i > 0; i = i >> 1) {
         if (col < i) {
-          sum_buffer[col] = sum_buffer[col] + sum_buffer[col + i];
+          op_buffer[col] = op_buffer[col] + op_buffer[col + i];
         }
         workgroupBarrier();
       }
       
       if (col == 0) {
-        sum_row = sum_buffer[0];
+        sum_row = op_buffer[0];
       }
       workgroupBarrier();
 
-      for (var i: u32 = col; i < N; i = i + workgroupSize) {
+      for (var i: u32 = col; i < N; i = i + wg_size) {
         result_array[row * N + i] = exp(input_array[row * N + i] - max_row) / sum_row;
       }
     }
