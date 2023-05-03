@@ -806,6 +806,88 @@ class SoftmaxBlockClass extends Block {
     };
   }
 
+  newFusedShader = (workgroupX) => `
+    struct Meta {
+      N: u32, 
+    };
+
+    const minFloat: f32 = -3.402823e+38f;
+    const workgroupSize: u32 = ${workgroupX};
+
+    @group(0) @binding(0) var<uniform> uniforms: Meta;
+    @group(0) @binding(1) var<storage, read_write> result_array: array<f32>;
+    @group(1) @binding(0) var<storage, read> input_array: array<f32>;
+
+    var<workgroup> max_row: f32;
+    var<workgroup> sum_row: f32;
+    var<workgroup> max_buffer: array<f32, ${workgroupX}>;
+    var<workgroup> sum_buffer: array<f32, ${workgroupX}>;
+
+    @compute @workgroup_size(${workgroupX})
+    fn main (@builtin(global_invocation_id) global_id: vec3<u32>) {
+      let col: u32 = global_id.x;
+      let row: u32 = global_id.y;
+      let N: u32 = uniforms.N;
+
+      // Condense into 256 col max.
+      var thread_max = minFloat;
+      for (var i: u32 = col; i < N; i = i + workgroupSize) {
+        thread_max = max(thread_max, input_array[row * N + i]);
+      }
+      if (col < N) {
+        max_buffer[col] = thread_max;
+      }
+
+      workgroupBarrier();
+
+      var startingSize: u32 = min(N, workgroupSize) >> 1;
+      var temp: u32 = 0;
+
+      // Reduce to one value max. 
+      for (var rSize: u32 = startingSize; rSize > 0; rSize = rSize >> 1) {
+        temp = rSize;
+        rSize = rSize + (rSize & 1); // Ensure odd numbers are rounded up.
+        if (col < temp) {
+          max_buffer[col] = max(max_buffer[col], max_buffer[col + rSize]);
+        }
+        workgroupBarrier();
+      }
+
+      if (col == 0) {
+        max_row = max_buffer[0];
+      }
+      workgroupBarrier();
+
+      var threadSum: f32 = 0.0;
+      for (var i: u32 = col; i < N; i = i + workgroupSize) {
+        threadSum = threadSum + exp(input_array[row * N + i] - max_row);
+      }
+      if (col < N) {
+        sum_buffer[col] = threadSum;
+      }
+      workgroupBarrier();
+      
+      // Reduce to one value sum. Optimize with bit shifts.
+      for (var rSize: u32 = startingSize; rSize > 0; rSize = rSize >> 1) {
+        temp = rSize;
+        rSize = rSize + (rSize & 1); // Ensure odd numbers are rounded up.
+        if (col < temp) {
+          sum_buffer[col] = sum_buffer[col] + sum_buffer[col + rSize];
+        }
+        workgroupBarrier();
+      }
+      
+      if (col == 0) {
+        sum_row = sum_buffer[0];
+      }
+      workgroupBarrier();
+
+      for (var i: u32 = col; i < N; i = i + workgroupSize) {
+        result_array[row * N + i] = sum_row;
+      }
+    }
+  `;
+
   fusedShader = (workgroupX) => `
     struct Meta {
       N: u32, 
@@ -829,10 +911,6 @@ class SoftmaxBlockClass extends Block {
       let row: u32 = global_id.y;
       let N: u32 = uniforms.N;
 
-      // Still figuring out how to do this.
-      let rowMask: u32 = row % N;
-      let mask: bool = col > rowMask;
-
       // Condense into 256 col max.
       var thread_max = minFloat;
       for (var i: u32 = col; i < N; i = i + workgroupSize) {
@@ -841,18 +919,17 @@ class SoftmaxBlockClass extends Block {
       if (col < N) {
         max_buffer[col] = thread_max;
       }
-
       workgroupBarrier();
       
       // Reduce to one value max. Optimize with bit shifts.
       var reductionSize: u32 = min(N, workgroupSize);
-      for (var i: u32 = workgroupSize >> 1; i > 0; i = i >> 1) {
+      for (var i: u32 = reductionSize >> 1; i > 0; i = reductionSize >> 1) {
+        reductionSize = i + (reductionSize & 1); // Ensure odd numbers are rounded up.
         if (col < i) {
-          max_buffer[col] = max_buffer[col] + max_buffer[col + i];
+          max_buffer[col] = max(max_buffer[col], max_buffer[col + reductionSize]);
         }
         workgroupBarrier();
       }
-      
       if (col == 0) {
         max_row = max_buffer[0];
       }

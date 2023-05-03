@@ -218,17 +218,15 @@ class TestShader {
     const weightBuffer = this.initTensor(weight_array, [M, N], ["storage"]);
 
     this.computePasses = [];
+    const push = ({ passes, resultBuffer }) => {
+      this.computePasses.push(...passes);
+      return resultBuffer;
+    };
+
     let intermediateBuffer = inputBuffer;
-    {
-      const { passes, resultBuffer } = CausalMaskBlock.newInstance(M, N, intermediateBuffer);
-      intermediateBuffer = resultBuffer;
-      this.computePasses.push(...passes);
-    }
-    {
-      const { passes, resultBuffer } = OutputBlock.newInstance(M, N, intermediateBuffer);
-      intermediateBuffer = resultBuffer;
-      this.computePasses.push(...passes);
-    }
+    intermediateBuffer = push(CausalMaskBlock.newInstance(M, N, intermediateBuffer));
+    intermediateBuffer = push(SoftmaxBlock.newInstance(N, M, intermediateBuffer));
+    intermediateBuffer = push(OutputBlock.newInstance(N, M, intermediateBuffer));
     const resultBuffer = intermediateBuffer;
 
     // ---------------- Compute Passes ----------------
