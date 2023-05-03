@@ -224,10 +224,10 @@ class TestShader {
     };
 
     let intermediateBuffer = inputBuffer;
-    intermediateBuffer = push(CausalMaskBlock.newInstance(M, N, intermediateBuffer));
+    intermediateBuffer = push(CausalMaskBlock.newInstance(M, N, intermediateBuffer)); // Transposes!
     intermediateBuffer = push(SoftmaxBlock.newInstance(N, M, intermediateBuffer));
     intermediateBuffer = push(OutputBlock.newInstance(N, M, intermediateBuffer));
-    const resultBuffer = intermediateBuffer;
+    let resultBuffer = intermediateBuffer;
 
     // ---------------- Compute Passes ----------------
 
@@ -251,6 +251,49 @@ class TestShader {
     const output = resultBuffer.getMappedRange();
     const outputArray = new Float32Array(output).slice(0); // Copy the array, otherwise it'll be destroyed.
     console.log(formatAsMatrix(outputArray, N, M));
+
+    // ---------------- Create Passes ---------------- //
+
+    this.computePasses = [];
+
+    intermediateBuffer = inputBuffer;
+    intermediateBuffer = push(CausalMaskBlock.newInstance(M, N, intermediateBuffer)); // Transposes!
+    intermediateBuffer = push(SoftmaxBlock.newInstance(N, M, intermediateBuffer));
+    intermediateBuffer = push(OutputBlock.newInstance(N, M, intermediateBuffer));
+    resultBuffer = intermediateBuffer;
+
+    // ---------------- Compute Passes ----------------
+
+    const commandEncoder2 = this.device.createCommandEncoder();
+    for (const pass of this.computePasses) {
+      if (pass.flag === "compute") {
+        const passEncoder = commandEncoder2.beginComputePass();
+        passEncoder.setPipeline(pass.pipeline);
+        for (let i = 0; i < pass.groups.length; i++) passEncoder.setBindGroup(i, pass.groups[i]);
+        passEncoder.dispatchWorkgroups(pass.workgroups.x, pass.workgroups.y);
+        passEncoder.end();
+      } else if (pass.flag === "copy") {
+        commandEncoder2.copyBufferToBuffer(pass.src, pass.srcOffset, pass.dst, pass.dstOffset, pass.size);
+      }
+    }
+    this.device.queue.submit([commandEncoder2.finish()]);
+
+    // ---------------- Read Results ----------------
+
+    await resultBuffer.mapAsync(GPUMapMode.READ);
+    const output2 = resultBuffer.getMappedRange();
+    const outputArray2 = new Float32Array(output2).slice(0); // Copy the array, otherwise it'll be destroyed.
+    console.log(formatAsMatrix(outputArray2, N, M));
+
+    // ---------------- Compare Results ----------------
+
+    let error = 0;
+    for (let i = 0; i < outputArray.length; i++) {
+      error += Math.abs(outputArray[i] - outputArray2[i]);
+    }
+    console.log("Error: ", error);
+
+    // ---------------- Cleanup ----------------
 
     destroyOperationBuffers();
     this.unloadBuffers();

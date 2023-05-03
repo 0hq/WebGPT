@@ -47,7 +47,7 @@ async function fetchBin(url) {
   return new Float32Array(buffer);
 }
 
-const wgSize = (dim, size) => Math.min(Math.ceil(dim / size), 256);
+const wgSize = (dim, size) => Math.min(Math.ceil(dim / size), Infinity);
 
 function sampleFromDistribution(probs) {
   const rand = Math.random();
