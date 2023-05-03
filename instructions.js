@@ -553,6 +553,8 @@ class LayerNormBlockClass extends Block {
   }
 
   newInstance(rows, cols, inputBuffer, gammaBuffer, betaBuffer) {
+    if (cols % 4 !== 0) throw new Error("Cols must be divisible by 4.");
+
     const workgroupsX = cols > 4096 ? 256 : 64;
     const statsPipeline = this.getStatsPipeline(workgroupsX);
     const statsUniformBuffer = this.initBuffer(["uniform", "copy_to"], [4]);
@@ -571,8 +573,8 @@ class LayerNormBlockClass extends Block {
       [inputBuffer, gammaBuffer, betaBuffer, statsResultBuffer],
       `${this.name}_InputBindGroup_norm`
     );
-    this.device.queue.writeBuffer(normUniformBuffer, 0, new Uint32Array([rows, cols]));
-    const normWorkgroups = { x: wgSize(cols, 16), y: wgSize(rows, 16), z: 1 };
+    this.device.queue.writeBuffer(normUniformBuffer, 0, new Uint32Array([rows, Math.ceil(cols / 4)]));
+    const normWorkgroups = { x: wgSize(cols, 32), y: wgSize(rows, 8), z: 1 };
 
     return {
       resultBuffer: normResultBuffer,
@@ -662,41 +664,37 @@ class LayerNormBlockClass extends Block {
   `;
 
   normShader = `
-    struct Matrix {
-        data: array<f32>,
+    struct Meta {
+      M: u32,
+      ND4: u32,
     }
 
-    struct Dimensions {
-      dimY: u32, // row dimension of input matrix
-      dimX: u32, // col dimension of input matrix
-    };
+    @group(0) @binding(0) var<uniform> uniforms: Meta;
+    @group(0) @binding(1) var<storage, read_write> result_array: array<vec4<f32>>;
 
-    @group(0) @binding(0) var<uniform> DimBuffer: Dimensions;
-    @group(0) @binding(1) var<storage, read_write> Result: Matrix;
+    @group(1) @binding(0) var<storage, read> input_array: array<vec4<f32>>;
+    @group(1) @binding(1) var<storage, read> gamma_param: array<vec4<f32>>;
+    @group(1) @binding(2) var<storage, read> beta_param: array<vec4<f32>>;
+    @group(1) @binding(3) var<storage, read> stats_param: array<f32>;
 
-    @group(1) @binding(0) var<storage, read> Input: Matrix;
-    @group(1) @binding(1) var<storage, read> Gamma: Matrix;
-    @group(1) @binding(2) var<storage, read> Beta: Matrix;
-    @group(1) @binding(3) var<storage, read> Stats: Matrix;
-
-    @compute @workgroup_size(16, 16)
+    @compute @workgroup_size(8, 8)
     fn main (@builtin(global_invocation_id) global_id: vec3<u32>) {
-      let col: u32 = global_id.x;
-      let row: u32 = global_id.y;
-      let dimX: u32 = DimBuffer.dimX;
-      let dimY: u32 = DimBuffer.dimY;
+      var col: u32 = global_id.x;
+      var row: u32 = global_id.y;
+      var ND4: u32 = uniforms.ND4;
+      var M: u32 = uniforms.M;
 
-      if (row >= dimY || col >= dimX) {
+      if (row >= M || col >= ND4) {
         return;
       }
 
-      let mean = Stats.data[row * 2];
-      let stdev = Stats.data[row * 2 + 1];
-      let output = (Input.data[row * dimX + col] - mean) / stdev;
-      let gamma = Gamma.data[col];
-      let beta = Beta.data[col];
+      let mean = stats_param[row * 2];
+      let stdev = stats_param[row * 2 + 1];
+      let output = (input_array[row * ND4 + col] - mean) / stdev;
+      let gamma = gamma_param[col];
+      let beta = beta_param[col];
       let shift = gamma * output + beta;
-      Result.data[row * dimX + col] = shift;
+      result_array[row * ND4 + col] = shift;
     }
   `;
 }

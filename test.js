@@ -207,15 +207,17 @@ class TestShader {
 
   async test() {
     // ---------------- Create Passes ---------------- //
-    const { M, N } = { M: 100, N: 300 };
+    const { M, N } = { M: 100, N: 100 };
     const input_array = new Float32Array(M * N);
-    const weight_array = new Float32Array(M * N).fill(1);
+    const gamma_array = new Float32Array(N).fill(1);
+    const beta_array = new Float32Array(N).fill(1);
 
     for (let i = 0; i < M * N; i++) input_array[i] = i;
     console.log(formatAsMatrix(input_array, M, N));
 
     const inputBuffer = this.initTensor(input_array, [M, N], ["storage"]);
-    const weightBuffer = this.initTensor(weight_array, [M, N], ["storage"]);
+    const gammaBuffer = this.initTensor(gamma_array, [N], ["storage"]);
+    const betaBuffer = this.initTensor(beta_array, [N], ["storage"]);
 
     this.computePasses = [];
     const push = ({ passes, resultBuffer }) => {
@@ -224,9 +226,8 @@ class TestShader {
     };
 
     let intermediateBuffer = inputBuffer;
-    intermediateBuffer = push(CausalMaskBlock.newInstance(M, N, intermediateBuffer)); // Transposes!
-    intermediateBuffer = push(SoftmaxBlock.newInstance(N, M, intermediateBuffer));
-    intermediateBuffer = push(OutputBlock.newInstance(N, M, intermediateBuffer));
+    intermediateBuffer = push(LayerNormBlock.newInstance(M, N, intermediateBuffer, gammaBuffer, betaBuffer));
+    intermediateBuffer = push(OutputBlock.newInstance(M, N, intermediateBuffer));
     let resultBuffer = intermediateBuffer;
 
     // ---------------- Compute Passes ----------------
@@ -254,44 +255,44 @@ class TestShader {
 
     // ---------------- Create Passes ---------------- //
 
-    this.computePasses = [];
+    // this.computePasses = [];
 
-    intermediateBuffer = inputBuffer;
-    intermediateBuffer = push(CausalMaskBlock.newInstance(M, N, intermediateBuffer)); // Transposes!
-    intermediateBuffer = push(SoftmaxBlock.newInstance(N, M, intermediateBuffer));
-    intermediateBuffer = push(OutputBlock.newInstance(N, M, intermediateBuffer));
-    resultBuffer = intermediateBuffer;
+    // intermediateBuffer = inputBuffer;
+    // intermediateBuffer = push(CausalMaskBlock.newInstance(M, N, intermediateBuffer)); // Transposes!
+    // intermediateBuffer = push(SoftmaxBlock.newInstance(N, M, intermediateBuffer));
+    // intermediateBuffer = push(OutputBlock.newInstance(N, M, intermediateBuffer));
+    // resultBuffer = intermediateBuffer;
 
-    // ---------------- Compute Passes ----------------
+    // // ---------------- Compute Passes ----------------
 
-    const commandEncoder2 = this.device.createCommandEncoder();
-    for (const pass of this.computePasses) {
-      if (pass.flag === "compute") {
-        const passEncoder = commandEncoder2.beginComputePass();
-        passEncoder.setPipeline(pass.pipeline);
-        for (let i = 0; i < pass.groups.length; i++) passEncoder.setBindGroup(i, pass.groups[i]);
-        passEncoder.dispatchWorkgroups(pass.workgroups.x, pass.workgroups.y);
-        passEncoder.end();
-      } else if (pass.flag === "copy") {
-        commandEncoder2.copyBufferToBuffer(pass.src, pass.srcOffset, pass.dst, pass.dstOffset, pass.size);
-      }
-    }
-    this.device.queue.submit([commandEncoder2.finish()]);
+    // const commandEncoder2 = this.device.createCommandEncoder();
+    // for (const pass of this.computePasses) {
+    //   if (pass.flag === "compute") {
+    //     const passEncoder = commandEncoder2.beginComputePass();
+    //     passEncoder.setPipeline(pass.pipeline);
+    //     for (let i = 0; i < pass.groups.length; i++) passEncoder.setBindGroup(i, pass.groups[i]);
+    //     passEncoder.dispatchWorkgroups(pass.workgroups.x, pass.workgroups.y);
+    //     passEncoder.end();
+    //   } else if (pass.flag === "copy") {
+    //     commandEncoder2.copyBufferToBuffer(pass.src, pass.srcOffset, pass.dst, pass.dstOffset, pass.size);
+    //   }
+    // }
+    // this.device.queue.submit([commandEncoder2.finish()]);
 
-    // ---------------- Read Results ----------------
+    // // ---------------- Read Results ----------------
 
-    await resultBuffer.mapAsync(GPUMapMode.READ);
-    const output2 = resultBuffer.getMappedRange();
-    const outputArray2 = new Float32Array(output2).slice(0); // Copy the array, otherwise it'll be destroyed.
-    console.log(formatAsMatrix(outputArray2, N, M));
+    // await resultBuffer.mapAsync(GPUMapMode.READ);
+    // const output2 = resultBuffer.getMappedRange();
+    // const outputArray2 = new Float32Array(output2).slice(0); // Copy the array, otherwise it'll be destroyed.
+    // console.log(formatAsMatrix(outputArray2, N, M));
 
-    // ---------------- Compare Results ----------------
+    // // ---------------- Compare Results ----------------
 
-    let error = 0;
-    for (let i = 0; i < outputArray.length; i++) {
-      error += Math.abs(outputArray[i] - outputArray2[i]);
-    }
-    console.log("Error: ", error);
+    // let error = 0;
+    // for (let i = 0; i < outputArray.length; i++) {
+    //   error += Math.abs(outputArray[i] - outputArray2[i]);
+    // }
+    // console.log("Error: ", error);
 
     // ---------------- Cleanup ----------------
 
