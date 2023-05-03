@@ -1,9 +1,4 @@
-/*
-
-  Softmax will run via rows, every workgroup handling a different row.
-  Override constants.
-
-*/
+// --------------------- Instructions --------------------- //
 
 class Block {
   constructor() {
@@ -83,19 +78,19 @@ class FastMLPBlockClass extends Block {
     this.pipelineCache = new Map();
   }
 
-  getPipeline(rows) {
-    const div4 = rows % 4 === 0;
-    const pipelineCacheKey = div4 ? "fastMLPNoCheck" : "fastMLP";
+  getPipeline(rows, attentionMode) {
+    const doCheck = rows % 4 !== 0;
+    const pipelineCacheKey = `${this.name}_${doCheck}`;
     if (this.pipelineCache.has(pipelineCacheKey)) return this.pipelineCache.get(pipelineCacheKey);
-    const kernel = div4 ? this.fastMLPNoCheck : this.fastMLP;
+    const kernel = this.fastMLP(doCheck);
     const pipeline = this.initPipeline(kernel, [this.u_s_Layout, this.r_r_r_Layout], `${this.name}_Pipeline_${pipelineCacheKey}`);
     this.pipelineCache.set(pipelineCacheKey, pipeline);
     return pipeline;
   }
 
-  newInstance(rows, cols, shared, inputBuffer, weightsBuffer, biasBuffer) {
+  newInstance(rows, cols, shared, inputBuffer, weightsBuffer, biasBuffer, headOffset = null) {
     if (cols % 4 !== 0) throw new Error("Cols must be divisible by 4.");
-    const pipeline = this.getPipeline(rows);
+    const pipeline = this.getPipeline(rows, attentionMode);
     const uniformBuffer = this.initBuffer(["uniform", "copy_to"], [4]);
     const resultBuffer = this.initBuffer(["storage", "copy_from"], [rows, cols]);
     const opBindGroup = this.initBindGroup(this.u_s_Layout, [uniformBuffer, resultBuffer], `${this.name}_OpG`);
@@ -116,111 +111,8 @@ class FastMLPBlockClass extends Block {
     };
   }
 
-  fastMLP = `
-    struct CMeta {
-      M: u32,
-      N: u32,
-      ND4: u32,
-      KD4: u32,
-    }
-
-    @group(1) @binding(0) var<storage,read> array_a: array<vec4<f32>>;
-    @group(1) @binding(1) var<storage,read> array_b: array<vec4<f32>>;
-    @group(1) @binding(2) var<storage,read> array_bias: array<vec4<f32>>;
-
-    @group(0) @binding(0) var<uniform> cmeta: CMeta;
-    @group(0) @binding(1) var<storage,read_write> array_c: array<vec4<f32>>;
-
-    @compute @workgroup_size(8, 8)
-    fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
-      var M: u32 = cmeta.M;
-      var N: u32 = cmeta.N;
-      var ND4: u32 = cmeta.ND4;
-      var KD4: u32 = cmeta.KD4;
-      var x: u32 = global_id.x;
-      var y: u32 = global_id.y;
-
-      if (x * 8 >= N || y * 4 >= M) {
-        return;
-      }
-
-      var sum00: vec4<f32> = vec4<f32>();
-      var sum01: vec4<f32> = vec4<f32>();
-      var sum02: vec4<f32> = vec4<f32>();
-      var sum03: vec4<f32> = vec4<f32>();
-      var sum10: vec4<f32> = vec4<f32>();
-      var sum11: vec4<f32> = vec4<f32>();
-      var sum12: vec4<f32> = vec4<f32>();
-      var sum13: vec4<f32> = vec4<f32>();
-
-      for(var k: u32 = 0u; k < KD4; k = k + 1u) {
-        var arow0: vec4<f32> = array_a[(y * 4u + 0u) * KD4 + k];
-        var arow1: vec4<f32> = array_a[(y * 4u + 1u) * KD4 + k];
-        var arow2: vec4<f32> = array_a[(y * 4u + 2u) * KD4 + k];
-        var arow3: vec4<f32> = array_a[(y * 4u + 3u) * KD4 + k];
-        var brow: vec4<f32>;
-
-        brow = array_b[(k * 4u + 0u) * ND4 + x * 2u + 0u];
-        sum00 = vec4<f32>(arow0.x) * brow + sum00;
-        sum01 = vec4<f32>(arow1.x) * brow + sum01;
-        sum02 = vec4<f32>(arow2.x) * brow + sum02;
-        sum03 = vec4<f32>(arow3.x) * brow + sum03;
-
-        brow = array_b[(k * 4u + 0u) * ND4 + x * 2u + 1u];
-        sum10 = vec4<f32>(arow0.x) * brow + sum10;
-        sum11 = vec4<f32>(arow1.x) * brow + sum11;
-        sum12 = vec4<f32>(arow2.x) * brow + sum12;
-        sum13 = vec4<f32>(arow3.x) * brow + sum13;
-
-        brow = array_b[(k * 4u + 1u) * ND4 + x * 2u + 0u];
-        sum00 = vec4<f32>(arow0.y) * brow + sum00;
-        sum01 = vec4<f32>(arow1.y) * brow + sum01;
-        sum02 = vec4<f32>(arow2.y) * brow + sum02;
-        sum03 = vec4<f32>(arow3.y) * brow + sum03;
-
-        brow = array_b[(k * 4u + 1u) * ND4 + x * 2u + 1u];
-        sum10 = vec4<f32>(arow0.y) * brow + sum10;
-        sum11 = vec4<f32>(arow1.y) * brow + sum11;
-        sum12 = vec4<f32>(arow2.y) * brow + sum12;
-        sum13 = vec4<f32>(arow3.y) * brow + sum13;
-
-        brow = array_b[(k * 4u + 2u) * ND4 + x * 2u + 0u];
-        sum00 = vec4<f32>(arow0.z) * brow + sum00;
-        sum01 = vec4<f32>(arow1.z) * brow + sum01;
-        sum02 = vec4<f32>(arow2.z) * brow + sum02;
-        sum03 = vec4<f32>(arow3.z) * brow + sum03;
-
-        brow = array_b[(k * 4u + 2u) * ND4 + x * 2u + 1u];
-        sum10 = vec4<f32>(arow0.z) * brow + sum10;
-        sum11 = vec4<f32>(arow1.z) * brow + sum11;
-        sum12 = vec4<f32>(arow2.z) * brow + sum12;
-        sum13 = vec4<f32>(arow3.z) * brow + sum13;
-
-        brow = array_b[(k * 4u + 3u) * ND4 + x * 2u + 0u];
-        sum00 = vec4<f32>(arow0.w) * brow + sum00;
-        sum01 = vec4<f32>(arow1.w) * brow + sum01;
-        sum02 = vec4<f32>(arow2.w) * brow + sum02;
-        sum03 = vec4<f32>(arow3.w) * brow + sum03;
-
-        brow = array_b[(k * 4u + 3u) * ND4 + x * 2u + 1u];
-        sum10 = vec4<f32>(arow0.w) * brow + sum10;
-        sum11 = vec4<f32>(arow1.w) * brow + sum11;
-        sum12 = vec4<f32>(arow2.w) * brow + sum12;
-        sum13 = vec4<f32>(arow3.w) * brow + sum13;
-      }
-
-      var array_bias_1: vec4<f32> = array_bias[x * 2u + 0u];
-      sum00 = sum00 + array_bias_1;
-      sum01 = sum01 + array_bias_1;
-      sum02 = sum02 + array_bias_1;
-      sum03 = sum03 + array_bias_1;
-
-      var array_bias_2: vec4<f32> = array_bias[x * 2u + 1u];
-      sum10 = sum10 + array_bias_2;
-      sum11 = sum11 + array_bias_2;
-      sum12 = sum12 + array_bias_2;
-      sum13 = sum13 + array_bias_2;
-
+  fastMLP(doCheck) {
+    const withCheck = `
       if (y * 4u + 0u < M) {
         array_c[x * 2u + 0u + (y * 4u + 0u) * ND4] = sum00;
         array_c[x * 2u + 1u + (y * 4u + 0u) * ND4] = sum10;
@@ -237,10 +129,20 @@ class FastMLPBlockClass extends Block {
         array_c[x * 2u + 0u + (y * 4u + 3u) * ND4] = sum03;
         array_c[x * 2u + 1u + (y * 4u + 3u) * ND4] = sum13;
       }
-    }
-  `;
+    `;
+    const noCheck = `
+      array_c[x * 2u + 0u + (y * 4u + 0u) * ND4] = sum00;
+      array_c[x * 2u + 1u + (y * 4u + 0u) * ND4] = sum10;
+      array_c[x * 2u + 0u + (y * 4u + 1u) * ND4] = sum01;
+      array_c[x * 2u + 1u + (y * 4u + 1u) * ND4] = sum11;
+      array_c[x * 2u + 0u + (y * 4u + 2u) * ND4] = sum02;
+      array_c[x * 2u + 1u + (y * 4u + 2u) * ND4] = sum12;
+      array_c[x * 2u + 0u + (y * 4u + 3u) * ND4] = sum03;
+      array_c[x * 2u + 1u + (y * 4u + 3u) * ND4] = sum13;
+    `;
+    const outputCode = doCheck ? withCheck : noCheck;
 
-  fastMLPNoCheck = `
+    return `
     struct CMeta {
       M: u32,
       N: u32,
@@ -345,16 +247,10 @@ class FastMLPBlockClass extends Block {
       sum12 = sum12 + array_bias_2;
       sum13 = sum13 + array_bias_2;
 
-      array_c[x * 2u + 0u + (y * 4u + 0u) * ND4] = sum00;
-      array_c[x * 2u + 1u + (y * 4u + 0u) * ND4] = sum10;
-      array_c[x * 2u + 0u + (y * 4u + 1u) * ND4] = sum01;
-      array_c[x * 2u + 1u + (y * 4u + 1u) * ND4] = sum11;
-      array_c[x * 2u + 0u + (y * 4u + 2u) * ND4] = sum02;
-      array_c[x * 2u + 1u + (y * 4u + 2u) * ND4] = sum12;
-      array_c[x * 2u + 0u + (y * 4u + 3u) * ND4] = sum03;
-      array_c[x * 2u + 1u + (y * 4u + 3u) * ND4] = sum13;
+      ${outputCode}
     }
   `;
+  }
 }
 
 class ResidualBlockClass extends Block {
@@ -421,111 +317,6 @@ class ResidualBlockClass extends Block {
       let index = row * ND4 + col;
       result_array[index] =  layer_out_array[index] + residual_array[index];
     }
-  `;
-}
-
-class NaiveMatMulBlockClass extends Block {
-  constructor() {
-    super();
-    this.name = "naiveMatMul";
-    this.pipelineCache = new Map();
-  }
-
-  getPipeline() {
-    const pipelineCacheKey = this.name; // No param optimization.
-    if (this.pipelineCache.has(pipelineCacheKey)) return this.pipelineCache.get(pipelineCacheKey);
-    const pipeline = this.initPipeline(this.matMulShader, [this.u_s_Layout, this.r_r_Layout], `${this.name}_Pipeline`);
-    this.pipelineCache.set(pipelineCacheKey, pipeline);
-    return pipeline;
-  }
-
-  newInstance(rows, cols, shared, bufA, bufB) {
-    const pipeline = this.getPipeline();
-    const uniformBuffer = this.initBuffer(["uniform", "copy_to"], [4]);
-    const resultBuffer = this.initBuffer(["storage", "copy_from"], [rows, cols]);
-    const opBindGroup = this.initBindGroup(this.u_s_Layout, [uniformBuffer, resultBuffer], `${this.name}_OutputG`);
-    const inputBindGroup = this.initBindGroup(this.r_r_Layout, [bufA, bufB], `${this.name}_InputG`);
-    const workgroups = { x: wgSize(cols, 16), y: wgSize(rows, 16), z: 1 };
-    this.device.queue.writeBuffer(uniformBuffer, 0, new Uint32Array([rows, cols, shared]));
-
-    return {
-      resultBuffer,
-      passes: [
-        {
-          flag: "compute",
-          pipeline,
-          groups: [opBindGroup, inputBindGroup],
-          workgroups,
-        },
-      ],
-    };
-  }
-
-  // Experimenting with preloading all weights, not too important just style.
-  preloadInstance(cols, shared, bufB) {
-    this.cols = cols;
-    this.shared = shared;
-    this.weightsBuf = bufB;
-
-    return (newPreloadedInstance = (rows, bufA) => {
-      const pipeline = this.getPipeline();
-      const uniformBuffer = this.initBuffer(["uniform", "copy_to"], [4]);
-      const resultBuffer = this.initBuffer(["storage", "copy_from"], [rows, this.cols]);
-      const opBindGroup = this.initBindGroup(this.u_s_Layout, [uniformBuffer, resultBuffer], `${this.name}_OutputG`);
-      const inputBindGroup = this.initBindGroup(this.r_r_Layout, [bufA, this.weightsBuf], `${this.name}_InputG`);
-      const workgroups = { x: wgSize(this.cols, 16), y: wgSize(rows, 16), z: 1 };
-      this.device.queue.writeBuffer(uniformBuffer, 0, new Uint32Array([rows, this.cols, this.shared]));
-
-      return {
-        resultBuffer,
-        passes: [
-          {
-            flag: "compute",
-            pipeline,
-            groups: [opBindGroup, inputBindGroup],
-            workgroups,
-          },
-        ],
-      };
-    });
-  }
-
-  matMulShader = `
-    struct Matrix {
-        data: array<f32>,
-    }
-
-    struct Uniforms {
-      dimY: u32, // row dimension of A and row dimension of C
-      dimX: u32, // col dimension of B and col dimension of C
-      dimS: u32, // shared dimension of A and B
-    };
-
-    @group(1) @binding(0) var<storage, read> A: Matrix;
-    @group(1) @binding(1) var<storage, read> B: Matrix;
-
-    @group(0) @binding(1) var<storage, read_write> C: Matrix;
-    @group(0) @binding(0) var<uniform> dimBuffer: Uniforms;
-
-    @compute @workgroup_size(16, 16)
-    fn main (@builtin(global_invocation_id) global_id: vec3<u32>) {
-        let col: u32 = global_id.x;
-        let row: u32 = global_id.y;
-        let dimX: u32 = dimBuffer.dimX;
-        let dimY: u32 = dimBuffer.dimY;
-        let dimS: u32 = dimBuffer.dimS;
-
-        if (row >= dimY || col >= dimX) {
-          return;
-        }
-
-        var sum: f32 = 0.0;
-        for (var i: u32 = 0; i < dimS; i = i + 1) {
-            sum = sum + A.data[row * dimS + i] * B.data[i * dimX + col];
-        }
-
-        C.data[row * dimX + col] = sum;
-      }
   `;
 }
 
@@ -706,20 +497,20 @@ class SoftmaxBlockClass extends Block {
     this.pipelineCache = new Map();
   }
 
-  getFusedPipeline(workgroups) {
-    const pipelineCacheKey = `${this.name}_fused_${workgroups}`;
+  getFusedPipeline(workgroups, transpose) {
+    const pipelineCacheKey = `${this.name}_fused_${workgroups}_${transpose}`;
     if (this.pipelineCache.has(pipelineCacheKey)) return this.pipelineCache.get(pipelineCacheKey);
-    const pipeline = this.initPipeline(this.fusedShader(workgroups), [this.u_s_Layout, this.r_Layout], `${this.name}_Pipeline_Div`);
+    const pipeline = this.initPipeline(this.fusedShader(workgroups, transpose), [this.u_s_Layout, this.r_Layout], `${this.name}_Pipeline_Div`);
     this.pipelineCache.set(pipelineCacheKey, pipeline);
     return pipeline;
   }
 
-  newInstance(rows, cols, inputBuffer) {
+  newInstance(rows, cols, inputBuffer, transpose = false) {
     const workgroupsX = cols > 4096 ? 256 : 64;
-    const fusedPipeline = this.getFusedPipeline(workgroupsX);
+    const fusedPipeline = this.getFusedPipeline(workgroupsX, transpose);
 
     const uniformBuffer = this.initBuffer(["uniform", "copy_to"], [4]);
-    this.device.queue.writeBuffer(uniformBuffer, 0, new Uint32Array([cols]));
+    this.device.queue.writeBuffer(uniformBuffer, 0, new Uint32Array([rows, cols]));
 
     const resultBuffer = this.initBuffer(["storage", "copy_from"], [rows, cols], `${this.name}_ResultBuffer_`);
     const bindGroup = this.initBindGroup(this.u_s_Layout, [uniformBuffer, resultBuffer], `${this.name}_BindGroup_`);
@@ -742,8 +533,11 @@ class SoftmaxBlockClass extends Block {
   /*
     Possible improvements: Vectorization? Modify input buffer to coalesce better?
   */
-  fusedShader = (wg_size) => `
+  fusedShader(wg_size, transpose) {
+    const outputIndex = transpose ? "i * uniforms.M + row" : "row * N + i";
+    return `
     struct Meta {
+      M: u32,
       N: u32, 
     };
 
@@ -809,10 +603,11 @@ class SoftmaxBlockClass extends Block {
       workgroupBarrier();
 
       for (var i: u32 = col; i < N; i = i + wg_size) {
-        result_array[row * N + i] = exp(input_array[row * N + i] - max_row) / sum_row;
+        result_array[${outputIndex}] = exp(input_array[row * N + i] - max_row) / sum_row;
       }
     }
   `;
+  }
 }
 
 class GeluBlockClass extends Block {
@@ -897,6 +692,51 @@ class GeluBlockClass extends Block {
     }
   `;
 }
+
+class EmbedBlockClass extends Block {
+  constructor() {
+    super();
+    this.name = "embed";
+  }
+
+  newInstance(idx, seq_length, n_embd, embdBuffer, posEmbdBuffer, ResidualBlock) {
+    const embdOutputBuffer = this.initBuffer(["storage", "copy_to"], [seq_length, n_embd]);
+    const posEmbdOutputBuffer = this.initBuffer(["storage", "copy_to"], [seq_length, n_embd]);
+
+    // Can build a cache later.
+    const embdCopyCommands = Array(seq_length)
+      .fill()
+      .map((_, i) => {
+        return {
+          flag: "copy",
+          src: embdBuffer,
+          srcOffset: this.bufferSize(n_embd) * idx[i],
+          dst: embdOutputBuffer,
+          dstOffset: this.bufferSize(n_embd) * i,
+          size: this.bufferSize(n_embd),
+        };
+      });
+
+    // Also can be cached.
+    const posCopyCommand = {
+      flag: "copy",
+      src: posEmbdBuffer,
+      srcOffset: 0,
+      dst: posEmbdOutputBuffer,
+      dstOffset: 0,
+      size: this.bufferSize(seq_length, n_embd),
+    };
+
+    const { resultBuffer: residualResult, passes: residualPasses } = ResidualBlock.newInstance(seq_length, n_embd, embdOutputBuffer, posEmbdOutputBuffer);
+
+    return {
+      resultBuffer: residualResult,
+      passes: [...embdCopyCommands, posCopyCommand, ...residualPasses],
+    };
+  }
+}
+
+// ------------------ Needs Optimization ------------------ //
 
 class AttentionBlockClass extends Block {
   constructor() {
@@ -1202,50 +1042,203 @@ class AttentionBlockClass extends Block {
       Result.data[row * dimX + col] = sum;
     }
   `;
-}
 
-class EmbedBlockClass extends Block {
-  constructor() {
-    super();
-    this.name = "embed";
-    this.pipelineCache = new Map();
+  getNewAttentionWeightsPipeline() {
+    const pipelineCacheKey = `${this.name}_weights_fused`; // No param optimization.
+    if (this.pipelineCache.has(pipelineCacheKey)) return this.pipelineCache.get(pipelineCacheKey);
+    const pipeline = this.initPipeline(this.fusedAttentionShader, [this.u_s_Layout, this.r_r_Layout], `${this.name}_Pipeline_AttWeights`);
+    this.pipelineCache.set(pipelineCacheKey, pipeline);
+    return pipeline;
   }
 
-  newInstance(idx, seq_length, n_embd, embdBuffer, posEmbdBuffer, ResidualBlock) {
-    const embdOutputBuffer = this.initBuffer(["storage", "copy_to"], [seq_length, n_embd]);
-    const posEmbdOutputBuffer = this.initBuffer(["storage", "copy_to"], [seq_length, n_embd]);
+  getNewAttentionValuesPipeline() {
+    const pipelineCacheKey = `${this.name}_values_fused`; // No param optimization.
+    if (this.pipelineCache.has(pipelineCacheKey)) return this.pipelineCache.get(pipelineCacheKey);
+    const pipeline = this.initPipeline(this.newAttentionValuesShader, [this.u_s_Layout, this.r_r_Layout], `${this.name}_Pipeline_AttValues`);
+    this.pipelineCache.set(pipelineCacheKey, pipeline);
+    return pipeline;
+  }
 
-    // Can build a cache later.
-    const embdCopyCommands = Array(seq_length)
-      .fill()
-      .map((_, i) => {
-        return {
-          flag: "copy",
-          src: embdBuffer,
-          srcOffset: this.bufferSize(n_embd) * idx[i],
-          dst: embdOutputBuffer,
-          dstOffset: this.bufferSize(n_embd) * i,
-          size: this.bufferSize(n_embd),
-        };
-      });
+  newFusedInstance(
+    seq_length,
+    n_embd,
+    attentionDotProductScale,
+    n_head,
+    inputBuffer,
+    qWeightsBuffer,
+    qBiasBuffer,
+    kWeightsBuffer,
+    kBiasBuffer,
+    vWeightsBuffer,
+    vBiasBuffer,
+    linearWeightsBuffer,
+    linearBiasBuffer,
+    FastMLPBlock,
+    SoftmaxBlock
+  ) {
+    if ((n_embd / n_head) % 4 != 0) {
+      throw new Error("n_embd / n_head (head size) must be a multiple of 4");
+    }
 
-    // Also can be cached.
-    const posCopyCommand = {
-      flag: "copy",
-      src: posEmbdBuffer,
-      srcOffset: 0,
-      dst: posEmbdOutputBuffer,
-      dstOffset: 0,
-      size: this.bufferSize(seq_length, n_embd),
-    };
+    const { resultBuffer: QresultBffer, passes: QMLPPasses } = FastMLPBlock.newInstance(seq_length, n_embd, n_embd, inputBuffer, qWeightsBuffer, qBiasBuffer);
+    const { resultBuffer: KresultBffer, passes: KMLPPasses } = FastMLPBlock.newInstance(seq_length, n_embd, n_embd, inputBuffer, kWeightsBuffer, kBiasBuffer);
+    const { resultBuffer: VresultBffer, passes: VMLPPasses } = FastMLPBlock.newInstance(seq_length, n_embd, n_embd, inputBuffer, vWeightsBuffer, vBiasBuffer);
 
-    const { resultBuffer: residualResult, passes: residualPasses } = ResidualBlock.newInstance(seq_length, n_embd, embdOutputBuffer, posEmbdOutputBuffer);
+    const attentionWeightsPipeline = this.getAttentionWeightsPipeline();
+    const attentionWeightsUniformBuffer = this.initBuffer(["uniform", "copy_to"], [8]);
+    const attentionWeightsResultBuffer = this.initBuffer(["storage", "copy_from"], [seq_length, seq_length * n_head]);
+    const attentionWeightsBindGroup = this.initBindGroup(
+      this.u_s_Layout,
+      [attentionWeightsUniformBuffer, attentionWeightsResultBuffer],
+      `${this.name}_AttentionWeightsG`
+    );
+    const attentionWeightsInputBindGroup = this.initBindGroup(this.r_r_Layout, [QresultBffer, KresultBffer], `${this.name}_AttentionWeightsInputG`);
+    this.device.queue.writeBuffer(attentionWeightsUniformBuffer, 0, new Uint32Array([seq_length, seq_length * n_head, seq_length, n_embd / n_head, n_embd]));
+    this.device.queue.writeBuffer(attentionWeightsUniformBuffer, 20, new Float32Array([attentionDotProductScale]));
+    const attentionWeightsWorkgroups = { x: wgSize(seq_length, 16), y: wgSize(seq_length * n_head, 16), z: 1 };
+
+    const { resultBuffer: softmaxOutputBuffer, passes: softmaxPasses } = SoftmaxBlock.newInstance(
+      seq_length * n_head,
+      seq_length,
+      causalMaskResultBuffer,
+      true
+    ); // Transposes! Reverts weights quasi-transpose.
+
+    const attentionValuesPipeline = this.getAttentionValuesPipeline();
+    const attentionValuesUniformBuffer = this.initBuffer(["uniform", "copy_to"], [4]);
+    const attentionValuesResultBuffer = this.initBuffer(["storage", "copy_from"], [seq_length, n_embd]);
+    const attentionValuesBindGroup = this.initBindGroup(this.u_s_Layout, [attentionValuesUniformBuffer, attentionValuesResultBuffer]);
+    const attentionValuesInputBindGroup = this.initBindGroup(this.r_r_Layout, [softmaxOutputBuffer, splitVResultBuffer], `${this.name}_AttentionValuesInputG`);
+    this.device.queue.writeBuffer(attentionValuesUniformBuffer, 0, new Uint32Array([seq_length, n_embd, n_head, n_embd / n_head]));
+    const attentionValuesWorkgroups = { x: wgSize(n_embd, 16), y: wgSize(seq_length, 16), z: 1 };
+
+    const { resultBuffer: linearMLPResult, passes: linearMLPPasses } = FastMLPBlock.newInstance(
+      seq_length,
+      n_embd,
+      n_embd,
+      attentionValuesResultBuffer,
+      linearWeightsBuffer,
+      linearBiasBuffer
+    );
 
     return {
-      resultBuffer: residualResult,
-      passes: [...embdCopyCommands, posCopyCommand, ...residualPasses],
+      resultBuffer: linearMLPResult,
+      passes: [
+        ...qkvMLPPasses,
+        {
+          flag: "compute",
+          pipeline: splitQKVPipeline,
+          groups: [splitQKVBindGroup, splitQKVInputBindGroup],
+          workgroups: splitQKVWorkgroups,
+        },
+        {
+          flag: "compute",
+          pipeline: attentionWeightsPipeline,
+          groups: [attentionWeightsBindGroup, attentionWeightsInputBindGroup],
+          workgroups: attentionWeightsWorkgroups,
+        },
+        {
+          flag: "compute",
+          pipeline: causalMaskPipeline,
+          groups: [causalMaskBindGroup, causalMaskInputBindGroup],
+          workgroups: causalMaskWorkgroups,
+        },
+        ...softmaxPasses,
+        {
+          flag: "compute",
+          pipeline: attentionValuesPipeline,
+          groups: [attentionValuesBindGroup, attentionValuesInputBindGroup],
+          workgroups: attentionValuesWorkgroups,
+        },
+        ...linearMLPPasses,
+      ],
     };
   }
+
+  fusedAttentionShader = `
+    struct Matrix {
+      data: array<f32>,
+    }
+
+    struct Dimensions {
+      dimY: u32, // output row dim, Q row dim
+      seqHeads: u32, // output col dim, seq_length * heads
+      seqLength: u32, // seq_length or K col dim (Q can be different)
+      qkvCols: u32, // head col dim for Q, K or n_embd / n_heads
+      embedDim: u32, // n_embd or total Q col dim & K row dim
+      attentionScale: f32,
+    };
+
+    @group(1) @binding(0) var<storage, read> Queries: Matrix;
+    @group(1) @binding(1) var<storage, read> Keys: Matrix;
+
+    @group(0) @binding(0) var<uniform> DimBuffer: Dimensions;
+    @group(0) @binding(1) var<storage, read_write> Result: Matrix;
+
+    @compute @workgroup_size(16, 16)
+    fn main (@builtin(global_invocation_id) global_id: vec3<u32>) {
+      let col: u32 = global_id.x;
+      let row: u32 = global_id.y;
+      let dimY: u32 = DimBuffer.dimY;
+      let dimX: u32 = DimBuffer.dimX;
+      let seqLength: u32 = DimBuffer.seqLength;
+      let qkvCols: u32 = DimBuffer.qkvCols;
+      let embedDim: u32 = DimBuffer.embedDim;
+
+      if (row >= dimY || col >= dimX) {
+        return;
+      }
+
+      var head: u32 = col / seqLength;
+      var col_r: u32 = col % seqLength;
+      var sum: f32 = 0.0;
+      for (var i: u32 = 0; i < qkvCols; i = i + 1) {
+          sum = sum + Queries.data[row * embedDim + i + head * qkvCols] * Keys.data[col_r * embedDim + i + head * qkvCols];
+      }
+
+      Result.data[row * dimX + col] = sum * DimBuffer.attentionScale;
+    }
+  `;
+
+  newAttentionValuesShader = `
+    struct Meta {
+      M: u32,
+      N: u32,
+      ND4: u32,
+      HD4: u32,
+    }
+
+    @group(0) @binding(0) var<uniform> uniforms: Meta;
+    @group(0) @binding(1) var<storage, read_write> result_array: array<vec4<f32>>;
+
+    @group(1) @binding(0) var<storage, read> query_array: array<vec4<f32>>;
+    @group(1) @binding(1) var<storage, read> key_array: array<vec4<f32>>;
+
+    @compute @workgroup_size(8, 8)
+    fn main (@builtin(global_invocation_id) global_id: vec3<u32>) {
+      var col: u32 = global_id.x;
+      var row: u32 = global_id.y;
+      var ND4: u32 = uniforms.ND4;
+      var M: u32 = uniforms.M;
+      var N: u32 = uniforms.N;
+
+      if (row >= M || col >= ND4) {
+        return;
+      }
+
+      var headIndex: u32 = row / N;
+
+      var sum0: vec4<f32> = vec4<f32>(0.0);
+
+      for (let i = 0; i < ND4; i = i + 1) {
+        var query_row_0: vec4<f32> = query_array[row * ND4 + i];
+
+        sum0 += sum0
+      }
+
+      result_array[row * ND4 + col] = shift;
+    }
+  `;
 }
 
 class DeEmbedBlockClass extends Block {
@@ -1451,4 +1444,109 @@ class OldDeEmbedBlockClass extends Block {
       passes: [sliceEmbedCopyCommand, ...deEmbedPasses],
     };
   }
+}
+
+class NaiveMatMulBlockClass extends Block {
+  constructor() {
+    super();
+    this.name = "naiveMatMul";
+    this.pipelineCache = new Map();
+  }
+
+  getPipeline() {
+    const pipelineCacheKey = this.name; // No param optimization.
+    if (this.pipelineCache.has(pipelineCacheKey)) return this.pipelineCache.get(pipelineCacheKey);
+    const pipeline = this.initPipeline(this.matMulShader, [this.u_s_Layout, this.r_r_Layout], `${this.name}_Pipeline`);
+    this.pipelineCache.set(pipelineCacheKey, pipeline);
+    return pipeline;
+  }
+
+  newInstance(rows, cols, shared, bufA, bufB) {
+    const pipeline = this.getPipeline();
+    const uniformBuffer = this.initBuffer(["uniform", "copy_to"], [4]);
+    const resultBuffer = this.initBuffer(["storage", "copy_from"], [rows, cols]);
+    const opBindGroup = this.initBindGroup(this.u_s_Layout, [uniformBuffer, resultBuffer], `${this.name}_OutputG`);
+    const inputBindGroup = this.initBindGroup(this.r_r_Layout, [bufA, bufB], `${this.name}_InputG`);
+    const workgroups = { x: wgSize(cols, 16), y: wgSize(rows, 16), z: 1 };
+    this.device.queue.writeBuffer(uniformBuffer, 0, new Uint32Array([rows, cols, shared]));
+
+    return {
+      resultBuffer,
+      passes: [
+        {
+          flag: "compute",
+          pipeline,
+          groups: [opBindGroup, inputBindGroup],
+          workgroups,
+        },
+      ],
+    };
+  }
+
+  // Experimenting with preloading all weights, not too important just style.
+  preloadInstance(cols, shared, bufB) {
+    this.cols = cols;
+    this.shared = shared;
+    this.weightsBuf = bufB;
+
+    return (newPreloadedInstance = (rows, bufA) => {
+      const pipeline = this.getPipeline();
+      const uniformBuffer = this.initBuffer(["uniform", "copy_to"], [4]);
+      const resultBuffer = this.initBuffer(["storage", "copy_from"], [rows, this.cols]);
+      const opBindGroup = this.initBindGroup(this.u_s_Layout, [uniformBuffer, resultBuffer], `${this.name}_OutputG`);
+      const inputBindGroup = this.initBindGroup(this.r_r_Layout, [bufA, this.weightsBuf], `${this.name}_InputG`);
+      const workgroups = { x: wgSize(this.cols, 16), y: wgSize(rows, 16), z: 1 };
+      this.device.queue.writeBuffer(uniformBuffer, 0, new Uint32Array([rows, this.cols, this.shared]));
+
+      return {
+        resultBuffer,
+        passes: [
+          {
+            flag: "compute",
+            pipeline,
+            groups: [opBindGroup, inputBindGroup],
+            workgroups,
+          },
+        ],
+      };
+    });
+  }
+
+  matMulShader = `
+    struct Matrix {
+        data: array<f32>,
+    }
+
+    struct Uniforms {
+      dimY: u32, // row dimension of A and row dimension of C
+      dimX: u32, // col dimension of B and col dimension of C
+      dimS: u32, // shared dimension of A and B
+    };
+
+    @group(1) @binding(0) var<storage, read> A: Matrix;
+    @group(1) @binding(1) var<storage, read> B: Matrix;
+
+    @group(0) @binding(1) var<storage, read_write> C: Matrix;
+    @group(0) @binding(0) var<uniform> dimBuffer: Uniforms;
+
+    @compute @workgroup_size(16, 16)
+    fn main (@builtin(global_invocation_id) global_id: vec3<u32>) {
+        let col: u32 = global_id.x;
+        let row: u32 = global_id.y;
+        let dimX: u32 = dimBuffer.dimX;
+        let dimY: u32 = dimBuffer.dimY;
+        let dimS: u32 = dimBuffer.dimS;
+
+        if (row >= dimY || col >= dimX) {
+          return;
+        }
+
+        var sum: f32 = 0.0;
+        for (var i: u32 = 0; i < dimS; i = i + 1) {
+            sum = sum + A.data[row * dimS + i] * B.data[i * dimX + col];
+        }
+
+        C.data[row * dimX + col] = sum;
+      }
+  `;
 }
