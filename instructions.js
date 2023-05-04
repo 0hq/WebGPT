@@ -1156,6 +1156,7 @@ class AttentionBlockClass extends Block {
     };
   }
 
+  // Add transpose for this for non-coalesced key array.
   splitShader = `
     struct Meta {
       M: u32,
@@ -1187,6 +1188,88 @@ class AttentionBlockClass extends Block {
     }
   `;
 
+  formatQShader = `
+    struct Meta {
+      M: u32,
+      N: u32,
+      HSize: u32,
+    }
+
+    @group(1) @binding(0) var<storage, read> input_array: array<f32>;
+
+    @group(0) @binding(0) var<uniform> uniforms: Meta;
+    @group(0) @binding(1) var<storage, read_write> result_array: array<f32>;
+
+    var<workgroup> tile: array<array<f32, 8>, 8>;
+
+    @compute @workgroup_size(8, 8)
+    fn main (@builtin(local_invocation_id) local_id: vec3<u32>, @builtin(workgroup_id) workgroup_id: vec3<u32>) {
+      let col: u32 = workgroup_id.x * 8 + local_id.x;
+      let row: u32 = workgroup_id.y * 8 + local_id.y;
+      let N: u32 = uniforms.N;
+      let M: u32 = uniforms.M;
+
+      // Load a tile from input_array to shared memory tile
+      if (row < M && col < N) {
+          tile[local_id.y][local_id.x] = input_array[row * N + col];
+      }
+
+      workgroupBarrier(); // Ensure all threads have finished writing to the shared memory before proceeding
+
+      let HSize: u32 = uniforms.HSize;
+      let xOffset: u32 = col % HSize;
+      let yOffset: u32 = row * HSize + (col / HSize) * HSize * M;
+
+      // Write the tile to result_array
+      if (row < M && col < N) {
+          result_array[yOffset + xOffset] = tile[local_id.y][local_id.x];
+      }
+    } 
+  `;
+
+  transposeShader = `
+    struct Meta {
+      M: u32,
+      N: u32,
+    }
+    
+    @group(1) @binding(0) var<storage, read> input_array: array<f32>;
+    
+    @group(0) @binding(0) var<uniform> uniforms: Meta;
+    @group(0) @binding(1) var<storage, read_write> result_array: array<f32>;
+    
+    // Bank conflicts?
+    var<workgroup> tile: array<array<f32, 8>, 8>;
+    
+    @compute @workgroup_size(8, 8)
+    fn main (@builtin(workgroup_id) wg_id: vec3<u32>,  @builtin(local_invocation_id) local_id: vec3<u32>) {
+      let col: u32 = wg_id.x;
+      let row: u32 = wg_id.y;
+      let N: u32 = uniforms.N;
+      let M: u32 = uniforms.M;
+
+      let tile_col = col * 8u + local_id.x;
+      let tile_row = row * 8u + local_id.y;
+    
+      // Load a tile from input_array to shared memory tile
+      if (tile_row < M && tile_col < N) {
+        tile[local_id.y][local_id.x] = input_array[tile_row * N + tile_col];
+      }
+    
+      workgroupBarrier(); // Ensure all threads have finished writing to the shared memory before proceeding
+    
+      // Compute transposed coordinates
+      let transposed_col: u32 = row * 8u + local_id.x;
+      let transposed_row: u32 = col * 8u + local_id.y;
+    
+      // Write the transposed tile to result_array
+      if (transposed_col < M && transposed_row < N) {
+        result_array[transposed_row * M + transposed_col] = tile[local_id.x][local_id.y]; // This line was incorrect
+      }
+    }
+  `;
+
+  // Test then vectorize.
   fusedAttentionShader = `
     struct Meta {
       M: u32, 
@@ -1221,6 +1304,42 @@ class AttentionBlockClass extends Block {
       }
 
       result_array[row * N + col] = sum * uniforms.attentionScale;
+    }
+  `;
+
+  fusedVectorizedAttentionShader = `
+    struct Meta {
+      M: u32, 
+      ND4: u32, 
+      HSizeD4: u32,
+      attentionScale: f32,
+    };
+
+    @group(1) @binding(0) var<storage, read> query_array: array<vec4<f32>>;
+    @group(1) @binding(1) var<storage, read> key_array: array<vec4<f32>>;
+
+    @group(0) @binding(0) var<uniform> uniforms: Meta;
+    @group(0) @binding(1) var<storage, read_write> result_array: array<vec4<f32>>;
+
+    @compute @workgroup_size(8, 8)
+    fn main (@builtin(global_invocation_id) global_id: vec3<u32>) {
+      let col: u32 = global_id.x;
+      let row: u32 = global_id.y;
+      let M: u32 = uniforms.M;
+      let ND4: u32 = uniforms.N;
+      let HSizeD4: u32 = uniforms.HSize;
+
+      if (row >= M || col >= N) {
+        return;
+      }
+
+      let head: u32 = row / M;
+      var sum0: f32 = 0.0;
+      for (var i: u32 = 0; i < HSizeD4; i = i + 1) {
+        sum0 = sum + dot(query_array[row * HSizeD4 + i], key_array[col * ND4 + i + head * HSizeD4]);
+      }
+
+      result_array[row * N + col] = sum0 * uniforms.attentionScale;
     }
   `;
 

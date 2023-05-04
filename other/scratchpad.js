@@ -777,73 +777,116 @@ struct BMeta {
 }
 
 
-class TransposeBlockClass extends Block {
-  constructor() {
-    super();
-    this.name = "transpose";
-    this.pipelineCache = new Map();
-  }
-
-  getPipeline() {
-    const pipelineCacheKey = this.name; // No param optimization.
-    if (this.pipelineCache.has(pipelineCacheKey)) return this.pipelineCache.get(pipelineCacheKey);
-    const pipeline = this.initPipeline(this.transposeShader, [this.u_s_Layout, this.r_r_Layout], `${this.name}_Pipeline`);
-    this.pipelineCache.set(pipelineCacheKey, pipeline);
-    return pipeline;
-  }
-
-  newInstance(rows, cols, inputBuf) {
-    const pipeline = this.getPipeline();
-    const uniformBuffer = this.initBuffer(["uniform", "copy_to"], [4]);
-    const resultBuffer = this.initBuffer(["storage", "copy_from"], [rows, cols]);
-    const opBindGroup = this.initBindGroup(this.u_s_Layout, [uniformBuffer, resultBuffer], `${this.name}_OpG`);
-    const inputBindGroup = this.initBindGroup(this.r_r_Layout, [inputBuf], `${this.name}_InputG`);
-    const workgroups = { x: wgSize(cols, 16), y: wgSize(rows, 16), z: 1 };
-    this.device.queue.writeBuffer(uniformBuffer, 0, new Uint32Array([rows, cols]));
-
-    return {
-      resultBuffer,
-      passes: [
-        {
-          flag: "compute",
-          pipeline,
-          groups: [opBindGroup, inputBindGroup],
-          workgroups,
-        },
-      ],
-    };
-  }
-
-  transposeShader = `
-    struct Matrix {
-      data: array<f32>,
+ fusedAttentionShaderNew = `
+    struct Meta {
+      M: u32,
+      N: u32,
+      ND4: u32,
+      KD4: u32,
+      attentionScale: f32,
     }
 
-    struct Dimensions {
-      dimY: u32, // row dimension of input matrix
-      dimX: u32, // col dimension of input matrix
-    };
+    @group(1) @binding(0) var<storage,read> query_array: array<vec4<f32>>;
+    @group(1) @binding(1) var<storage,read> key_array: array<vec4<f32>>;
 
-    @group(0) @binding(0) var<uniform> DimBuffer: Dimensions;
-    @group(0) @binding(1) var<storage, read_write> Result: Matrix;
+    @group(0) @binding(0) var<uniform> uniforms: Meta;
+    @group(0) @binding(1) var<storage,read_write> array_c: array<vec4<f32>>;
 
-    @group(1) @binding(0) var<storage, read> Input: Matrix;
-
-    @compute @workgroup_size(16, 16)
+    @compute @workgroup_size(8, 8)
     fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
-      let col: u32 = global_id.x;
-      let row: u32 = global_id.y;
-      let dimX: u32 = DimBuffer.dimX;
-      let dimY: u32 = DimBuffer.dimY;
+      var M: u32 = uniforms.M;
+      var N: u32 = uniforms.N;
+      var ND4: u32 = uniforms.ND4;
+      var KD4: u32 = uniforms.KD4;
+      var x: u32 = global_id.x;
+      var y: u32 = global_id.y;
 
-      if (row >= dimY || col >= dimX) {
+      if (x * 8 >= N || y * 4 >= M) {
         return;
       }
 
-      Result.data[row * dimX + col] = Input.data[col * dimY + row];
-    }
-  `;
-}
+      var sum00: vec4<f32> = vec4<f32>();
+      var sum01: vec4<f32> = vec4<f32>();
+      var sum02: vec4<f32> = vec4<f32>();
+      var sum03: vec4<f32> = vec4<f32>();
+      var sum10: vec4<f32> = vec4<f32>();
+      var sum11: vec4<f32> = vec4<f32>();
+      var sum12: vec4<f32> = vec4<f32>();
+      var sum13: vec4<f32> = vec4<f32>();
+
+      for(var k: u32 = 0u; k < KD4; k = k + 1u) {
+        var arow0: vec4<f32> = query_array[(y * 4u + 0u) * KD4 + k];
+        var arow1: vec4<f32> = query_array[(y * 4u + 1u) * KD4 + k];
+        var arow2: vec4<f32> = query_array[(y * 4u + 2u) * KD4 + k];
+        var arow3: vec4<f32> = query_array[(y * 4u + 3u) * KD4 + k];
+        var brow: vec4<f32>;
+
+        brow = key_array[(k * 4u + 0u) * ND4 + x * 2u + 0u];
+        sum00 = vec4<f32>(arow0.x) * brow + sum00;
+        sum01 = vec4<f32>(arow1.x) * brow + sum01;
+        sum02 = vec4<f32>(arow2.x) * brow + sum02;
+        sum03 = vec4<f32>(arow3.x) * brow + sum03;
+
+        brow = key_array[(k * 4u + 0u) * ND4 + x * 2u + 1u];
+        sum10 = vec4<f32>(arow0.x) * brow + sum10;
+        sum11 = vec4<f32>(arow1.x) * brow + sum11;
+        sum12 = vec4<f32>(arow2.x) * brow + sum12;
+        sum13 = vec4<f32>(arow3.x) * brow + sum13;
+
+        brow = key_array[(k * 4u + 1u) * ND4 + x * 2u + 0u];
+        sum00 = vec4<f32>(arow0.y) * brow + sum00;
+        sum01 = vec4<f32>(arow1.y) * brow + sum01;
+        sum02 = vec4<f32>(arow2.y) * brow + sum02;
+        sum03 = vec4<f32>(arow3.y) * brow + sum03;
+
+        brow = key_array[(k * 4u + 1u) * ND4 + x * 2u + 1u];
+        sum10 = vec4<f32>(arow0.y) * brow + sum10;
+        sum11 = vec4<f32>(arow1.y) * brow + sum11;
+        sum12 = vec4<f32>(arow2.y) * brow + sum12;
+        sum13 = vec4<f32>(arow3.y) * brow + sum13;
+
+        brow = key_array[(k * 4u + 2u) * ND4 + x * 2u + 0u];
+        sum00 = vec4<f32>(arow0.z) * brow + sum00;
+        sum01 = vec4<f32>(arow1.z) * brow + sum01;
+        sum02 = vec4<f32>(arow2.z) * brow + sum02;
+        sum03 = vec4<f32>(arow3.z) * brow + sum03;
+
+        brow = key_array[(k * 4u + 2u) * ND4 + x * 2u + 1u];
+        sum10 = vec4<f32>(arow0.z) * brow + sum10;
+        sum11 = vec4<f32>(arow1.z) * brow + sum11;
+        sum12 = vec4<f32>(arow2.z) * brow + sum12;
+        sum13 = vec4<f32>(arow3.z) * brow + sum13;
+
+        brow = key_array[(k * 4u + 3u) * ND4 + x * 2u + 0u];
+        sum00 = vec4<f32>(arow0.w) * brow + sum00;
+        sum01 = vec4<f32>(arow1.w) * brow + sum01;
+        sum02 = vec4<f32>(arow2.w) * brow + sum02;
+        sum03 = vec4<f32>(arow3.w) * brow + sum03;
+
+        brow = key_array[(k * 4u + 3u) * ND4 + x * 2u + 1u];
+        sum10 = vec4<f32>(arow0.w) * brow + sum10;
+        sum11 = vec4<f32>(arow1.w) * brow + sum11;
+        sum12 = vec4<f32>(arow2.w) * brow + sum12;
+        sum13 = vec4<f32>(arow3.w) * brow + sum13;
+      }
+
+      if (y * 4u + 0u < M) {
+        array_c[x * 2u + 0u + (y * 4u + 0u) * ND4] = sum00;
+        array_c[x * 2u + 1u + (y * 4u + 0u) * ND4] = sum10;
+      }
+      if (y * 4u + 1u < M) {
+        array_c[x * 2u + 0u + (y * 4u + 1u) * ND4] = sum01;
+        array_c[x * 2u + 1u + (y * 4u + 1u) * ND4] = sum11;
+      }
+      if (y * 4u + 2u < M) {
+        array_c[x * 2u + 0u + (y * 4u + 2u) * ND4] = sum02;
+        array_c[x * 2u + 1u + (y * 4u + 2u) * ND4] = sum12;
+      }
+      if (y * 4u + 3u < M) {
+        array_c[x * 2u + 0u + (y * 4u + 3u) * ND4] = sum03;
+        array_c[x * 2u + 1u + (y * 4u + 3u) * ND4] = sum13;
+      }
+    `;
 
 
   // In progress.
@@ -869,5 +912,5 @@ class TransposeBlockClass extends Block {
   //      array_c[xMod * 2u + 1u + x2Offset + (y * 4u + 3u) * uniforms.TOffset] = vec4<f32>(4.0);
   //    }
   //  `,
-  
+
 */
