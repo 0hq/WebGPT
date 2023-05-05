@@ -25,7 +25,6 @@ class Block {
   }
 
   initBuffer(ops, dims) {
-    console.log(ops, dims, this.bufferSize(dims[0], dims[1] || 1, dims[2] || 1));
     const buffer = this.device.createBuffer({
       size: this.bufferSize(dims[0], dims[1] || 1, dims[2] || 1),
       usage: ops.map((u) => bufferUsageDict[u]).reduce((a, b) => a | b),
@@ -1339,16 +1338,6 @@ class DeEmbedBlockClass extends Block {
     const slicedEmbedOutputBuffer = this.initBuffer(["storage", "copy_to"], [n_embd]);
     const deEmbedOutputBuffer = this.initBuffer(["map_read", "copy_to"], [vocab_size]);
 
-    console.log("n_embd", n_embd);
-    console.log("vocab_size", vocab_size);
-    console.log("padded_vocab_size", padded_vocab_size);
-    console.log("seq_length", seq_length);
-    console.log("vocab_chunk_size", vocab_chunk_size);
-    console.log("embedBuffer", embedBuffer);
-    console.log("deEmbeddingsBuffers", deEmbeddingsBuffers);
-    console.log("slicedEmbedOutputBuffer", slicedEmbedOutputBuffer);
-    console.log("deEmbedOutputBuffer", deEmbedOutputBuffer);
-
     const sliceEmbedCopyCommand = {
       flag: "copy",
       src: embedBuffer,
@@ -1357,10 +1346,6 @@ class DeEmbedBlockClass extends Block {
       dstOffset: 0,
       size: this.bufferSize(1, n_embd),
     };
-
-    console.log("srcOffset", this.bufferSize(seq_length - 1, n_embd));
-    console.log("dstOffset", 0);
-    console.log("size", this.bufferSize(1, n_embd));
 
     const deEmbedPasses = deEmbeddingsBuffers.flatMap((embdBuffer, i) => {
       // Some future optimizations where we can assume that vocab_size is consistent.
@@ -1389,8 +1374,6 @@ class DeEmbedBlockClass extends Block {
       ];
     });
 
-    console.log([sliceEmbedCopyCommand, ...deEmbedPasses]);
-
     return {
       resultBuffer: deEmbedOutputBuffer,
       passes: [sliceEmbedCopyCommand, ...deEmbedPasses],
@@ -1414,9 +1397,9 @@ class DeEmbedBlockClass extends Block {
       var N: u32 = uniforms.N;
       var ND4: u32 = uniforms.ND4;
       var KD4: u32 = uniforms.KD4;
-      var colD4: u32 = global_id.x;
+      var colD8: u32 = global_id.x;
 
-      if (colD4 >= ND4) {
+      if (colD8 * 8 >= N) {
         return;
       }
 
@@ -1427,34 +1410,36 @@ class DeEmbedBlockClass extends Block {
         var arow0: vec4<f32> = embed_vector[k];
         var brow: vec4<f32>;
 
-        brow = deembed_matrix[(k * 4u + 0u) * ND4 + colD4 * 2u + 0u];
+        brow = deembed_matrix[(k * 4u + 0u) * ND4 + colD8 * 2u + 0u];
         sum00 = vec4<f32>(arow0.x) * brow + sum00;
 
-        brow = deembed_matrix[(k * 4u + 0u) * ND4 + colD4 * 2u + 1u];
+        brow = deembed_matrix[(k * 4u + 0u) * ND4 + colD8 * 2u + 1u];
         sum10 = vec4<f32>(arow0.x) * brow + sum10;
        
-        brow = deembed_matrix[(k * 4u + 1u) * ND4 + colD4 * 2u + 0u];
+        brow = deembed_matrix[(k * 4u + 1u) * ND4 + colD8 * 2u + 0u];
         sum00 = vec4<f32>(arow0.y) * brow + sum00;
        
-        brow = deembed_matrix[(k * 4u + 1u) * ND4 + colD4 * 2u + 1u];
+        brow = deembed_matrix[(k * 4u + 1u) * ND4 + colD8 * 2u + 1u];
         sum10 = vec4<f32>(arow0.y) * brow + sum10;
        
-        brow = deembed_matrix[(k * 4u + 2u) * ND4 + colD4 * 2u + 0u];
+        brow = deembed_matrix[(k * 4u + 2u) * ND4 + colD8 * 2u + 0u];
         sum00 = vec4<f32>(arow0.z) * brow + sum00;
         
-        brow = deembed_matrix[(k * 4u + 2u) * ND4 + colD4 * 2u + 1u];
+        brow = deembed_matrix[(k * 4u + 2u) * ND4 + colD8 * 2u + 1u];
         sum10 = vec4<f32>(arow0.z) * brow + sum10;
        
-        brow = deembed_matrix[(k * 4u + 3u) * ND4 + colD4 * 2u + 0u];
+        brow = deembed_matrix[(k * 4u + 3u) * ND4 + colD8 * 2u + 0u];
         sum00 = vec4<f32>(arow0.w) * brow + sum00;
 
-        brow = deembed_matrix[(k * 4u + 3u) * ND4 + colD4 * 2u + 1u];
+        brow = deembed_matrix[(k * 4u + 3u) * ND4 + colD8 * 2u + 1u];
         sum10 = vec4<f32>(arow0.w) * brow + sum10;
       }
 
-      array_output[colD4 * 2u + 0u] = sum00;
-      if (colD4 * 4u + 4u < N) {
-        array_output[colD4 * 2u + 1u] = sum10;
+      if (colD8 * 8u + 0u < N) {
+        array_output[colD8 * 2u + 0u] = sum00;
+      }
+      if (colD8 * 8u + 4u < N) {
+        array_output[colD8 * 2u + 1u] = sum10;
       }
     }
   `;

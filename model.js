@@ -219,11 +219,11 @@ class GPT {
       intermediateBuffer = resultBuffer;
       this.computePasses.push(...passes);
     }
-    {
-      const { passes, resultBuffer } = OldDeEmbedBlock.newInstance(vocab_size, n_embd, seq_length, intermediateBuffer, embeddingsBuffer, NaiveMatMulBlock);
-      intermediateBuffer = resultBuffer;
-      this.computePasses.push(...passes);
-    }
+    // {
+    //   const { passes, resultBuffer } = OldDeEmbedBlock.newInstance(vocab_size, n_embd, seq_length, intermediateBuffer, embeddingsBuffer, NaiveMatMulBlock);
+    //   intermediateBuffer = resultBuffer;
+    //   this.computePasses.push(...passes);
+    // }
     const resultBuffer = intermediateBuffer;
 
     // ---------------- Compute Passes ----------------
@@ -247,8 +247,6 @@ class GPT {
     await resultBuffer.mapAsync(GPUMapMode.READ);
     const output = resultBuffer.getMappedRange();
     const outputArray = new Float32Array(output).slice(0); // Copy the array, otherwise it'll be destroyed.
-
-    console.log("Output:", outputArray);
 
     destroyOperationBuffers();
 
@@ -291,11 +289,12 @@ class GPT {
           return vocabChunkSizeCalc(vocab_size, n_embd, splits + 1, maxStorageBufferBindingSize);
         }
       }
-      console.log("Vocab chunk size:", vocab_chunk_size);
+      console.log("chunk byte size:", vocab_chunk_size);
       console.log("Vocab chunk instances:", splits);
       return { vocab_chunk_size: vocab_chunk_size / n_embd, splits };
     }
 
+    console.log("Token param:", tokenParam);
     console.log("Minsplits:", minSplits);
     console.log("MaxStorageBufferBindingSize:", this.device.limits.maxStorageBufferBindingSize);
     const { vocab_chunk_size, splits } = vocabChunkSizeCalc(params.vocab_size, params.n_embd, minSplits, this.device.limits.maxStorageBufferBindingSize);
@@ -315,31 +314,13 @@ class GPT {
       const offset = i * vocab_chunk_size;
       const size = i == vocab_chunk_instances - 1 ? vocab_size - offset : vocab_chunk_size;
       console.log(`Loading deEmbedding chunk ${i + 1}/${vocab_chunk_instances}...`);
-      console.log(`Offset: ${offset}, Size: ${size}`);
 
       // Chunks are stored in row-major order and are of dimensions n_embd x vocab_chunk_size.
       // Embedding weights are imported in column-major order and are of dimensions vocab_size x n_embd.
       // We pre-transpose the chunk for the deEmbedding process for the matmul. Could do this on GPU later.
-
-      console.log("vocab chunk size", vocab_chunk_size);
-      console.log("n_embd", n_embd);
-      console.log("offset", offset);
-      console.log("size", size);
-      console.log(
-        "Embedding weights:",
-        embeddingWeights.subarray(offset * n_embd, offset * n_embd + size * n_embd),
-        Array.from(embeddingWeights.subarray(offset * n_embd, offset * n_embd + size * n_embd))
-      );
-      console.log(
-        "Concat",
-        Array.from(embeddingWeights.subarray(offset * n_embd, offset * n_embd + size * n_embd)).concat(...zeros((vocab_chunk_size - size) * n_embd))
-      );
       const chunkedWeights = embeddingWeights.subarray(offset * n_embd, offset * n_embd + size * n_embd);
       const padded = Array.from(chunkedWeights).concat(...zeros((vocab_chunk_size - size) * n_embd));
       const chunk = transpose(padded, vocab_chunk_size, n_embd);
-
-      console.log("Chunk:", chunk);
-      console.log("Chunk as matrix:", formatAsMatrix(chunk, n_embd, vocab_chunk_size));
       deEmbeddingsBuffers.push(this.initTensor(chunk, [n_embd, vocab_chunk_size], ["storage"]));
     }
 
