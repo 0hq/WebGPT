@@ -367,18 +367,25 @@ class TestShader {
 
   async test() {
     // ---------------- Create Passes ---------------- //
-    const { M, N } = { M: 64, N: 640 };
+    const { M, N } = { M: 4, N: 64 };
     const input_array = new Float32Array(M * N);
     const weight_array = new Float32Array(N * N);
-    const embed_array = new Float32Array(M).fill(1);
+    const seq_length = 10;
+    const embed_array = new Float32Array(seq_length * M);
+    for (let i = 0; i < seq_length * M; i++) {
+      if (i >= seq_length * M - M + 1) {
+        embed_array[i] = 1;
+      }
+    }
 
-    for (let i = 0; i < M * N; i++) input_array[i] = Math.floor(i / N);
-    for (let i = 0; i < N; i++) weight_array[i * N + i] = 1;
+    for (let i = 0; i < M * N; i++) input_array[i] = 1;
+    for (let i = 0; i < M; i++) weight_array[i * M + i] = 1;
     console.log(formatAsMatrix(input_array, M, N));
+    console.log(formatAsMatrix(embed_array, seq_length, M));
 
     const inputBuffer = this.initTensor(input_array, [M, N], ["storage"]);
     const weightBuffer = this.initTensor(weight_array, [N, N], ["storage"]);
-    const embedBuffer = this.initTensor(embed_array, [M], ["storage", "copy_from"]);
+    const embedBuffer = this.initTensor(embed_array, [seq_length, M], ["storage", "copy_from"]);
 
     this.computePasses = [];
     const push = ({ passes, resultBuffer }) => {
@@ -389,7 +396,7 @@ class TestShader {
     const numHeads = 4;
 
     let intermediateBuffer = inputBuffer;
-    intermediateBuffer = push(DeEmbedBlock.newInstance(M, N, 1, N, embedBuffer, [intermediateBuffer]));
+    intermediateBuffer = push(DeEmbedBlock.newInstance(M, N, N, seq_length, N, embedBuffer, [intermediateBuffer]));
     // intermediateBuffer = push(OutputBlock.newInstance(1, N, intermediateBuffer));
     let resultBuffer = intermediateBuffer;
 

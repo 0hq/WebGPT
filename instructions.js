@@ -25,6 +25,7 @@ class Block {
   }
 
   initBuffer(ops, dims) {
+    console.log(ops, dims, this.bufferSize(dims[0], dims[1] || 1, dims[2] || 1));
     const buffer = this.device.createBuffer({
       size: this.bufferSize(dims[0], dims[1] || 1, dims[2] || 1),
       usage: ops.map((u) => bufferUsageDict[u]).reduce((a, b) => a | b),
@@ -93,13 +94,13 @@ class FastMLPBlockClass extends Block {
 
   newInstance(rows, cols, shared, inputBuffer, weightsBuffer, biasBuffer) {
     if (cols % 16 !== 0) throw new Error("Cols must be divisible by 16.");
-    const pipeline = this.getPipeline(rows, headOffset);
+    const pipeline = this.getPipeline(rows);
     const uniformBuffer = this.initBuffer(["uniform", "copy_to"], [4]);
     const resultBuffer = this.initBuffer(["storage", "copy_from"], [rows, cols]);
     const opBindGroup = this.initBindGroup(this.u_s_Layout, [uniformBuffer, resultBuffer], `${this.name}_OpG`);
     const inputBindGroup = this.initBindGroup(this.r_r_r_Layout, [inputBuffer, weightsBuffer, biasBuffer], `${this.name}_InputG`);
     const workgroups = { x: wgSize(cols, 64), y: wgSize(rows, 32) };
-    this.device.queue.writeBuffer(uniformBuffer, 0, new Uint32Array([rows, cols, Math.ceil(cols / 4), Math.ceil(shared / 4), headOffset || 0]));
+    this.device.queue.writeBuffer(uniformBuffer, 0, new Uint32Array([rows, cols, Math.ceil(cols / 4), Math.ceil(shared / 4)]));
 
     return {
       resultBuffer,
@@ -902,6 +903,7 @@ class AttentionBlockClass extends Block {
       dimX: u32, // col dimension of Q, K, V
     };
 
+    @group(1) @binding(0) var<storage, read> Input: Matrix;
 
     @group(0) @binding(0) var<uniform> DimBuffer: Dimensions;
     @group(0) @binding(1) var<storage, read_write> Q: Matrix;
@@ -1332,11 +1334,20 @@ class DeEmbedBlockClass extends Block {
     return pipeline;
   }
 
-  newInstance(n_embd, vocab_size, seq_length, vocab_chunk_size, embedBuffer, deEmbeddingsBuffers) {
+  newInstance(n_embd, vocab_size, padded_vocab_size, seq_length, vocab_chunk_size, embedBuffer, deEmbeddingsBuffers) {
     const deEmbedPipeline = this.getPipeline();
     const slicedEmbedOutputBuffer = this.initBuffer(["storage", "copy_to"], [n_embd]);
     const deEmbedOutputBuffer = this.initBuffer(["map_read", "copy_to"], [vocab_size]);
-    console.log(vocab_size, n_embd, seq_length, vocab_chunk_size, embedBuffer, deEmbeddingsBuffers);
+
+    console.log("n_embd", n_embd);
+    console.log("vocab_size", vocab_size);
+    console.log("padded_vocab_size", padded_vocab_size);
+    console.log("seq_length", seq_length);
+    console.log("vocab_chunk_size", vocab_chunk_size);
+    console.log("embedBuffer", embedBuffer);
+    console.log("deEmbeddingsBuffers", deEmbeddingsBuffers);
+    console.log("slicedEmbedOutputBuffer", slicedEmbedOutputBuffer);
+    console.log("deEmbedOutputBuffer", deEmbedOutputBuffer);
 
     const sliceEmbedCopyCommand = {
       flag: "copy",
@@ -1347,19 +1358,18 @@ class DeEmbedBlockClass extends Block {
       size: this.bufferSize(1, n_embd),
     };
 
+    console.log("srcOffset", this.bufferSize(seq_length - 1, n_embd));
+    console.log("dstOffset", 0);
+    console.log("size", this.bufferSize(1, n_embd));
+
     const deEmbedPasses = deEmbeddingsBuffers.flatMap((embdBuffer, i) => {
       // Some future optimizations where we can assume that vocab_size is consistent.
-      const padded_vocab_chunk_size = Math.ceil(vocab_chunk_size / 4) * 4; // Each chunk must be divisible by 4.
       const uniformBuffer = this.initBuffer(["uniform", "copy_to"], [4]);
-      const resultBuffer = this.initBuffer(["storage", "copy_from"], [padded_vocab_chunk_size]);
+      const resultBuffer = this.initBuffer(["storage", "copy_from"], [vocab_chunk_size]);
       const opBindGroup = this.initBindGroup(this.u_s_Layout, [uniformBuffer, resultBuffer], `${this.name}_OpG`);
       const inputBindGroup = this.initBindGroup(this.r_r_Layout, [slicedEmbedOutputBuffer, embdBuffer], `${this.name}_InputG`);
-      const workgroups = { x: wgSize(padded_vocab_chunk_size, 32), y: 1, z: 1 };
-      this.device.queue.writeBuffer(
-        uniformBuffer,
-        0,
-        new Uint32Array([padded_vocab_chunk_size, Math.ceil(padded_vocab_chunk_size / 4), Math.ceil(n_embd / 4)])
-      );
+      const workgroups = { x: wgSize(vocab_chunk_size, 32), y: 1, z: 1 };
+      this.device.queue.writeBuffer(uniformBuffer, 0, new Uint32Array([vocab_chunk_size, Math.ceil(vocab_chunk_size / 4), Math.ceil(n_embd / 4)]));
 
       return [
         {
@@ -1374,7 +1384,7 @@ class DeEmbedBlockClass extends Block {
           srcOffset: 0,
           dst: deEmbedOutputBuffer,
           dstOffset: i * this.bufferSize(vocab_chunk_size),
-          size: this.bufferSize(vocab_chunk_size),
+          size: i == deEmbeddingsBuffers.length - 1 ? this.bufferSize(vocab_chunk_size - (padded_vocab_size - vocab_size)) : this.bufferSize(vocab_chunk_size),
         },
       ];
     });

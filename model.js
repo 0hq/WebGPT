@@ -101,7 +101,9 @@ class GPT {
 
   async run(idx) {
     const { posEmbdBuffer, layer_buffers, normGammaBuffer, normBetaBuffer, embeddingsBuffer, deEmbeddingsBuffers } = this.model;
-    const { attention_scale, n_embd, n_head, n_layer, vocab_size, hidden_size, vocab_chunk_size } = this.params;
+    const { attention_scale, n_embd, n_head, n_layer, vocab_size, hidden_size, vocab_chunk_size, vocab_chunk_instances } = this.params;
+    console.log("Running model with params:", this.params);
+    console.log("Deembedding buffers:", deEmbeddingsBuffers);
     const seq_length = idx.length;
 
     // ---------------- Create Passes ---------------- //
@@ -205,6 +207,19 @@ class GPT {
       this.computePasses.push(...passes);
     }
     {
+      const { passes, resultBuffer } = DeEmbedBlock.newInstance(
+        n_embd,
+        vocab_size,
+        vocab_chunk_size * vocab_chunk_instances,
+        seq_length,
+        vocab_chunk_size,
+        intermediateBuffer,
+        deEmbeddingsBuffers
+      );
+      intermediateBuffer = resultBuffer;
+      this.computePasses.push(...passes);
+    }
+    {
       const { passes, resultBuffer } = OldDeEmbedBlock.newInstance(vocab_size, n_embd, seq_length, intermediateBuffer, embeddingsBuffer, NaiveMatMulBlock);
       intermediateBuffer = resultBuffer;
       this.computePasses.push(...passes);
@@ -233,6 +248,8 @@ class GPT {
     const output = resultBuffer.getMappedRange();
     const outputArray = new Float32Array(output).slice(0); // Copy the array, otherwise it'll be destroyed.
 
+    console.log("Output:", outputArray);
+
     destroyOperationBuffers();
 
     return outputArray;
@@ -249,8 +266,8 @@ class GPT {
     const params = await (await fetch(`${fldr}/params_gpt.json`)).json();
 
     // Did you enable GitHub LFS? Won't work without it.
-    if (n_embd % 4 != 0) throw new Error("Model load failed: n_embd must be divisible by 4.");
-    if (n_embd % n_head != 0) throw new Error("Model load failed: n_embd must be divisible by n_head.");
+    if (params.n_embd % 4 != 0) throw new Error("Model load failed: n_embd must be divisible by 4.");
+    if (params.n_embd % params.n_head != 0) throw new Error("Model load failed: n_embd must be divisible by n_head.");
 
     // n embed is div 4, max size is div 4, vocab isnt
 
@@ -264,17 +281,26 @@ class GPT {
     function vocabChunkSizeCalc(vocab_size, n_embd, splits, maxStorageBufferBindingSize) {
       const optimisticSize = Math.ceil(vocab_size / splits / 4) * 4 * n_embd;
       const pessimiticSize = Math.floor(vocab_size / splits / 4) * 4 * n_embd;
-      let vocabChunkSize = optimisticSize;
+      let vocab_chunk_size = optimisticSize;
+      console.log("Optimistic size:", vocab_chunk_size);
       if (optimisticSize > maxStorageBufferBindingSize) {
-        vocabChunkSize = pessimiticSize;
+        vocab_chunk_size = pessimiticSize;
+        console.log("Pessimitic size:", vocab_chunk_size);
         if (pessimiticSize * splits < tokenParam) {
+          console.log("Pessimitic size is too small, increasing splits...");
           return vocabChunkSizeCalc(vocab_size, n_embd, splits + 1, maxStorageBufferBindingSize);
         }
       }
-      return { vocabChunkSize, splits };
+      console.log("Vocab chunk size:", vocab_chunk_size);
+      console.log("Vocab chunk instances:", splits);
+      return { vocab_chunk_size: vocab_chunk_size / n_embd, splits };
     }
 
-    const { vocab_chunk_size, splits } = vocabChunkSizeCalc(minSplits);
+    console.log("Minsplits:", minSplits);
+    console.log("MaxStorageBufferBindingSize:", this.device.limits.maxStorageBufferBindingSize);
+    const { vocab_chunk_size, splits } = vocabChunkSizeCalc(params.vocab_size, params.n_embd, minSplits, this.device.limits.maxStorageBufferBindingSize);
+    console.log("Vocab chunk size:", vocab_chunk_size);
+    console.log("Splits:", splits);
     params.vocab_chunk_size = vocab_chunk_size;
     params.vocab_chunk_instances = splits;
     const { block_size, n_embd, n_head, n_layer, bias, vocab_size, hidden_size, vocab_chunk_instances } = params;
@@ -294,7 +320,26 @@ class GPT {
       // Chunks are stored in row-major order and are of dimensions n_embd x vocab_chunk_size.
       // Embedding weights are imported in column-major order and are of dimensions vocab_size x n_embd.
       // We pre-transpose the chunk for the deEmbedding process for the matmul. Could do this on GPU later.
-      const chunk = transpose(embeddingWeights.subarray(offset * n_embd, offset * n_embd + size * n_embd), size, n_embd);
+
+      console.log("vocab chunk size", vocab_chunk_size);
+      console.log("n_embd", n_embd);
+      console.log("offset", offset);
+      console.log("size", size);
+      console.log(
+        "Embedding weights:",
+        embeddingWeights.subarray(offset * n_embd, offset * n_embd + size * n_embd),
+        Array.from(embeddingWeights.subarray(offset * n_embd, offset * n_embd + size * n_embd))
+      );
+      console.log(
+        "Concat",
+        Array.from(embeddingWeights.subarray(offset * n_embd, offset * n_embd + size * n_embd)).concat(...zeros((vocab_chunk_size - size) * n_embd))
+      );
+      const chunkedWeights = embeddingWeights.subarray(offset * n_embd, offset * n_embd + size * n_embd);
+      const padded = Array.from(chunkedWeights).concat(...zeros((vocab_chunk_size - size) * n_embd));
+      const chunk = transpose(padded, vocab_chunk_size, n_embd);
+
+      console.log("Chunk:", chunk);
+      console.log("Chunk as matrix:", formatAsMatrix(chunk, n_embd, vocab_chunk_size));
       deEmbeddingsBuffers.push(this.initTensor(chunk, [n_embd, vocab_chunk_size], ["storage"]));
     }
 
@@ -350,7 +395,7 @@ class GPT {
     const normGammaBuffer = this.initTensor(layerNormGamma, [n_embd], ["storage"]);
     const normBetaBuffer = this.initTensor(layerNormBeta, [n_embd], ["storage"]);
 
-    const output = { layer_buffers, embeddingsBuffer, deEmbeddingsBuffers: null, posEmbdBuffer, normGammaBuffer, normBetaBuffer };
+    const output = { layer_buffers, embeddingsBuffer, deEmbeddingsBuffers, posEmbdBuffer, normGammaBuffer, normBetaBuffer };
     console.log("Finished loading model.", output, params);
     return [output, params];
   }
