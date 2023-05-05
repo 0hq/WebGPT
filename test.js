@@ -367,18 +367,18 @@ class TestShader {
 
   async test() {
     // ---------------- Create Passes ---------------- //
-    const { M, N } = { M: 64, N: 64 };
+    const { M, N } = { M: 64, N: 640 };
     const input_array = new Float32Array(M * N);
     const weight_array = new Float32Array(N * N);
-    const beta_array = new Float32Array(N).fill(1);
+    const embed_array = new Float32Array(M).fill(1);
 
-    for (let i = 0; i < M * N; i++) input_array[i] = i;
+    for (let i = 0; i < M * N; i++) input_array[i] = Math.floor(i / N);
     for (let i = 0; i < N; i++) weight_array[i * N + i] = 1;
     console.log(formatAsMatrix(input_array, M, N));
 
     const inputBuffer = this.initTensor(input_array, [M, N], ["storage"]);
     const weightBuffer = this.initTensor(weight_array, [N, N], ["storage"]);
-    const betaBuffer = this.initTensor(beta_array, [N], ["storage"]);
+    const embedBuffer = this.initTensor(embed_array, [M], ["storage", "copy_from"]);
 
     this.computePasses = [];
     const push = ({ passes, resultBuffer }) => {
@@ -389,8 +389,8 @@ class TestShader {
     const numHeads = 4;
 
     let intermediateBuffer = inputBuffer;
-    intermediateBuffer = push(SplitQBlock.newInstance(M, N, numHeads, intermediateBuffer));
-    intermediateBuffer = push(OutputBlock.newInstance(M * numHeads, N / numHeads, intermediateBuffer));
+    intermediateBuffer = push(DeEmbedBlock.newInstance(M, N, 1, N, embedBuffer, [intermediateBuffer]));
+    // intermediateBuffer = push(OutputBlock.newInstance(1, N, intermediateBuffer));
     let resultBuffer = intermediateBuffer;
 
     // ---------------- Compute Passes ----------------
@@ -414,7 +414,7 @@ class TestShader {
     await resultBuffer.mapAsync(GPUMapMode.READ);
     const output = resultBuffer.getMappedRange();
     const outputArray = new Float32Array(output).slice(0); // Copy the array, otherwise it'll be destroyed.
-    console.log(formatAsMatrix(outputArray, M * numHeads, N / numHeads));
+    console.log(formatAsMatrix(outputArray, 1, N));
 
     // ---------------- Create Passes ---------------- //
 

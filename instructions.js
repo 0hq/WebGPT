@@ -1,5 +1,8 @@
 // --------------------- Instructions --------------------- //
 
+// All have been vectorized, but not all have been optimized with shared memory.
+// Tuning needed and more detailed benchmarking, but decent for now.
+
 class Block {
   constructor() {
     this.bufferDeletionStack = [];
@@ -1156,38 +1159,6 @@ class AttentionBlockClass extends Block {
     };
   }
 
-  // Add transpose for this for non-coalesced key array.
-  splitShader = `
-    struct Meta {
-      M: u32,
-      N: u32,
-      HSize: u32,
-    }
-
-    @group(1) @binding(0) var<storage, read> input_array: array<f32>;
-
-    @group(0) @binding(0) var<uniform> uniforms: Meta;
-    @group(0) @binding(1) var<storage, read_write> result_array: array<f32>;
-
-    @compute @workgroup_size(8, 8)
-    fn main (@builtin(global_invocation_id) global_id: vec3<u32>) {
-      var col: u32 = global_id.x;
-      var row: u32 = global_id.y;
-      var N: u32 = uniforms.N;
-      var M: u32 = uniforms.M;
-      var HSize: u32 = uniforms.HSize;
-
-      if (row >= M || col >= N) {
-        return;
-      }
-
-      var xOffset: u32 = x % uniforms.HSize;
-      var yOffset: u32 = y * uniforms.HSize + (x / uniforms.HSize) * uniforms.HSize * M;
-      
-      result_array[yOffset + xOffset] = input_array[row * N + col];
-    }
-  `;
-
   formatQShader = `
     struct Meta {
       M: u32,
@@ -1266,44 +1237,6 @@ class AttentionBlockClass extends Block {
       if (transposed_col < M && transposed_row < N) {
         result_array[transposed_row * M + transposed_col] = tile[local_id.x][local_id.y]; // This line was incorrect
       }
-    }
-  `;
-
-  // Test then vectorize.
-  fusedAttentionShader = `
-    struct Meta {
-      M: u32, 
-      N: u32, 
-      HSize: u32,
-      attentionScale: f32,
-    };
-
-    @group(1) @binding(0) var<storage, read> query_array: array<f32>;
-    @group(1) @binding(1) var<storage, read> key_array: array<f32>;
-
-    @group(0) @binding(0) var<uniform> uniforms: Meta;
-    @group(0) @binding(1) var<storage, read_write> result_array: array<f32>;
-
-    @compute @workgroup_size(8, 8)
-    fn main (@builtin(global_invocation_id) global_id: vec3<u32>) {
-      let col: u32 = global_id.x;
-      let row: u32 = global_id.y;
-      let M: u32 = uniforms.M;
-      let N: u32 = uniforms.N;
-      let HSize: u32 = uniforms.HSize;
-      let attentionScale: u32 = uniforms.attentionScale;
-
-      if (row >= M || col >= N) {
-        return;
-      }
-
-      let head: u32 = row / N;
-      var sum: f32 = 0.0;
-      for (var i: u32 = 0; i < HSize; i = i + 1) {
-          sum = sum + query_array[row * HSize + i + head * HSize * N] * key_array[row * HSize + i + head * HSize * N];
-      }
-
-      result_array[row * N + col] = sum * uniforms.attentionScale;
     }
   `;
 
@@ -1399,7 +1332,7 @@ class DeEmbedBlockClass extends Block {
     return pipeline;
   }
 
-  newInstance(vocab_size, n_embd, seq_length, vocab_chunk_size, embedBuffer, deEmbeddingsBuffers) {
+  newInstance(n_embd, vocab_size, seq_length, vocab_chunk_size, embedBuffer, deEmbeddingsBuffers) {
     const deEmbedPipeline = this.getPipeline();
     const slicedEmbedOutputBuffer = this.initBuffer(["storage", "copy_to"], [n_embd]);
     const deEmbedOutputBuffer = this.initBuffer(["map_read", "copy_to"], [vocab_size]);
@@ -1416,17 +1349,16 @@ class DeEmbedBlockClass extends Block {
 
     const deEmbedPasses = deEmbeddingsBuffers.flatMap((embdBuffer, i) => {
       // Some future optimizations where we can assume that vocab_size is consistent.
-      // Each chunk must be divisible by 4.
-      const padded_vocab_chunk_size = Math.ceil(vocab_chunk_size / 4) * 4;
+      const padded_vocab_chunk_size = Math.ceil(vocab_chunk_size / 4) * 4; // Each chunk must be divisible by 4.
       const uniformBuffer = this.initBuffer(["uniform", "copy_to"], [4]);
       const resultBuffer = this.initBuffer(["storage", "copy_from"], [padded_vocab_chunk_size]);
       const opBindGroup = this.initBindGroup(this.u_s_Layout, [uniformBuffer, resultBuffer], `${this.name}_OpG`);
       const inputBindGroup = this.initBindGroup(this.r_r_Layout, [slicedEmbedOutputBuffer, embdBuffer], `${this.name}_InputG`);
-      const workgroups = { x: wgSize(padded_vocab_chunk_size, 64), y: 1, z: 1 };
+      const workgroups = { x: wgSize(padded_vocab_chunk_size, 32), y: 1, z: 1 };
       this.device.queue.writeBuffer(
         uniformBuffer,
         0,
-        new Uint32Array([padded_vocab_chunk_size, Math.ceil(n_embd / 4), Math.ceil(padded_vocab_chunk_size / 4)])
+        new Uint32Array([padded_vocab_chunk_size, Math.ceil(padded_vocab_chunk_size / 4), Math.ceil(n_embd / 4)])
       );
 
       return [
@@ -1456,69 +1388,63 @@ class DeEmbedBlockClass extends Block {
   }
 
   deEmbedShader = `
-    struct uniforms {
+    struct Meta {
       N: u32,
-      MD4: u32,
       ND4: u32,
+      KD4: u32,
     }
 
     @group(1) @binding(0) var<storage,read> embed_vector: array<vec4<f32>>;
-    @group(1) @binding(1) var<storage,read> array_matrix: array<vec4<f32>>;
-    @group(0) @binding(0) var<uniform> uniforms: uniforms;
+    @group(1) @binding(1) var<storage,read> deembed_matrix: array<vec4<f32>>;
+    @group(0) @binding(0) var<uniform> uniforms: Meta;
     @group(0) @binding(1) var<storage,read_write> array_output: array<vec4<f32>>;
 
     @compute @workgroup_size(4)
     fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
-      var colD16: u32 = global_id.x;
-      var MD4: u32 = uniforms.MD4;
-      var ND4: u32 = uniforms.ND4;
       var N: u32 = uniforms.N;
-      
-      // Prevent out of bounds access + uneven matrix N dim sizes.
-      if (colD16 * 16 >= N) {
+      var ND4: u32 = uniforms.ND4;
+      var KD4: u32 = uniforms.KD4;
+      var colD4: u32 = global_id.x;
+
+      if (colD4 >= ND4) {
         return;
       }
 
-      var sum00: vec4<f32> = vec4<f32>(0.0);
-      var sum01: vec4<f32> = vec4<f32>(0.0);
-      var sum02: vec4<f32> = vec4<f32>(0.0);
-      var sum03: vec4<f32> = vec4<f32>(1.0);
+      var sum00: vec4<f32> = vec4<f32>();
+      var sum10: vec4<f32> = vec4<f32>();
 
-      for (var i: u32 = 0u; i < MD4; i = i + 1u) {
-        var embedChunk = embed_vector[i];
- 
-        sum00 = sum00 + vec4<f32>(embedChunk.x) * array_matrix[(i * 4u + 0u) * ND4 + colD16 * 4 + 0u];
-        sum01 = sum01 + vec4<f32>(embedChunk.x) * array_matrix[(i * 4u + 0u) * ND4 + colD16 * 4 + 1u];
-        sum02 = sum02 + vec4<f32>(embedChunk.x) * array_matrix[(i * 4u + 0u) * ND4 + colD16 * 4 + 2u];
-        sum03 = sum03 + vec4<f32>(embedChunk.x) * array_matrix[(i * 4u + 0u) * ND4 + colD16 * 4 + 3u];
+      for(var k: u32 = 0u; k < KD4; k = k + 1u) {
+        var arow0: vec4<f32> = embed_vector[k];
+        var brow: vec4<f32>;
 
-        sum00 = sum00 + vec4<f32>(embedChunk.y) * array_matrix[(i * 4u + 1u) * ND4 + colD16 * 4 + 0u];
-        sum01 = sum01 + vec4<f32>(embedChunk.y) * array_matrix[(i * 4u + 1u) * ND4 + colD16 * 4 + 1u];
-        sum02 = sum02 + vec4<f32>(embedChunk.y) * array_matrix[(i * 4u + 1u) * ND4 + colD16 * 4 + 2u];
-        sum03 = sum03 + vec4<f32>(embedChunk.y) * array_matrix[(i * 4u + 1u) * ND4 + colD16 * 4 + 3u];
+        brow = deembed_matrix[(k * 4u + 0u) * ND4 + colD4 * 2u + 0u];
+        sum00 = vec4<f32>(arow0.x) * brow + sum00;
 
-        sum00 = sum00 + vec4<f32>(embedChunk.z) * array_matrix[(i * 4u + 2u) * ND4 + colD16 * 4 + 0u];
-        sum01 = sum01 + vec4<f32>(embedChunk.z) * array_matrix[(i * 4u + 2u) * ND4 + colD16 * 4 + 1u];
-        sum02 = sum02 + vec4<f32>(embedChunk.z) * array_matrix[(i * 4u + 2u) * ND4 + colD16 * 4 + 2u];
-        sum03 = sum03 + vec4<f32>(embedChunk.z) * array_matrix[(i * 4u + 2u) * ND4 + colD16 * 4 + 3u];
+        brow = deembed_matrix[(k * 4u + 0u) * ND4 + colD4 * 2u + 1u];
+        sum10 = vec4<f32>(arow0.x) * brow + sum10;
+       
+        brow = deembed_matrix[(k * 4u + 1u) * ND4 + colD4 * 2u + 0u];
+        sum00 = vec4<f32>(arow0.y) * brow + sum00;
+       
+        brow = deembed_matrix[(k * 4u + 1u) * ND4 + colD4 * 2u + 1u];
+        sum10 = vec4<f32>(arow0.y) * brow + sum10;
+       
+        brow = deembed_matrix[(k * 4u + 2u) * ND4 + colD4 * 2u + 0u];
+        sum00 = vec4<f32>(arow0.z) * brow + sum00;
+        
+        brow = deembed_matrix[(k * 4u + 2u) * ND4 + colD4 * 2u + 1u];
+        sum10 = vec4<f32>(arow0.z) * brow + sum10;
+       
+        brow = deembed_matrix[(k * 4u + 3u) * ND4 + colD4 * 2u + 0u];
+        sum00 = vec4<f32>(arow0.w) * brow + sum00;
 
-        sum00 = sum00 + vec4<f32>(embedChunk.w) * array_matrix[(i * 4u + 3u) * ND4 + colD16 * 4 + 0u];
-        sum01 = sum01 + vec4<f32>(embedChunk.w) * array_matrix[(i * 4u + 3u) * ND4 + colD16 * 4 + 1u];
-        sum02 = sum02 + vec4<f32>(embedChunk.w) * array_matrix[(i * 4u + 3u) * ND4 + colD16 * 4 + 2u];
-        sum03 = sum03 + vec4<f32>(embedChunk.w) * array_matrix[(i * 4u + 3u) * ND4 + colD16 * 4 + 3u];
+        brow = deembed_matrix[(k * 4u + 3u) * ND4 + colD4 * 2u + 1u];
+        sum10 = vec4<f32>(arow0.w) * brow + sum10;
       }
 
-      if (colD16 * 4u + 0u < N) {
-        array_output[colD16 * 4u + 0u] = sum00;
-      }
-      if (colD16 * 4u + 1u < N) {
-        array_output[colD16 * 4u + 1u] = sum01;
-      }
-      if (colD16 * 4u + 2u < N) {
-        array_output[colD16 * 4u + 2u] = sum02;
-      }
-      if (colD16 * 4u + 3u < N) {
-        array_output[colD16 * 4u + 3u] = sum03;
+      array_output[colD4 * 2u + 0u] = sum00;
+      if (colD4 * 4u + 4u < N) {
+        array_output[colD4 * 2u + 1u] = sum10;
       }
     }
   `;
