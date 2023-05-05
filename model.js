@@ -219,11 +219,6 @@ class GPT {
       intermediateBuffer = resultBuffer;
       this.computePasses.push(...passes);
     }
-    // {
-    //   const { passes, resultBuffer } = OldDeEmbedBlock.newInstance(vocab_size, n_embd, seq_length, intermediateBuffer, embeddingsBuffer, NaiveMatMulBlock);
-    //   intermediateBuffer = resultBuffer;
-    //   this.computePasses.push(...passes);
-    // }
     const resultBuffer = intermediateBuffer;
 
     // ---------------- Compute Passes ----------------
@@ -318,6 +313,8 @@ class GPT {
       // Chunks are stored in row-major order and are of dimensions n_embd x vocab_chunk_size.
       // Embedding weights are imported in column-major order and are of dimensions vocab_size x n_embd.
       // We pre-transpose the chunk for the deEmbedding process for the matmul. Could do this on GPU later.
+
+      // Optimize this?
       const chunkedWeights = embeddingWeights.subarray(offset * n_embd, offset * n_embd + size * n_embd);
       const padded = Array.from(chunkedWeights).concat(...zeros((vocab_chunk_size - size) * n_embd));
       const chunk = transpose(padded, vocab_chunk_size, n_embd);

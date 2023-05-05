@@ -741,6 +741,133 @@ class EmbedBlockClass extends Block {
   }
 }
 
+class DeEmbedBlockClass extends Block {
+  constructor() {
+    super();
+    this.name = "deembed";
+    this.pipelineCache = new Map();
+  }
+
+  getPipeline() {
+    const pipelineCacheKey = this.name; // No param optimization.
+    if (this.pipelineCache.has(pipelineCacheKey)) return this.pipelineCache.get(pipelineCacheKey);
+    const pipeline = this.initPipeline(this.deEmbedShader, [this.u_s_Layout, this.r_r_Layout], `${this.name}_Pipeline`);
+    this.pipelineCache.set(pipelineCacheKey, pipeline);
+    return pipeline;
+  }
+
+  newInstance(n_embd, vocab_size, padded_vocab_size, seq_length, vocab_chunk_size, embedBuffer, deEmbeddingsBuffers) {
+    const deEmbedPipeline = this.getPipeline();
+    const slicedEmbedOutputBuffer = this.initBuffer(["storage", "copy_to"], [n_embd]);
+    const deEmbedOutputBuffer = this.initBuffer(["map_read", "copy_to"], [vocab_size]);
+
+    const sliceEmbedCopyCommand = {
+      flag: "copy",
+      src: embedBuffer,
+      srcOffset: this.bufferSize(seq_length - 1, n_embd),
+      dst: slicedEmbedOutputBuffer,
+      dstOffset: 0,
+      size: this.bufferSize(1, n_embd),
+    };
+
+    const deEmbedPasses = deEmbeddingsBuffers.flatMap((embdBuffer, i) => {
+      // Some future optimizations where we can assume that vocab_size is consistent.
+      const uniformBuffer = this.initBuffer(["uniform", "copy_to"], [4]);
+      const resultBuffer = this.initBuffer(["storage", "copy_from"], [vocab_chunk_size]);
+      const opBindGroup = this.initBindGroup(this.u_s_Layout, [uniformBuffer, resultBuffer], `${this.name}_OpG`);
+      const inputBindGroup = this.initBindGroup(this.r_r_Layout, [slicedEmbedOutputBuffer, embdBuffer], `${this.name}_InputG`);
+      const workgroups = { x: wgSize(vocab_chunk_size, 32), y: 1, z: 1 };
+      this.device.queue.writeBuffer(uniformBuffer, 0, new Uint32Array([vocab_chunk_size, Math.ceil(vocab_chunk_size / 4), Math.ceil(n_embd / 4)]));
+
+      return [
+        {
+          flag: "compute",
+          pipeline: deEmbedPipeline,
+          groups: [opBindGroup, inputBindGroup],
+          workgroups,
+        },
+        {
+          flag: "copy",
+          src: resultBuffer,
+          srcOffset: 0,
+          dst: deEmbedOutputBuffer,
+          dstOffset: i * this.bufferSize(vocab_chunk_size),
+          size: i == deEmbeddingsBuffers.length - 1 ? this.bufferSize(vocab_chunk_size - (padded_vocab_size - vocab_size)) : this.bufferSize(vocab_chunk_size),
+        },
+      ];
+    });
+
+    return {
+      resultBuffer: deEmbedOutputBuffer,
+      passes: [sliceEmbedCopyCommand, ...deEmbedPasses],
+    };
+  }
+
+  deEmbedShader = `
+    struct Meta {
+      N: u32,
+      ND4: u32,
+      KD4: u32,
+    }
+
+    @group(1) @binding(0) var<storage,read> embed_vector: array<vec4<f32>>;
+    @group(1) @binding(1) var<storage,read> deembed_matrix: array<vec4<f32>>;
+    @group(0) @binding(0) var<uniform> uniforms: Meta;
+    @group(0) @binding(1) var<storage,read_write> array_output: array<vec4<f32>>;
+
+    @compute @workgroup_size(4)
+    fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
+      var N: u32 = uniforms.N;
+      var ND4: u32 = uniforms.ND4;
+      var KD4: u32 = uniforms.KD4;
+      var colD8: u32 = global_id.x;
+
+      if (colD8 * 8 >= N) {
+        return;
+      }
+
+      var sum00: vec4<f32> = vec4<f32>();
+      var sum10: vec4<f32> = vec4<f32>();
+
+      for(var k: u32 = 0u; k < KD4; k = k + 1u) {
+        var arow0: vec4<f32> = embed_vector[k];
+        var brow: vec4<f32>;
+
+        brow = deembed_matrix[(k * 4u + 0u) * ND4 + colD8 * 2u + 0u];
+        sum00 = vec4<f32>(arow0.x) * brow + sum00;
+
+        brow = deembed_matrix[(k * 4u + 0u) * ND4 + colD8 * 2u + 1u];
+        sum10 = vec4<f32>(arow0.x) * brow + sum10;
+       
+        brow = deembed_matrix[(k * 4u + 1u) * ND4 + colD8 * 2u + 0u];
+        sum00 = vec4<f32>(arow0.y) * brow + sum00;
+       
+        brow = deembed_matrix[(k * 4u + 1u) * ND4 + colD8 * 2u + 1u];
+        sum10 = vec4<f32>(arow0.y) * brow + sum10;
+       
+        brow = deembed_matrix[(k * 4u + 2u) * ND4 + colD8 * 2u + 0u];
+        sum00 = vec4<f32>(arow0.z) * brow + sum00;
+        
+        brow = deembed_matrix[(k * 4u + 2u) * ND4 + colD8 * 2u + 1u];
+        sum10 = vec4<f32>(arow0.z) * brow + sum10;
+       
+        brow = deembed_matrix[(k * 4u + 3u) * ND4 + colD8 * 2u + 0u];
+        sum00 = vec4<f32>(arow0.w) * brow + sum00;
+
+        brow = deembed_matrix[(k * 4u + 3u) * ND4 + colD8 * 2u + 1u];
+        sum10 = vec4<f32>(arow0.w) * brow + sum10;
+      }
+
+      if (colD8 * 8u + 0u < N) {
+        array_output[colD8 * 2u + 0u] = sum00;
+      }
+      if (colD8 * 8u + 4u < N) {
+        array_output[colD8 * 2u + 1u] = sum10;
+      }
+    }
+  `;
+}
+
 // ------------------ Needs Optimization ------------------ //
 
 class AttentionBlockClass extends Block {
@@ -1315,302 +1442,5 @@ class AttentionBlockClass extends Block {
 
       result_array[row * ND4 + col] = shift;
     }
-  `;
-}
-
-class DeEmbedBlockClass extends Block {
-  constructor() {
-    super();
-    this.name = "deembed";
-    this.pipelineCache = new Map();
-  }
-
-  getPipeline() {
-    const pipelineCacheKey = this.name; // No param optimization.
-    if (this.pipelineCache.has(pipelineCacheKey)) return this.pipelineCache.get(pipelineCacheKey);
-    const pipeline = this.initPipeline(this.deEmbedShader, [this.u_s_Layout, this.r_r_Layout], `${this.name}_Pipeline`);
-    this.pipelineCache.set(pipelineCacheKey, pipeline);
-    return pipeline;
-  }
-
-  newInstance(n_embd, vocab_size, padded_vocab_size, seq_length, vocab_chunk_size, embedBuffer, deEmbeddingsBuffers) {
-    const deEmbedPipeline = this.getPipeline();
-    const slicedEmbedOutputBuffer = this.initBuffer(["storage", "copy_to"], [n_embd]);
-    const deEmbedOutputBuffer = this.initBuffer(["map_read", "copy_to"], [vocab_size]);
-
-    const sliceEmbedCopyCommand = {
-      flag: "copy",
-      src: embedBuffer,
-      srcOffset: this.bufferSize(seq_length - 1, n_embd),
-      dst: slicedEmbedOutputBuffer,
-      dstOffset: 0,
-      size: this.bufferSize(1, n_embd),
-    };
-
-    const deEmbedPasses = deEmbeddingsBuffers.flatMap((embdBuffer, i) => {
-      // Some future optimizations where we can assume that vocab_size is consistent.
-      const uniformBuffer = this.initBuffer(["uniform", "copy_to"], [4]);
-      const resultBuffer = this.initBuffer(["storage", "copy_from"], [vocab_chunk_size]);
-      const opBindGroup = this.initBindGroup(this.u_s_Layout, [uniformBuffer, resultBuffer], `${this.name}_OpG`);
-      const inputBindGroup = this.initBindGroup(this.r_r_Layout, [slicedEmbedOutputBuffer, embdBuffer], `${this.name}_InputG`);
-      const workgroups = { x: wgSize(vocab_chunk_size, 32), y: 1, z: 1 };
-      this.device.queue.writeBuffer(uniformBuffer, 0, new Uint32Array([vocab_chunk_size, Math.ceil(vocab_chunk_size / 4), Math.ceil(n_embd / 4)]));
-
-      return [
-        {
-          flag: "compute",
-          pipeline: deEmbedPipeline,
-          groups: [opBindGroup, inputBindGroup],
-          workgroups,
-        },
-        {
-          flag: "copy",
-          src: resultBuffer,
-          srcOffset: 0,
-          dst: deEmbedOutputBuffer,
-          dstOffset: i * this.bufferSize(vocab_chunk_size),
-          size: i == deEmbeddingsBuffers.length - 1 ? this.bufferSize(vocab_chunk_size - (padded_vocab_size - vocab_size)) : this.bufferSize(vocab_chunk_size),
-        },
-      ];
-    });
-
-    return {
-      resultBuffer: deEmbedOutputBuffer,
-      passes: [sliceEmbedCopyCommand, ...deEmbedPasses],
-    };
-  }
-
-  deEmbedShader = `
-    struct Meta {
-      N: u32,
-      ND4: u32,
-      KD4: u32,
-    }
-
-    @group(1) @binding(0) var<storage,read> embed_vector: array<vec4<f32>>;
-    @group(1) @binding(1) var<storage,read> deembed_matrix: array<vec4<f32>>;
-    @group(0) @binding(0) var<uniform> uniforms: Meta;
-    @group(0) @binding(1) var<storage,read_write> array_output: array<vec4<f32>>;
-
-    @compute @workgroup_size(4)
-    fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
-      var N: u32 = uniforms.N;
-      var ND4: u32 = uniforms.ND4;
-      var KD4: u32 = uniforms.KD4;
-      var colD8: u32 = global_id.x;
-
-      if (colD8 * 8 >= N) {
-        return;
-      }
-
-      var sum00: vec4<f32> = vec4<f32>();
-      var sum10: vec4<f32> = vec4<f32>();
-
-      for(var k: u32 = 0u; k < KD4; k = k + 1u) {
-        var arow0: vec4<f32> = embed_vector[k];
-        var brow: vec4<f32>;
-
-        brow = deembed_matrix[(k * 4u + 0u) * ND4 + colD8 * 2u + 0u];
-        sum00 = vec4<f32>(arow0.x) * brow + sum00;
-
-        brow = deembed_matrix[(k * 4u + 0u) * ND4 + colD8 * 2u + 1u];
-        sum10 = vec4<f32>(arow0.x) * brow + sum10;
-       
-        brow = deembed_matrix[(k * 4u + 1u) * ND4 + colD8 * 2u + 0u];
-        sum00 = vec4<f32>(arow0.y) * brow + sum00;
-       
-        brow = deembed_matrix[(k * 4u + 1u) * ND4 + colD8 * 2u + 1u];
-        sum10 = vec4<f32>(arow0.y) * brow + sum10;
-       
-        brow = deembed_matrix[(k * 4u + 2u) * ND4 + colD8 * 2u + 0u];
-        sum00 = vec4<f32>(arow0.z) * brow + sum00;
-        
-        brow = deembed_matrix[(k * 4u + 2u) * ND4 + colD8 * 2u + 1u];
-        sum10 = vec4<f32>(arow0.z) * brow + sum10;
-       
-        brow = deembed_matrix[(k * 4u + 3u) * ND4 + colD8 * 2u + 0u];
-        sum00 = vec4<f32>(arow0.w) * brow + sum00;
-
-        brow = deembed_matrix[(k * 4u + 3u) * ND4 + colD8 * 2u + 1u];
-        sum10 = vec4<f32>(arow0.w) * brow + sum10;
-      }
-
-      if (colD8 * 8u + 0u < N) {
-        array_output[colD8 * 2u + 0u] = sum00;
-      }
-      if (colD8 * 8u + 4u < N) {
-        array_output[colD8 * 2u + 1u] = sum10;
-      }
-    }
-  `;
-}
-
-class OldDeEmbedBlockClass extends Block {
-  constructor() {
-    super();
-    this.name = "deembed";
-    this.pipelineCache = new Map();
-  }
-
-  newInstance(vocab_size, n_embd, seq_length, embedBuffer, embeddingWeightsBuffer, NaiveMatMulBlock) {
-    const slicedEmbedOutputBuffer = this.initBuffer(["storage", "copy_to"], [n_embd]);
-    const deEmbedOutputBuffer = this.initBuffer(["map_read", "copy_to"], [vocab_size]);
-
-    // Assumes that vocab_size has a decent least prime factor.
-    const maxStorageBufferSize = this.device.limits.maxStorageBufferBindingSize;
-    const totalElements = this.bufferSize(vocab_size, n_embd);
-    var numInstances = Math.ceil(totalElements / maxStorageBufferSize);
-    if (numInstances > 1) numInstances = leastPrimeFactor(vocab_size, numInstances);
-    var vocabChunkSize = vocab_size / numInstances;
-
-    const chunkBuffers = Array(numInstances)
-      .fill()
-      .map((_, i) => {
-        return this.initBuffer(["storage", "copy_to"], [n_embd, vocabChunkSize]);
-      });
-
-    const sliceEmbedCopyCommand = {
-      flag: "copy",
-      src: embedBuffer,
-      srcOffset: this.bufferSize(seq_length - 1, n_embd),
-      dst: slicedEmbedOutputBuffer,
-      dstOffset: 0,
-      size: this.bufferSize(1, n_embd),
-    };
-
-    const deEmbedPasses = chunkBuffers.flatMap((buffer, i) => {
-      const { resultBuffer: matmulResult, passes: matmulPasses } = NaiveMatMulBlock.newInstance(vocabChunkSize, 1, n_embd, buffer, slicedEmbedOutputBuffer);
-      // We're doing some buffer tricks here. Since slicedEmbedOutputBuffer is a row matrix, we can just pretend it's a column matrix without any changes to the way it's stored. We then multiply it by the transposed embeddingWeights chunk, resulting in a column vector which, once again, we can pretend is a row vector.
-
-      return [
-        {
-          flag: "copy",
-          src: embeddingWeightsBuffer,
-          srcOffset: i * this.bufferSize(n_embd * vocabChunkSize),
-          dst: buffer,
-          dstOffset: 0,
-          size: this.bufferSize(n_embd, vocabChunkSize),
-        },
-        ...matmulPasses,
-        {
-          flag: "copy",
-          src: matmulResult,
-          srcOffset: 0,
-          dst: deEmbedOutputBuffer,
-          dstOffset: i * this.bufferSize(vocabChunkSize),
-          size: this.bufferSize(vocabChunkSize),
-        },
-      ];
-    });
-
-    return {
-      resultBuffer: deEmbedOutputBuffer,
-      passes: [sliceEmbedCopyCommand, ...deEmbedPasses],
-    };
-  }
-}
-
-class NaiveMatMulBlockClass extends Block {
-  constructor() {
-    super();
-    this.name = "naiveMatMul";
-    this.pipelineCache = new Map();
-  }
-
-  getPipeline() {
-    const pipelineCacheKey = this.name; // No param optimization.
-    if (this.pipelineCache.has(pipelineCacheKey)) return this.pipelineCache.get(pipelineCacheKey);
-    const pipeline = this.initPipeline(this.matMulShader, [this.u_s_Layout, this.r_r_Layout], `${this.name}_Pipeline`);
-    this.pipelineCache.set(pipelineCacheKey, pipeline);
-    return pipeline;
-  }
-
-  newInstance(rows, cols, shared, bufA, bufB) {
-    const pipeline = this.getPipeline();
-    const uniformBuffer = this.initBuffer(["uniform", "copy_to"], [4]);
-    const resultBuffer = this.initBuffer(["storage", "copy_from"], [rows, cols]);
-    const opBindGroup = this.initBindGroup(this.u_s_Layout, [uniformBuffer, resultBuffer], `${this.name}_OutputG`);
-    const inputBindGroup = this.initBindGroup(this.r_r_Layout, [bufA, bufB], `${this.name}_InputG`);
-    const workgroups = { x: wgSize(cols, 16), y: wgSize(rows, 16), z: 1 };
-    this.device.queue.writeBuffer(uniformBuffer, 0, new Uint32Array([rows, cols, shared]));
-
-    return {
-      resultBuffer,
-      passes: [
-        {
-          flag: "compute",
-          pipeline,
-          groups: [opBindGroup, inputBindGroup],
-          workgroups,
-        },
-      ],
-    };
-  }
-
-  // Experimenting with preloading all weights, not too important just style.
-  preloadInstance(cols, shared, bufB) {
-    this.cols = cols;
-    this.shared = shared;
-    this.weightsBuf = bufB;
-
-    return (newPreloadedInstance = (rows, bufA) => {
-      const pipeline = this.getPipeline();
-      const uniformBuffer = this.initBuffer(["uniform", "copy_to"], [4]);
-      const resultBuffer = this.initBuffer(["storage", "copy_from"], [rows, this.cols]);
-      const opBindGroup = this.initBindGroup(this.u_s_Layout, [uniformBuffer, resultBuffer], `${this.name}_OutputG`);
-      const inputBindGroup = this.initBindGroup(this.r_r_Layout, [bufA, this.weightsBuf], `${this.name}_InputG`);
-      const workgroups = { x: wgSize(this.cols, 16), y: wgSize(rows, 16), z: 1 };
-      this.device.queue.writeBuffer(uniformBuffer, 0, new Uint32Array([rows, this.cols, this.shared]));
-
-      return {
-        resultBuffer,
-        passes: [
-          {
-            flag: "compute",
-            pipeline,
-            groups: [opBindGroup, inputBindGroup],
-            workgroups,
-          },
-        ],
-      };
-    });
-  }
-
-  matMulShader = `
-    struct Matrix {
-        data: array<f32>,
-    }
-
-    struct Uniforms {
-      dimY: u32, // row dimension of A and row dimension of C
-      dimX: u32, // col dimension of B and col dimension of C
-      dimS: u32, // shared dimension of A and B
-    };
-
-    @group(1) @binding(0) var<storage, read> A: Matrix;
-    @group(1) @binding(1) var<storage, read> B: Matrix;
-
-    @group(0) @binding(1) var<storage, read_write> C: Matrix;
-    @group(0) @binding(0) var<uniform> dimBuffer: Uniforms;
-
-    @compute @workgroup_size(16, 16)
-    fn main (@builtin(global_invocation_id) global_id: vec3<u32>) {
-        let col: u32 = global_id.x;
-        let row: u32 = global_id.y;
-        let dimX: u32 = dimBuffer.dimX;
-        let dimY: u32 = dimBuffer.dimY;
-        let dimS: u32 = dimBuffer.dimS;
-
-        if (row >= dimY || col >= dimX) {
-          return;
-        }
-
-        var sum: f32 = 0.0;
-        for (var i: u32 = 0; i < dimS; i = i + 1) {
-            sum = sum + A.data[row * dimS + i] * B.data[i * dimX + col];
-        }
-
-        C.data[row * dimX + col] = sum;
-      }
   `;
 }

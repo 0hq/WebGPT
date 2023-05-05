@@ -1,27 +1,14 @@
-const NaiveMatMulBlock = new NaiveMatMulBlockClass();
 const FastMLPBlock = new FastMLPBlockClass();
 const AttentionBlock = new AttentionBlockClass();
 const ResidualBlock = new ResidualBlockClass();
 const EmbedBlock = new EmbedBlockClass();
 const DeEmbedBlock = new DeEmbedBlockClass();
-const OldDeEmbedBlock = new OldDeEmbedBlockClass();
 const GeluBlock = new GeluBlockClass();
 const LayerNormBlock = new LayerNormBlockClass();
 const SoftmaxBlock = new SoftmaxBlockClass();
 
 // Needed for deletion.
-let operations = [
-  NaiveMatMulBlock,
-  FastMLPBlock,
-  AttentionBlock,
-  ResidualBlock,
-  EmbedBlock,
-  DeEmbedBlock,
-  OldDeEmbedBlock,
-  GeluBlock,
-  LayerNormBlock,
-  SoftmaxBlock,
-];
+let operations = [FastMLPBlock, AttentionBlock, ResidualBlock, EmbedBlock, DeEmbedBlock, GeluBlock, LayerNormBlock, SoftmaxBlock];
 
 function initializeOperations(device) {
   for (const operation of operations) operation.initialize(device);
