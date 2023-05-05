@@ -71,10 +71,11 @@ class GPT {
       const logits = await this.run(idx_cond, useAttCache);
       const endTime = performance.now();
 
-      console.log(`\nIteration ${i + 1} of ${max_new_tokens}`);
-      console.log(`Using attention cache? ${useAttCache}`);
-      console.log(`Kernel execution time: ${endTime - startTime} ms`);
-      totalTime += endTime - startTime;
+      // console.log(`\nIteration ${i + 1} of ${max_new_tokens}`);
+      // console.log(`Using attention cache? ${useAttCache}`);
+      const lapsedTime = endTime - startTime;
+      console.log(`Kernel execution time: ${lapsedTime} ms`);
+      totalTime += lapsedTime;
 
       const { topKIndices, topKProbs } = selectTopK(logits, top_k);
       const probs = cpuSoftmax(topKProbs, temperature);
@@ -82,16 +83,16 @@ class GPT {
 
       history = history.concat(idx_next);
 
-      console.log(`Output:\n${this.tokenizer.decode(history)}`);
+      // console.log(`Output:\n${this.tokenizer.decode(history)}`);
 
-      const totalProbs = cpuSoftmax(logits, temperature);
-      const tokenProbsString = Array.from(totalProbs)
-        .map((value, index) => ({ value, index }))
-        .sort((a, b) => b.value - a.value)
-        .slice(0, 8)
-        .map((prob) => `{ ${this.tokenizer.decode([prob.index]).replace(/(\r\n|\n|\r)/gm, "newline")} } : ${prob.value.toPrecision(3)}`)
-        .join(" | ");
-      console.log("Top 8 token probs:", tokenProbsString);
+      // const totalProbs = cpuSoftmax(logits, temperature);
+      // const tokenProbsString = Array.from(totalProbs)
+      //   .map((value, index) => ({ value, index }))
+      //   .sort((a, b) => b.value - a.value)
+      //   .slice(0, 8)
+      //   .map((prob) => `{ ${this.tokenizer.decode([prob.index]).replace(/(\r\n|\n|\r)/gm, "newline")} } : ${prob.value.toPrecision(3)}`)
+      //   .join(" | ");
+      // console.log("Top 8 token probs:", tokenProbsString);
 
       yield this.tokenizer.decode([idx_next]);
     }
@@ -102,8 +103,6 @@ class GPT {
   async run(idx) {
     const { posEmbdBuffer, layer_buffers, normGammaBuffer, normBetaBuffer, embeddingsBuffer, deEmbeddingsBuffers } = this.model;
     const { attention_scale, n_embd, n_head, n_layer, vocab_size, hidden_size, vocab_chunk_size, vocab_chunk_instances } = this.params;
-    console.log("Running model with params:", this.params);
-    console.log("Deembedding buffers:", deEmbeddingsBuffers);
     const seq_length = idx.length;
 
     // ---------------- Create Passes ---------------- //
