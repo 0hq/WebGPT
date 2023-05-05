@@ -247,33 +247,56 @@ class GPT {
 
     console.log("Loading params...");
     const params = await (await fetch(`${fldr}/params_gpt.json`)).json();
-    params.hidden_size = params.n_embd * 4;
-    params.attention_scale = 1 / Math.sqrt(params.n_embd / params.n_head);
-    var numBuffers = Math.ceil(this.bufferSize(params.vocab_size, params.n_embd) / this.device.limits.maxStorageBufferBindingSize); // Assumes that vocab_size has a decent least prime factor.
-    params.num_instances = numBuffers > 1 ? leastPrimeFactor(params.vocab_size, numBuffers) : 1;
-    params.vocab_chunk_size = params.vocab_size / numBuffers;
-    const { block_size, n_embd, n_head, n_layer, bias, vocab_size, hidden_size, vocab_chunk_size, num_instances } = params;
-    console.log("Params:", params);
 
     // Did you enable GitHub LFS? Won't work without it.
+    if (n_embd % 4 != 0) throw new Error("Model load failed: n_embd must be divisible by 4.");
     if (n_embd % n_head != 0) throw new Error("Model load failed: n_embd must be divisible by n_head.");
+
+    // n embed is div 4, max size is div 4, vocab isnt
+
+    params.hidden_size = params.n_embd * 4;
+    params.attention_scale = 1 / Math.sqrt(params.n_embd / params.n_head);
+
+    const tokenParam = this.bufferSize(params.vocab_size, params.n_embd);
+    let minSplits = Math.ceil(tokenParam / this.device.limits.maxStorageBufferBindingSize);
+
+    // Not the most efficient implementation.
+    function vocabChunkSizeCalc(vocab_size, n_embd, splits, maxStorageBufferBindingSize) {
+      const optimisticSize = Math.ceil(vocab_size / splits / 4) * 4 * n_embd;
+      const pessimiticSize = Math.floor(vocab_size / splits / 4) * 4 * n_embd;
+      let vocabChunkSize = optimisticSize;
+      if (optimisticSize > maxStorageBufferBindingSize) {
+        vocabChunkSize = pessimiticSize;
+        if (pessimiticSize * splits < tokenParam) {
+          return vocabChunkSizeCalc(vocab_size, n_embd, splits + 1, maxStorageBufferBindingSize);
+        }
+      }
+      return { vocabChunkSize, splits };
+    }
+
+    const { vocab_chunk_size, splits } = vocabChunkSizeCalc(minSplits);
+    params.vocab_chunk_size = vocab_chunk_size;
+    params.vocab_chunk_instances = splits;
+    const { block_size, n_embd, n_head, n_layer, bias, vocab_size, hidden_size, vocab_chunk_instances } = params;
+    console.log("Params:", params);
 
     console.log("Loading token embeddings...");
     const embeddingWeights = await fetchBin(`${fldr}/transformer.wte.weight_gpt.bin`);
     const embeddingsBuffer = this.initTensor(embeddingWeights, [vocab_size, n_embd], ["copy_from"]);
 
-    // const deEmbeddingsBuffers = [];
-    // for (let i = 0; i < num_instances; i++) {
-    //   const offset = i * vocab_chunk_size;
-    //   const size = i == num_instances - 1 ? vocab_size - offset : vocab_chunk_size;
+    const deEmbeddingsBuffers = [];
+    for (let i = 0; i < vocab_chunk_instances; i++) {
+      const offset = i * vocab_chunk_size;
+      const size = i == vocab_chunk_instances - 1 ? vocab_size - offset : vocab_chunk_size;
+      console.log(`Loading deEmbedding chunk ${i + 1}/${vocab_chunk_instances}...`);
+      console.log(`Offset: ${offset}, Size: ${size}`);
 
-    //   // Chunks are stored in row-major order and are of dimensions n_embd x vocab_chunk_size.
-    //   // Embedding weights are stored in column-major order and are of dimensions vocab_size x n_embd.
-    //   // We pre-transpose the chunk for the deEmbedding process. Could do this on GPU later.
-    //   const chunk = transpose(embeddingWeights.subarray(offset * n_embd, offset * n_embd + size * n_embd), n_embd, size);
-    //   // const chunk = new Float32Array(size * n_embd).fill(1);
-    //   deEmbeddingsBuffers.push(this.initTensor(chunk, [size, n_embd], ["storage"]));
-    // }
+      // Chunks are stored in row-major order and are of dimensions n_embd x vocab_chunk_size.
+      // Embedding weights are imported in column-major order and are of dimensions vocab_size x n_embd.
+      // We pre-transpose the chunk for the deEmbedding process for the matmul. Could do this on GPU later.
+      const chunk = transpose(embeddingWeights.subarray(offset * n_embd, offset * n_embd + size * n_embd), size, n_embd);
+      deEmbeddingsBuffers.push(this.initTensor(chunk, [n_embd, vocab_chunk_size], ["storage"]));
+    }
 
     console.log("Loading positional embeddings...");
     const posEmbeddings = await fetchBin(`${fldr}/transformer.wpe.weight_gpt.bin`);
