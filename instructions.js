@@ -1,6 +1,7 @@
 // --------------------- Instructions --------------------- //
 
 // All have been vectorized, but not all have been optimized with shared memory.
+// Soon: quantize to int8, possible int4.
 // Tuning needed and more detailed benchmarking, but decent for now.
 
 class Block {

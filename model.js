@@ -261,43 +261,30 @@ class GPT {
     if (params.n_embd % 4 != 0) throw new Error("Model load failed: n_embd must be divisible by 4.");
     if (params.n_embd % params.n_head != 0) throw new Error("Model load failed: n_embd must be divisible by n_head.");
 
-    // n embed is div 4, max size is div 4, vocab isnt
-
     params.hidden_size = params.n_embd * 4;
     params.attention_scale = 1 / Math.sqrt(params.n_embd / params.n_head);
 
     const tokenParam = this.bufferSize(params.vocab_size, params.n_embd);
     let minSplits = Math.ceil(tokenParam / this.device.limits.maxStorageBufferBindingSize);
 
-    // Not the most efficient implementation.
+    // Possibly could be better? Needs actual benchmarking to know what approach is best.
     function vocabChunkSizeCalc(vocab_size, n_embd, splits, maxStorageBufferBindingSize) {
       const optimisticSize = Math.ceil(vocab_size / splits / 4) * 4 * n_embd;
       const pessimiticSize = Math.floor(vocab_size / splits / 4) * 4 * n_embd;
       let vocab_chunk_size = optimisticSize;
-      console.log("Optimistic size:", vocab_chunk_size);
       if (optimisticSize > maxStorageBufferBindingSize) {
         vocab_chunk_size = pessimiticSize;
-        console.log("Pessimitic size:", vocab_chunk_size);
         if (pessimiticSize * splits < tokenParam) {
-          console.log("Pessimitic size is too small, increasing splits...");
           return vocabChunkSizeCalc(vocab_size, n_embd, splits + 1, maxStorageBufferBindingSize);
         }
       }
-      console.log("chunk byte size:", vocab_chunk_size);
-      console.log("Vocab chunk instances:", splits);
       return { vocab_chunk_size: vocab_chunk_size / n_embd, splits };
     }
-
-    console.log("Token param:", tokenParam);
-    console.log("Minsplits:", minSplits);
-    console.log("MaxStorageBufferBindingSize:", this.device.limits.maxStorageBufferBindingSize);
     const { vocab_chunk_size, splits } = vocabChunkSizeCalc(params.vocab_size, params.n_embd, minSplits, this.device.limits.maxStorageBufferBindingSize);
-    console.log("Vocab chunk size:", vocab_chunk_size);
-    console.log("Splits:", splits);
+    if (splits > minSplits) console.warn(`Non-optimal number of vocab splits. Optimal: ${minSplits}, Selected: ${splits}`);
     params.vocab_chunk_size = vocab_chunk_size;
     params.vocab_chunk_instances = splits;
     const { block_size, n_embd, n_head, n_layer, bias, vocab_size, hidden_size, vocab_chunk_instances } = params;
-    console.log("Params:", params);
 
     console.log("Loading token embeddings...");
     const embeddingWeights = await fetchBin(`${fldr}/transformer.wte.weight_gpt.bin`);
@@ -306,17 +293,20 @@ class GPT {
     const deEmbeddingsBuffers = [];
     for (let i = 0; i < vocab_chunk_instances; i++) {
       const offset = i * vocab_chunk_size;
-      const size = i == vocab_chunk_instances - 1 ? vocab_size - offset : vocab_chunk_size;
+      let size = vocab_chunk_size;
       console.log(`Loading deEmbedding chunk ${i + 1}/${vocab_chunk_instances}...`);
 
       // Chunks are stored in row-major order and are of dimensions n_embd x vocab_chunk_size.
       // Embedding weights are imported in column-major order and are of dimensions vocab_size x n_embd.
       // We pre-transpose the chunk for the deEmbedding process for the matmul. Could do this on GPU later.
 
-      // Optimize this?
-      const chunkedWeights = embeddingWeights.subarray(offset * n_embd, offset * n_embd + size * n_embd);
-      const padded = Array.from(chunkedWeights).concat(...zeros((vocab_chunk_size - size) * n_embd));
-      const chunk = transpose(padded, vocab_chunk_size, n_embd);
+      const paddedArray = new Float32Array(vocab_chunk_size * n_embd);
+      if (i === vocab_chunk_instances - 1) {
+        size = vocab_size - offset;
+        paddedArray.set(size * n_embd, zeros((vocab_chunk_size * vocab_chunk_instances - vocab_size) * n_embd));
+      }
+      paddedArray.set(embeddingWeights.subarray(offset * n_embd, offset * n_embd + size * n_embd));
+      const chunk = transpose(paddedArray, vocab_chunk_size, n_embd); // Use GPU perhaps?
       deEmbeddingsBuffers.push(this.initTensor(chunk, [n_embd, vocab_chunk_size], ["storage"]));
     }
 
@@ -332,8 +322,17 @@ class GPT {
       const normAttentionGamma = await fetchBin(`${prefix}ln_1.weight_gpt.bin`);
       const normAttentionBeta = bias ? await fetchBin(`${prefix}ln_1.bias_gpt.bin`) : zeros(n_embd);
 
-      const qkvWeights = transpose(await fetchBin(`${prefix}attn.c_attn.weight_gpt.bin`), 3 * n_embd, n_embd);
+      const qkvWeightsRaw = await fetchBin(`${prefix}attn.c_attn.weight_gpt.bin`);
+      const qkvWeights = transpose(qkvWeightsRaw, 3 * n_embd, n_embd);
       const qkvBias = bias ? await fetchBin(`${prefix}attn.c_attn.bias_gpt.bin`) : zeros(3 * n_embd);
+
+      // Split into q, k, v. Subarray is more efficient because it's a view.
+      const qWeights = transpose(qkvWeightsRaw.subarray(0, n_embd * n_embd), n_embd, n_embd);
+      const kWeights = transpose(qkvWeightsRaw.subarray(n_embd * n_embd, n_embd * n_embd * 2), n_embd, n_embd);
+      const vWeights = transpose(qkvWeightsRaw.subarray(n_embd * n_embd * 2, n_embd * n_embd * 3), n_embd, n_embd);
+
+      const qkvWeightArray = [qWeights, kWeights, vWeights];
+      const qkvBiasArray = [qkvBias.subarray(0, n_embd), qkvBias.subarray(n_embd, n_embd * 2), qkvBias.subarray(n_embd * 2, n_embd * 3)];
 
       const linearWeights = transpose(await fetchBin(`${prefix}attn.c_proj.weight_gpt.bin`), n_embd, n_embd);
       const linearBias = bias ? await fetchBin(`${prefix}attn.c_proj.bias_gpt.bin`) : zeros(n_embd);
