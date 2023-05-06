@@ -102,7 +102,7 @@ class GPT {
 
   async run(idx) {
     const { posEmbdBuffer, layer_buffers, normGammaBuffer, normBetaBuffer, embeddingsBuffer, deEmbeddingsBuffers } = this.model;
-    const { attention_scale, n_embd, n_head, n_layer, vocab_size, hidden_size, vocab_chunk_size, vocab_chunk_instances } = this.params;
+    const { attention_scale, n_embd, n_head, head_size, n_layer, vocab_size, hidden_size, vocab_chunk_size, vocab_chunk_instances } = this.params;
     const seq_length = idx.length;
 
     // ---------------- Create Passes ---------------- //
@@ -141,12 +141,33 @@ class GPT {
           buffers.qkvBiasBuffer,
           buffers.linearWeightsBuffer,
           buffers.linearBiasBuffer,
-          FastMLPBlock,
+          FastMatMulBlock,
           SoftmaxBlock
         );
         intermediateBuffer = resultBuffer;
         this.computePasses.push(...passes);
       }
+      // {
+      //   const { passes, resultBuffer } = AttentionBlock.newFusedInstance(
+      //     seq_length,
+      //     n_embd,
+      //     attention_scale,
+      //     n_head,
+      //     intermediateBuffer,
+      //     buffers.qkvWeightArray[0],
+      //     buffers.qkvBiasArray[0],
+      //     buffers.qkvWeightArray[1],
+      //     buffers.qkvBiasArray[1],
+      //     buffers.qkvWeightArray[2],
+      //     buffers.qkvBiasArray[2],
+      //     buffers.linearWeightsBuffer,
+      //     buffers.linearBiasBuffer,
+      //     FastMatMulBlock,
+      //     SoftmaxBlock
+      //   );
+      //   intermediateBuffer = resultBuffer;
+      //   this.computePasses.push(...passes);
+      // }
       {
         const { passes, resultBuffer } = ResidualBlock.newInstance(seq_length, n_embd, intermediateBuffer, residualBuffer);
         intermediateBuffer = resultBuffer;
@@ -165,7 +186,7 @@ class GPT {
         this.computePasses.push(...passes);
       }
       {
-        const { resultBuffer, passes } = FastMLPBlock.newInstance(
+        const { resultBuffer, passes } = FastMatMulBlock.newInstance(
           seq_length,
           hidden_size,
           n_embd,
@@ -182,7 +203,7 @@ class GPT {
         this.computePasses.push(...passes);
       }
       {
-        const { resultBuffer, passes } = FastMLPBlock.newInstance(
+        const { resultBuffer, passes } = FastMatMulBlock.newInstance(
           seq_length,
           n_embd,
           hidden_size,
@@ -258,17 +279,14 @@ class GPT {
     const params = await (await fetch(`${fldr}/params_gpt.json`)).json();
 
     // Did you enable GitHub LFS? Won't work without it.
-    if (params.n_embd % 4 != 0) throw new Error("Model load failed: n_embd must be divisible by 4.");
-    if (params.n_embd % params.n_head != 0) throw new Error("Model load failed: n_embd must be divisible by n_head.");
-
-    params.hidden_size = params.n_embd * 4;
-    params.attention_scale = 1 / Math.sqrt(params.n_embd / params.n_head);
-
+    if (params.n_embd % 4 !== 0) throw new Error("Model load failed: n_embd must be divisible by 4.");
+    if (params.n_embd % params.n_head !== 0) throw new Error("Model load failed: n_embd must be divisible by n_head.");
+    // I'm unsure if this is a reasonable requirement here. At worst, I can figure out some padding method.
+    if ((params.n_embd / params.n_head) % 4 !== 0) throw new Error("Model load failed: n_embd / n_head must be divisible by 4.");
     const tokenParam = this.bufferSize(params.vocab_size, params.n_embd);
     let minSplits = Math.ceil(tokenParam / this.device.limits.maxStorageBufferBindingSize);
-
-    // Possibly could be better? Needs actual benchmarking to know what approach is best.
     function vocabChunkSizeCalc(vocab_size, n_embd, splits, maxStorageBufferBindingSize) {
+      // Possibly could be better? Needs actual benchmarking to know what approach is best.
       const optimisticSize = Math.ceil(vocab_size / splits / 4) * 4 * n_embd;
       const pessimiticSize = Math.floor(vocab_size / splits / 4) * 4 * n_embd;
       let vocab_chunk_size = optimisticSize;
@@ -282,24 +300,26 @@ class GPT {
     }
     const { vocab_chunk_size, splits } = vocabChunkSizeCalc(params.vocab_size, params.n_embd, minSplits, this.device.limits.maxStorageBufferBindingSize);
     if (splits > minSplits) console.warn(`Non-optimal number of vocab splits. Optimal: ${minSplits}, Selected: ${splits}`);
+
     params.vocab_chunk_size = vocab_chunk_size;
     params.vocab_chunk_instances = splits;
+    params.head_size = n_embd / n_head;
+    params.hidden_size = params.n_embd * 4;
+    params.attention_scale = 1 / Math.sqrt(params.n_embd / params.n_head);
     const { block_size, n_embd, n_head, n_layer, bias, vocab_size, hidden_size, vocab_chunk_instances } = params;
 
     console.log("Loading token embeddings...");
     const embeddingWeights = await fetchBin(`${fldr}/transformer.wte.weight_gpt.bin`);
     const embeddingsBuffer = this.initTensor(embeddingWeights, [vocab_size, n_embd], ["copy_from"]);
 
+    // Chunks are stored in row-major order and are of dimensions n_embd x vocab_chunk_size.
+    // Embedding weights are imported in column-major order and are of dimensions vocab_size x n_embd.
+    // We pre-transpose the chunk for the deEmbedding process for the matmul. Could do this on GPU later.
     const deEmbeddingsBuffers = [];
     for (let i = 0; i < vocab_chunk_instances; i++) {
+      console.log(`Loading deEmbedding chunk ${i + 1}/${vocab_chunk_instances}...`);
       const offset = i * vocab_chunk_size;
       let size = vocab_chunk_size;
-      console.log(`Loading deEmbedding chunk ${i + 1}/${vocab_chunk_instances}...`);
-
-      // Chunks are stored in row-major order and are of dimensions n_embd x vocab_chunk_size.
-      // Embedding weights are imported in column-major order and are of dimensions vocab_size x n_embd.
-      // We pre-transpose the chunk for the deEmbedding process for the matmul. Could do this on GPU later.
-
       const paddedArray = new Float32Array(vocab_chunk_size * n_embd);
       if (i === vocab_chunk_instances - 1) {
         size = vocab_size - offset;
@@ -353,6 +373,8 @@ class GPT {
         normAttentionBetaBuffer: this.initTensor(normAttentionBeta, [n_embd], ["storage"]),
         qkvWeightsBuffer: this.initTensor(qkvWeights, [n_embd, 3 * n_embd], ["storage"]),
         qkvBiasBuffer: this.initTensor(qkvBias, [3 * n_embd], ["storage"]),
+        qkvWeightArray: qkvWeightArray.map((x) => this.initTensor(x, [n_embd, n_embd], ["storage"])),
+        qkvBiasArray: qkvBiasArray.map((x) => this.initTensor(x, [n_embd], ["storage"])),
         linearWeightsBuffer: this.initTensor(linearWeights, [n_embd, n_embd], ["storage"]),
         linearBiasBuffer: this.initTensor(linearBias, [n_embd], ["storage"]),
         normLinearGammaBuffer: this.initTensor(normLinearGamma, [n_embd], ["storage"]),

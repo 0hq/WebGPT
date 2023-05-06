@@ -75,7 +75,7 @@ class Block {
   }
 }
 
-class FastMLPBlockClass extends Block {
+class FastMatMulBlockClass extends Block {
   constructor() {
     super();
     this.name = "fastMLP";
@@ -93,13 +93,13 @@ class FastMLPBlockClass extends Block {
   }
 
   newInstance(rows, cols, shared, inputBuffer, weightsBuffer, biasBuffer) {
-    if (cols % 16 !== 0) throw new Error("Cols must be divisible by 16.");
+    if (cols % 8 !== 0) throw new Error("Cols must be divisible by 16."); // Is this not 8? Or is it 16?
     const pipeline = this.getPipeline(rows);
     const uniformBuffer = this.initBuffer(["uniform", "copy_to"], [4]);
     const resultBuffer = this.initBuffer(["storage", "copy_from"], [rows, cols]);
     const opBindGroup = this.initBindGroup(this.u_s_Layout, [uniformBuffer, resultBuffer], `${this.name}_OpG`);
     const inputBindGroup = this.initBindGroup(this.r_r_r_Layout, [inputBuffer, weightsBuffer, biasBuffer], `${this.name}_InputG`);
-    const workgroups = { x: wgSize(cols, 64), y: wgSize(rows, 32) };
+    const workgroups = { x: wgSize(cols, 8 * 8), y: wgSize(rows, 4 * 8) };
     this.device.queue.writeBuffer(uniformBuffer, 0, new Uint32Array([rows, cols, Math.ceil(cols / 4), Math.ceil(shared / 4)]));
 
     return {
@@ -920,10 +920,10 @@ class AttentionBlockClass extends Block {
     qkvBiasBuffer,
     linearWeightsBuffer,
     linearBiasBuffer,
-    FastMLPBlock,
+    FastMatMulBlock,
     SoftmaxBlock
   ) {
-    const { resultBuffer: qkvMLPResult, passes: qkvMLPPasses } = FastMLPBlock.newInstance(
+    const { resultBuffer: qkvMLPResult, passes: qkvMLPPasses } = FastMatMulBlock.newInstance(
       seq_length,
       3 * n_embd,
       n_embd,
@@ -955,7 +955,7 @@ class AttentionBlockClass extends Block {
       `${this.name}_AttentionWeightsG`
     );
     const attentionWeightsInputBindGroup = this.initBindGroup(this.r_r_Layout, [splitQResultBuffer, splitKResultBuffer], `${this.name}_AttentionWeightsInputG`);
-    this.device.queue.writeBuffer(attentionWeightsUniformBuffer, 0, new Uint32Array([seq_length, seq_length * n_head, seq_length, n_embd / n_head, n_embd]));
+    this.device.queue.writeBuffer(attentionWeightsUniformBuffer, 0, new Uint32Array([seq_length, seq_length * n_head, seq_length, head_size, n_embd]));
     this.device.queue.writeBuffer(attentionWeightsUniformBuffer, 20, new Float32Array([attentionDotProductScale]));
     const attentionWeightsWorkgroups = { x: wgSize(seq_length * n_head, 16), y: wgSize(seq_length, 16), z: 1 };
 
@@ -977,7 +977,7 @@ class AttentionBlockClass extends Block {
     this.device.queue.writeBuffer(attentionValuesUniformBuffer, 0, new Uint32Array([seq_length, n_embd, n_head, n_embd / n_head]));
     const attentionValuesWorkgroups = { x: wgSize(n_embd, 16), y: wgSize(seq_length, 16), z: 1 };
 
-    const { resultBuffer: linearMLPResult, passes: linearMLPPasses } = FastMLPBlock.newInstance(
+    const { resultBuffer: linearMLPResult, passes: linearMLPPasses } = FastMatMulBlock.newInstance(
       seq_length,
       n_embd,
       n_embd,
@@ -1179,7 +1179,7 @@ class AttentionBlockClass extends Block {
   getNewAttentionWeightsPipeline() {
     const pipelineCacheKey = `${this.name}_weights_fused`; // No param optimization.
     if (this.pipelineCache.has(pipelineCacheKey)) return this.pipelineCache.get(pipelineCacheKey);
-    const pipeline = this.initPipeline(this.fusedAttentionShader, [this.u_s_Layout, this.r_r_Layout], `${this.name}_Pipeline_AttWeights`);
+    const pipeline = this.initPipeline(this.fusedWeightsShader, [this.u_s_Layout, this.r_r_Layout], `${this.name}_Pipeline_AttWeights`);
     this.pipelineCache.set(pipelineCacheKey, pipeline);
     return pipeline;
   }
@@ -1192,11 +1192,28 @@ class AttentionBlockClass extends Block {
     return pipeline;
   }
 
+  getFormatQPipeline() {
+    const pipelineCacheKey = `${this.name}_format_q`; // No param optimization.
+    if (this.pipelineCache.has(pipelineCacheKey)) return this.pipelineCache.get(pipelineCacheKey);
+    const pipeline = this.initPipeline(this.formatQShader, [this.u_s_Layout, this.r_r_Layout], `${this.name}_Pipeline_AttWeights`);
+    this.pipelineCache.set(pipelineCacheKey, pipeline);
+    return pipeline;
+  }
+
+  getTransposePipeline() {
+    const pipelineCacheKey = `${this.name}_transpose`; // No param optimization.
+    if (this.pipelineCache.has(pipelineCacheKey)) return this.pipelineCache.get(pipelineCacheKey);
+    const pipeline = this.initPipeline(this.transposeShader, [this.u_s_Layout, this.r_r_Layout], `${this.name}_Pipeline_AttWeights`);
+    this.pipelineCache.set(pipelineCacheKey, pipeline);
+    return pipeline;
+  }
+
   newFusedInstance(
     seq_length,
     n_embd,
     attentionDotProductScale,
     n_head,
+    head_size,
     inputBuffer,
     qWeightsBuffer,
     qBiasBuffer,
@@ -1206,46 +1223,78 @@ class AttentionBlockClass extends Block {
     vBiasBuffer,
     linearWeightsBuffer,
     linearBiasBuffer,
-    FastMLPBlock,
+    FastMatMulBlock,
     SoftmaxBlock
   ) {
-    if ((n_embd / n_head) % 4 != 0) {
-      throw new Error("n_embd / n_head (head size) must be a multiple of 4");
-    }
+    const { resultBuffer: QResultBuffer, passes: QMLPPasses } = FastMatMulBlock.newInstance(
+      seq_length,
+      n_embd,
+      n_embd,
+      inputBuffer,
+      qWeightsBuffer,
+      qBiasBuffer
+    );
+    const { resultBuffer: KResultBuffer, passes: KMLPPasses } = FastMatMulBlock.newInstance(
+      seq_length,
+      n_embd,
+      n_embd,
+      inputBuffer,
+      kWeightsBuffer,
+      kBiasBuffer
+    );
+    const { resultBuffer: VResultBuffer, passes: VMLPPasses } = FastMatMulBlock.newInstance(
+      seq_length,
+      n_embd,
+      n_embd,
+      inputBuffer,
+      vWeightsBuffer,
+      vBiasBuffer
+    );
 
-    const { resultBuffer: QresultBffer, passes: QMLPPasses } = FastMLPBlock.newInstance(seq_length, n_embd, n_embd, inputBuffer, qWeightsBuffer, qBiasBuffer);
-    const { resultBuffer: KresultBffer, passes: KMLPPasses } = FastMLPBlock.newInstance(seq_length, n_embd, n_embd, inputBuffer, kWeightsBuffer, kBiasBuffer);
-    const { resultBuffer: VresultBffer, passes: VMLPPasses } = FastMLPBlock.newInstance(seq_length, n_embd, n_embd, inputBuffer, vWeightsBuffer, vBiasBuffer);
+    const formatQPipeline = this.getFormatQPipeline();
+    const formatQUniformBuffer = this.initBuffer(["uniform", "copy_to"], [4]);
+    const formatQResultBuffer = this.initBuffer(["storage", "copy_from"], [seq_length * n_head, head_size]);
+    const formatQBindGroup = this.initBindGroup(this.u_s_Layout, [formatQUniformBuffer, formatQResultBuffer]);
+    const formatQInputBindGroup = this.initBindGroup(this.r_Layout, [QResultBuffer], `${this.name}_formatQInputG`);
+    this.device.queue.writeBuffer(formatQUniformBuffer, 0, new Uint32Array([seq_length, n_embd, head_size]));
+    const formatQWorkgroups = { x: wgSize(n_embd, 8), y: wgSize(seq_length, 8), z: 1 };
 
-    const attentionWeightsPipeline = this.getAttentionWeightsPipeline();
+    // const transposePipeline = this.getTransposePipeline();
+    // const transposeUniformBuffer = this.initBuffer(["uniform", "copy_to"], [4]);
+    // const transposeResultBuffer = this.initBuffer(["storage", "copy_from"], [n_embd, seq_length]);
+    // const transposeBindGroup = this.initBindGroup(this.u_s_Layout, [transposeUniformBuffer, transposeResultBuffer]);
+    // const transposeInputBindGroup = this.initBindGroup(this.r_Layout, [KResultBuffer], `${this.name}_transposeInputG`);
+    // this.device.queue.writeBuffer(transposeUniformBuffer, 0, new Uint32Array([seq_length, n_embd]));
+    // const transposeWorkgroups = { x: wgSize(n_embd, 8), y: wgSize(seq_length, 8), z: 1 };
+
+    const attentionWeightsPipeline = this.getNewAttentionWeightsPipeline();
     const attentionWeightsUniformBuffer = this.initBuffer(["uniform", "copy_to"], [8]);
-    const attentionWeightsResultBuffer = this.initBuffer(["storage", "copy_from"], [seq_length, seq_length * n_head]);
+    const attentionWeightsResultBuffer = this.initBuffer(["storage", "copy_from"], [seq_length * n_head, seq_length]);
     const attentionWeightsBindGroup = this.initBindGroup(
       this.u_s_Layout,
       [attentionWeightsUniformBuffer, attentionWeightsResultBuffer],
       `${this.name}_AttentionWeightsG`
     );
-    const attentionWeightsInputBindGroup = this.initBindGroup(this.r_r_Layout, [QresultBffer, KresultBffer], `${this.name}_AttentionWeightsInputG`);
-    this.device.queue.writeBuffer(attentionWeightsUniformBuffer, 0, new Uint32Array([seq_length, seq_length * n_head, seq_length, n_embd / n_head, n_embd]));
-    this.device.queue.writeBuffer(attentionWeightsUniformBuffer, 20, new Float32Array([attentionDotProductScale]));
+    const attentionWeightsInputBindGroup = this.initBindGroup(this.r_r_Layout, [formatQResultBuffer, KResultBuffer], `${this.name}_AttentionWeightsInputG`);
+    this.device.queue.writeBuffer(attentionWeightsUniformBuffer, 0, new Uint32Array([seq_length * n_head, seq_length, n_embd / 4, head_size / 4]));
+    this.device.queue.writeBuffer(attentionWeightsUniformBuffer, 16, new Float32Array([attentionDotProductScale]));
     const attentionWeightsWorkgroups = { x: wgSize(seq_length, 16), y: wgSize(seq_length * n_head, 16), z: 1 };
 
     const { resultBuffer: softmaxOutputBuffer, passes: softmaxPasses } = SoftmaxBlock.newInstance(
       seq_length * n_head,
       seq_length,
-      causalMaskResultBuffer,
-      true
-    ); // Transposes! Reverts weights quasi-transpose.
+      attentionWeightsResultBuffer
+    );
 
     const attentionValuesPipeline = this.getAttentionValuesPipeline();
     const attentionValuesUniformBuffer = this.initBuffer(["uniform", "copy_to"], [4]);
     const attentionValuesResultBuffer = this.initBuffer(["storage", "copy_from"], [seq_length, n_embd]);
     const attentionValuesBindGroup = this.initBindGroup(this.u_s_Layout, [attentionValuesUniformBuffer, attentionValuesResultBuffer]);
-    const attentionValuesInputBindGroup = this.initBindGroup(this.r_r_Layout, [softmaxOutputBuffer, splitVResultBuffer], `${this.name}_AttentionValuesInputG`);
-    this.device.queue.writeBuffer(attentionValuesUniformBuffer, 0, new Uint32Array([seq_length, n_embd, n_head, n_embd / n_head]));
+    const attentionValuesInputBindGroup = this.initBindGroup(this.r_r_Layout, [softmaxOutputBuffer, VResultBuffer], `${this.name}_AttentionValuesInputG`);
+    this.device.queue.writeBuffer(attentionValuesUniformBuffer, 0, new Uint32Array([seq_length, n_embd, n_head, head_size]));
     const attentionValuesWorkgroups = { x: wgSize(n_embd, 16), y: wgSize(seq_length, 16), z: 1 };
 
-    const { resultBuffer: linearMLPResult, passes: linearMLPPasses } = FastMLPBlock.newInstance(
+    const { resultBuffer: linearMLPResult, passes: linearMLPPasses } = FastMatMulBlock.newInstance(
       seq_length,
       n_embd,
       n_embd,
@@ -1257,7 +1306,9 @@ class AttentionBlockClass extends Block {
     return {
       resultBuffer: linearMLPResult,
       passes: [
-        ...qkvMLPPasses,
+        ...QMLPPasses,
+        ...KMLPPasses,
+        ...VMLPPasses,
         {
           flag: "compute",
           pipeline: splitQKVPipeline,
@@ -1357,23 +1408,21 @@ class AttentionBlockClass extends Block {
       }
     
       workgroupBarrier(); // Ensure all threads have finished writing to the shared memory before proceeding
-    
-      // Compute transposed coordinates
-      let transposed_col: u32 = row * 8u + local_id.x;
-      let transposed_row: u32 = col * 8u + local_id.y;
-    
-      // Write the transposed tile to result_array
-      if (transposed_col < M && transposed_row < N) {
-        result_array[transposed_row * M + transposed_col] = tile[local_id.x][local_id.y]; // This line was incorrect
+        
+      // Write the transposed tile to result_array. Flips dims.
+      if (tile_row < M && tile_col < N) {
+        result_array[tile_col * M + tile_row] = tile[local_id.x][local_id.y]; 
       }
     }
   `;
 
-  fusedVectorizedAttentionShader = `
+  // Sequence length invariant, no padding needed.
+  fusedWeightsShader = `
     struct Meta {
-      M: u32, 
-      ND4: u32, 
-      HSizeD4: u32,
+      M: u32, // n * n_heads
+      N: u32,
+      ED4: u32, // hsize * n_heads
+      HD4: u32,
       attentionScale: f32,
     };
 
@@ -1381,34 +1430,35 @@ class AttentionBlockClass extends Block {
     @group(1) @binding(1) var<storage, read> key_array: array<vec4<f32>>;
 
     @group(0) @binding(0) var<uniform> uniforms: Meta;
-    @group(0) @binding(1) var<storage, read_write> result_array: array<vec4<f32>>;
+    @group(0) @binding(1) var<storage, read_write> result_array: array<f32>;
 
     @compute @workgroup_size(8, 8)
     fn main (@builtin(global_invocation_id) global_id: vec3<u32>) {
       let col: u32 = global_id.x;
       let row: u32 = global_id.y;
-      let M: u32 = uniforms.M;
-      let ND4: u32 = uniforms.N;
-      let HSizeD4: u32 = uniforms.HSize;
+      let N: u32 = uniforms.N;
+      let HD4: u32 = uniforms.HD4;
 
-      if (row >= M || col >= N) {
+      if (row >= uniforms.M || col >= N) {
         return;
       }
 
-      let head: u32 = row / M;
-      var sum0: f32 = 0.0;
-      for (var i: u32 = 0; i < HSizeD4; i = i + 1) {
-        sum0 = sum + dot(query_array[row * HSizeD4 + i], key_array[col * ND4 + i + head * HSizeD4]);
+      let head: u32 = row / N;
+      var sum: f32 = 0.0;
+      for (var i: u32 = 0; i < HD4; i = i + 1) {
+        sum = sum + dot(query_array[row * HD4 + i], key_array[col * uniforms.ED4 + i + head * HD4]);
       }
 
-      result_array[row * N + col] = sum0 * uniforms.attentionScale;
+      // Causal attention step.
+      let rowMask: u32 = row % N;
+      let causalMask: bool = (col <= rowMask);
+      result_array[row * N + col] = select(-1e9, sum * uniforms.attentionScale, causalMask);
     }
   `;
 
   newAttentionValuesShader = `
     struct Meta {
       M: u32,
-      N: u32,
       ND4: u32,
       HD4: u32,
     }
@@ -1416,32 +1466,30 @@ class AttentionBlockClass extends Block {
     @group(0) @binding(0) var<uniform> uniforms: Meta;
     @group(0) @binding(1) var<storage, read_write> result_array: array<vec4<f32>>;
 
-    @group(1) @binding(0) var<storage, read> query_array: array<vec4<f32>>;
-    @group(1) @binding(1) var<storage, read> key_array: array<vec4<f32>>;
+    @group(1) @binding(0) var<storage, read> weights_array: array<f32>;
+    @group(1) @binding(1) var<storage, read> values_array: array<vec4<f32>>;
 
     @compute @workgroup_size(8, 8)
     fn main (@builtin(global_invocation_id) global_id: vec3<u32>) {
       var col: u32 = global_id.x;
       var row: u32 = global_id.y;
-      var ND4: u32 = uniforms.ND4;
       var M: u32 = uniforms.M;
-      var N: u32 = uniforms.N;
+      var ND4: u32 = uniforms.ND4;
+      var HD4: u32 = uniforms.HD4;
+
 
       if (row >= M || col >= ND4) {
         return;
       }
 
-      var headIndex: u32 = row / N;
-
-      var sum0: vec4<f32> = vec4<f32>(0.0);
-
-      for (let i = 0; i < ND4; i = i + 1) {
-        var query_row_0: vec4<f32> = query_array[row * ND4 + i];
-
-        sum0 += sum0
+      let head: u32 = col / HD4;
+      var sum: vec4<f32> = vec4<f32>(0.0);
+      for (let i = 0; i < M; i = i + 1) {
+        var weight = weights_array[row * M + i + head * M * M]; // weights is M * M
+        sum += sum + values_array[i * ND4 + col] * weight;
       }
 
-      result_array[row * ND4 + col] = shift;
+      result_array[row * ND4 + col] = sum;
     }
   `;
 }
