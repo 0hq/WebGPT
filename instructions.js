@@ -1227,6 +1227,8 @@ class AttentionBlockClass extends Block {
     FastMatMulBlock,
     SoftmaxBlock
   ) {
+    console.log("newFusedInstance", seq_length, n_embd, attentionDotProductScale, n_head, head_size);
+
     const { resultBuffer: QResultBuffer, passes: QMLPPasses } = FastMatMulBlock.newInstance(
       seq_length,
       n_embd,
@@ -1279,7 +1281,7 @@ class AttentionBlockClass extends Block {
     const attentionWeightsInputBindGroup = this.initBindGroup(this.r_r_Layout, [formatQResultBuffer, KResultBuffer], `${this.name}_AttentionWeightsInputG`);
     this.device.queue.writeBuffer(attentionWeightsUniformBuffer, 0, new Uint32Array([seq_length * n_head, seq_length, n_embd / 4, head_size / 4]));
     this.device.queue.writeBuffer(attentionWeightsUniformBuffer, 16, new Float32Array([attentionDotProductScale]));
-    const attentionWeightsWorkgroups = { x: wgSize(seq_length, 16), y: wgSize(seq_length * n_head, 16), z: 1 };
+    const attentionWeightsWorkgroups = { x: wgSize(seq_length, 8), y: wgSize(seq_length * n_head, 8), z: 1 };
 
     const { resultBuffer: softmaxOutputBuffer, passes: softmaxPasses } = SoftmaxBlock.newInstance(
       seq_length * n_head,
@@ -1287,13 +1289,21 @@ class AttentionBlockClass extends Block {
       attentionWeightsResultBuffer
     );
 
+    // const attentionValuesPipeline = this.getAttentionValuesPipeline();
+    // const attentionValuesUniformBuffer = this.initBuffer(["uniform", "copy_to"], [4]);
+    // const attentionValuesResultBuffer = this.initBuffer(["storage", "copy_from"], [seq_length, n_embd]);
+    // const attentionValuesBindGroup = this.initBindGroup(this.u_s_Layout, [attentionValuesUniformBuffer, attentionValuesResultBuffer]);
+    // const attentionValuesInputBindGroup = this.initBindGroup(this.r_r_Layout, [softmaxOutputBuffer, VResultBuffer], `${this.name}_AttentionValuesInputG`);
+    // this.device.queue.writeBuffer(attentionValuesUniformBuffer, 0, new Uint32Array([seq_length, n_embd, n_head, head_size]));
+    // const attentionValuesWorkgroups = { x: wgSize(n_embd, 16), y: wgSize(seq_length, 16), z: 1 };
+
     const attentionValuesPipeline = this.getNewAttentionValuesPipeline();
     const attentionValuesUniformBuffer = this.initBuffer(["uniform", "copy_to"], [4]);
     const attentionValuesResultBuffer = this.initBuffer(["storage", "copy_from"], [seq_length, n_embd]);
     const attentionValuesBindGroup = this.initBindGroup(this.u_s_Layout, [attentionValuesUniformBuffer, attentionValuesResultBuffer]);
     const attentionValuesInputBindGroup = this.initBindGroup(this.r_r_Layout, [softmaxOutputBuffer, VResultBuffer], `${this.name}_AttentionValuesInputG`);
     this.device.queue.writeBuffer(attentionValuesUniformBuffer, 0, new Uint32Array([seq_length, n_embd / 4, head_size / 4]));
-    const attentionValuesWorkgroups = { x: wgSize(n_embd, 16), y: wgSize(seq_length, 16), z: 1 };
+    const attentionValuesWorkgroups = { x: wgSize(n_embd, 32), y: wgSize(seq_length, 8), z: 1 };
 
     const { resultBuffer: linearMLPResult, passes: linearMLPPasses } = FastMatMulBlock.newInstance(
       seq_length,
@@ -1330,6 +1340,50 @@ class AttentionBlockClass extends Block {
           workgroups: attentionValuesWorkgroups,
         },
         ...linearMLPPasses,
+      ],
+    };
+  }
+
+  newTestInstance(seq_length, n_embd, head_size, softmaxOutputBuffer, VResultBuffer) {
+    const attentionValuesPipeline = this.getNewAttentionValuesPipeline();
+    const attentionValuesUniformBuffer = this.initBuffer(["uniform", "copy_to"], [4]);
+    const attentionValuesResultBuffer = this.initBuffer(["storage", "copy_from"], [seq_length, n_embd]);
+    const attentionValuesBindGroup = this.initBindGroup(this.u_s_Layout, [attentionValuesUniformBuffer, attentionValuesResultBuffer]);
+    const attentionValuesInputBindGroup = this.initBindGroup(this.r_r_Layout, [softmaxOutputBuffer, VResultBuffer], `${this.name}_AttentionValuesInputG`);
+    this.device.queue.writeBuffer(attentionValuesUniformBuffer, 0, new Uint32Array([seq_length, n_embd / 4, head_size / 4]));
+    const attentionValuesWorkgroups = { x: wgSize(n_embd, 32), y: wgSize(seq_length, 8), z: 1 };
+
+    return {
+      resultBuffer: attentionValuesResultBuffer,
+      passes: [
+        {
+          flag: "compute",
+          pipeline: attentionValuesPipeline,
+          groups: [attentionValuesBindGroup, attentionValuesInputBindGroup],
+          workgroups: attentionValuesWorkgroups,
+        },
+      ],
+    };
+  }
+
+  newTestOldInstance(seq_length, n_embd, head_size, n_head, softmaxOutputBuffer, VResultBuffer) {
+    const attentionValuesPipeline = this.getAttentionValuesPipeline();
+    const attentionValuesUniformBuffer = this.initBuffer(["uniform", "copy_to"], [4]);
+    const attentionValuesResultBuffer = this.initBuffer(["storage", "copy_from"], [seq_length, n_embd]);
+    const attentionValuesBindGroup = this.initBindGroup(this.u_s_Layout, [attentionValuesUniformBuffer, attentionValuesResultBuffer]);
+    const attentionValuesInputBindGroup = this.initBindGroup(this.r_r_Layout, [softmaxOutputBuffer, VResultBuffer], `${this.name}_AttentionValuesInputG`);
+    this.device.queue.writeBuffer(attentionValuesUniformBuffer, 0, new Uint32Array([seq_length, n_embd, n_head, head_size]));
+    const attentionValuesWorkgroups = { x: wgSize(n_embd, 16), y: wgSize(seq_length, 16), z: 1 };
+
+    return {
+      resultBuffer: attentionValuesResultBuffer,
+      passes: [
+        {
+          flag: "compute",
+          pipeline: attentionValuesPipeline,
+          groups: [attentionValuesBindGroup, attentionValuesInputBindGroup],
+          workgroups: attentionValuesWorkgroups,
+        },
       ],
     };
   }
@@ -1472,7 +1526,6 @@ class AttentionBlockClass extends Block {
       var ND4: u32 = uniforms.ND4;
       var HD4: u32 = uniforms.HD4;
 
-
       if (row >= M || col >= ND4) {
         return;
       }
@@ -1481,7 +1534,7 @@ class AttentionBlockClass extends Block {
       var sum: vec4<f32> = vec4<f32>(0.0);
       for (var i: u32 = 0; i < M; i = i + 1) {
         var weight = weights_array[row * M + i + head * M * M]; // weights is M * M
-        sum += sum + values_array[i * ND4 + col] * weight;
+        sum = sum + values_array[i * ND4 + col] * weight;
       }
 
       result_array[row * ND4 + col] = sum;

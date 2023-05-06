@@ -367,25 +367,31 @@ class TestShader {
 
   async test() {
     // ---------------- Create Passes ---------------- //
-    const { M, N } = { M: 4, N: 64 };
-    const input_array = new Float32Array(M * N);
-    const weight_array = new Float32Array(N * N);
-    const seq_length = 10;
-    const embed_array = new Float32Array(seq_length * M);
-    for (let i = 0; i < seq_length * M; i++) {
-      if (i >= seq_length * M - M + 1) {
-        embed_array[i] = 1;
+    const seq_length = 15;
+    const n_embd = 128;
+    const n_head = 4;
+    const head_size = n_embd / n_head;
+    const { M, N } = { M: seq_length * n_head, N: seq_length };
+    const input_array = new Float32Array(M * N); // Softmax
+    const weight_array = new Float32Array(seq_length * n_embd);
+    for (let y = 0; y < M; y++) {
+      for (let x = 0; x < N; x++) {
+        input_array[y * N + x] = Math.floor(y / N) + 1;
+        // causal mask
+        if (x > y % N) input_array[y * N + x] = 0;
+      }
+    }
+    for (let y = 0; y < seq_length; y++) {
+      for (let x = 0; x < n_embd; x++) {
+        weight_array[y * n_embd + x] = Math.floor(x / head_size) + 1;
       }
     }
 
-    for (let i = 0; i < M * N; i++) input_array[i] = 1;
-    for (let i = 0; i < M; i++) weight_array[i * M + i] = 1;
     console.log(formatAsMatrix(input_array, M, N));
-    console.log(formatAsMatrix(embed_array, seq_length, M));
+    console.log(formatAsMatrix(weight_array, seq_length, n_embd));
 
     const inputBuffer = this.initTensor(input_array, [M, N], ["storage"]);
-    const weightBuffer = this.initTensor(weight_array, [N, N], ["storage"]);
-    const embedBuffer = this.initTensor(embed_array, [seq_length, M], ["storage", "copy_from"]);
+    const weightBuffer = this.initTensor(weight_array, [seq_length, n_embd], ["storage", "copy_from"]);
 
     this.computePasses = [];
     const push = ({ passes, resultBuffer }) => {
@@ -393,11 +399,10 @@ class TestShader {
       return resultBuffer;
     };
 
-    const numHeads = 4;
-
     let intermediateBuffer = inputBuffer;
-    intermediateBuffer = push(DeEmbedBlock.newInstance(M, N, N, seq_length, N, embedBuffer, [intermediateBuffer]));
-    // intermediateBuffer = push(OutputBlock.newInstance(1, N, intermediateBuffer));
+    intermediateBuffer = push(AttentionBlock.newTestInstance(seq_length, n_embd, head_size, intermediateBuffer, weightBuffer));
+    // intermediateBuffer = push(AttentionBlock.newTestOldInstance(seq_length, n_embd, head_size, n_head, intermediateBuffer, weightBuffer));
+    intermediateBuffer = push(OutputBlock.newInstance(seq_length, n_embd, intermediateBuffer));
     let resultBuffer = intermediateBuffer;
 
     // ---------------- Compute Passes ----------------
@@ -421,7 +426,7 @@ class TestShader {
     await resultBuffer.mapAsync(GPUMapMode.READ);
     const output = resultBuffer.getMappedRange();
     const outputArray = new Float32Array(output).slice(0); // Copy the array, otherwise it'll be destroyed.
-    console.log(formatAsMatrix(outputArray, 1, N));
+    console.log(formatAsMatrix(outputArray, seq_length, n_embd));
 
     // ---------------- Create Passes ---------------- //
 
