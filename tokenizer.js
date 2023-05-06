@@ -93,12 +93,12 @@ class GPT2Tokenizer extends Tokenizer {
     let bpe_tokens = [];
     const matches = Array.from(text.matchAll(this.pat)).map((x) => x[0]);
     for (let token of matches) {
-      token = Array.from(this.textEncoder.encode(token))
-        .map((x) => x.toString())
-        .map((x) => {
-          return this.byte_encoder[x];
-        })
-        .join("");
+      const encoded_bytes = this.textEncoder.encode(token);
+      let bytes = [];
+      for (let i = 0; i < encoded_bytes.length; i++) {
+        bytes.push(this.byte_encoder[encoded_bytes[i].toString()]);
+      }
+      token = bytes.join("");
 
       const new_tokens = this.bpe(token)
         .split(" ")
@@ -122,7 +122,7 @@ class GPT2Tokenizer extends Tokenizer {
     if (!pairs) return token;
     while (true) {
       const minPairs = {};
-      Array.from(pairs).map((pair) => {
+      pairs.forEach(pair => {
         const rank = this.bpe_ranks[pair];
         minPairs[isNaN(rank) ? 10e10 : rank] = pair;
       });
@@ -160,7 +160,8 @@ class GPT2Tokenizer extends Tokenizer {
 }
 
 const range = (x, y) => {
-  res = Array.from(Array(y).keys()).slice(x);
+  const res = [];
+  for (let i = x; i < y; i++) { res.push(i) }
   return res;
 };
 
