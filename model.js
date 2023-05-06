@@ -44,7 +44,7 @@ class GPT {
       this.defaultPrompt = `WILL:\nAh, how dare you challenge me?\nHave you forgotten I built WebGPT?\n`;
       this.defaultTopK = 1;
       this.defaultTemperature = 1;
-      this.defaultTokens = 1;
+      this.defaultTokens = 80;
     }
 
     this.initialized = true;
@@ -61,6 +61,7 @@ class GPT {
     let history = this.tokenizer.encode(prompt);
     console.log(`Prompt (${history.length} tokens):\n${prompt}`);
 
+    const warmupRuns = 3;
     let totalTime = 0;
 
     for (let i = 0; i < max_new_tokens; i++) {
@@ -75,7 +76,7 @@ class GPT {
       // console.log(`Using attention cache? ${useAttCache}`);
       const lapsedTime = endTime - startTime;
       console.log(`Kernel execution time: ${lapsedTime} ms`);
-      totalTime += lapsedTime;
+      i > warmupRuns && (totalTime += lapsedTime);
 
       const { topKIndices, topKProbs } = selectTopK(logits, top_k);
       const probs = cpuSoftmax(topKProbs, temperature);
@@ -97,7 +98,7 @@ class GPT {
       yield this.tokenizer.decode([idx_next]);
     }
 
-    console.log(`Average kernel execution time: ${totalTime / max_new_tokens} ms`);
+    console.log(`Average kernel execution time: ${totalTime / (max_new_tokens - warmupRuns)} ms`);
   }
 
   async run(idx) {
@@ -130,24 +131,6 @@ class GPT {
         intermediateBuffer = resultBuffer;
         this.computePasses.push(...passes);
       }
-      // {
-      //   const { passes, resultBuffer } = AttentionBlock.newInstance(
-      //     seq_length,
-      //     n_embd,
-      //     attention_scale,
-      //     n_head,
-      //     head_size,
-      //     intermediateBuffer,
-      //     buffers.qkvWeightsBuffer,
-      //     buffers.qkvBiasBuffer,
-      //     buffers.linearWeightsBuffer,
-      //     buffers.linearBiasBuffer,
-      //     FastMatMulBlock,
-      //     SoftmaxBlock
-      //   );
-      //   intermediateBuffer = resultBuffer;
-      //   this.computePasses.push(...passes);
-      // }
       {
         const { passes, resultBuffer } = AttentionBlock.newFusedInstance(
           seq_length,
@@ -267,8 +250,6 @@ class GPT {
 
     destroyOperationBuffers();
 
-    console.log("Output:", outputArray);
-
     return outputArray;
   }
 
@@ -356,9 +337,7 @@ class GPT {
       const vWeights = transpose(qkvWeightsRaw.subarray(n_embd * n_embd * 2, n_embd * n_embd * 3), n_embd, n_embd);
 
       const qkvWeightArray = [qWeights, kWeights, vWeights];
-      console.log(qkvWeightArray);
       const qkvBiasArray = [qkvBias.subarray(0, n_embd), qkvBias.subarray(n_embd, n_embd * 2), qkvBias.subarray(n_embd * 2, n_embd * 3)];
-      console.log(qkvBiasArray);
 
       const linearWeights = transpose(await fetchBin(`${prefix}attn.c_proj.weight_gpt.bin`), n_embd, n_embd);
       const linearBias = bias ? await fetchBin(`${prefix}attn.c_proj.bias_gpt.bin`) : zeros(n_embd);
