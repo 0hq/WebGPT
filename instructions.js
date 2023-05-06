@@ -78,7 +78,7 @@ class Block {
 class FastMatMulBlockClass extends Block {
   constructor() {
     super();
-    this.name = "fastMLP";
+    this.name = "fastMatMul";
     this.pipelineCache = new Map();
   }
 
@@ -86,7 +86,7 @@ class FastMatMulBlockClass extends Block {
     const settings = rows % 4 !== 0 ? "withCheck" : "noCheck";
     const pipelineCacheKey = `${this.name}_${settings}}`;
     if (this.pipelineCache.has(pipelineCacheKey)) return this.pipelineCache.get(pipelineCacheKey);
-    const kernel = this.fastMLP(settings);
+    const kernel = this.fastMatMul(settings);
     const pipeline = this.initPipeline(kernel, [this.u_s_Layout, this.r_r_r_Layout], `${this.name}_Pipeline_${pipelineCacheKey}`);
     this.pipelineCache.set(pipelineCacheKey, pipeline);
     return pipeline;
@@ -115,7 +115,7 @@ class FastMatMulBlockClass extends Block {
     };
   }
 
-  fastMLP(flag) {
+  fastMatMul(flag) {
     console.log(flag);
     const outputCode = {
       withCheck: `

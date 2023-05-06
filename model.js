@@ -37,12 +37,12 @@ class GPT {
 
     if (this.folder == "gpt2") {
       this.defaultPrompt = `What is the answer to life, the universe, and everything?\n`;
-      this.defaultTopK = 1;
+      this.defaultTopK = 3;
       this.defaultTemperature = 1;
       this.defaultTokens = 30;
     } else {
       this.defaultPrompt = `WILL:\nAh, how dare you challenge me?\nHave you forgotten I built WebGPT?\n`;
-      this.defaultTopK = 1;
+      this.defaultTopK = 2;
       this.defaultTemperature = 1;
       this.defaultTokens = 80;
     }
