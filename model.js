@@ -136,6 +136,7 @@ class GPT {
           n_embd,
           attention_scale,
           n_head,
+          head_size,
           intermediateBuffer,
           buffers.qkvWeightsBuffer,
           buffers.qkvBiasBuffer,
@@ -153,6 +154,7 @@ class GPT {
       //     n_embd,
       //     attention_scale,
       //     n_head,
+      //     head_size,
       //     intermediateBuffer,
       //     buffers.qkvWeightArray[0],
       //     buffers.qkvBiasArray[0],
@@ -303,7 +305,7 @@ class GPT {
 
     params.vocab_chunk_size = vocab_chunk_size;
     params.vocab_chunk_instances = splits;
-    params.head_size = n_embd / n_head;
+    params.head_size = params.n_embd / params.n_head;
     params.hidden_size = params.n_embd * 4;
     params.attention_scale = 1 / Math.sqrt(params.n_embd / params.n_head);
     const { block_size, n_embd, n_head, n_layer, bias, vocab_size, hidden_size, vocab_chunk_instances } = params;

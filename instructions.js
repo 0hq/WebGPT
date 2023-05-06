@@ -915,6 +915,7 @@ class AttentionBlockClass extends Block {
     n_embd,
     attentionDotProductScale,
     n_head,
+    head_size,
     inputBuffer,
     qkvWeightsBuffer,
     qkvBiasBuffer,
@@ -1195,7 +1196,7 @@ class AttentionBlockClass extends Block {
   getFormatQPipeline() {
     const pipelineCacheKey = `${this.name}_format_q`; // No param optimization.
     if (this.pipelineCache.has(pipelineCacheKey)) return this.pipelineCache.get(pipelineCacheKey);
-    const pipeline = this.initPipeline(this.formatQShader, [this.u_s_Layout, this.r_r_Layout], `${this.name}_Pipeline_AttWeights`);
+    const pipeline = this.initPipeline(this.formatQShader, [this.u_s_Layout, this.r_Layout], `${this.name}_Pipeline_formatQ`);
     this.pipelineCache.set(pipelineCacheKey, pipeline);
     return pipeline;
   }
@@ -1286,12 +1287,12 @@ class AttentionBlockClass extends Block {
       attentionWeightsResultBuffer
     );
 
-    const attentionValuesPipeline = this.getAttentionValuesPipeline();
+    const attentionValuesPipeline = this.getNewAttentionValuesPipeline();
     const attentionValuesUniformBuffer = this.initBuffer(["uniform", "copy_to"], [4]);
     const attentionValuesResultBuffer = this.initBuffer(["storage", "copy_from"], [seq_length, n_embd]);
     const attentionValuesBindGroup = this.initBindGroup(this.u_s_Layout, [attentionValuesUniformBuffer, attentionValuesResultBuffer]);
     const attentionValuesInputBindGroup = this.initBindGroup(this.r_r_Layout, [softmaxOutputBuffer, VResultBuffer], `${this.name}_AttentionValuesInputG`);
-    this.device.queue.writeBuffer(attentionValuesUniformBuffer, 0, new Uint32Array([seq_length, n_embd, n_head, head_size]));
+    this.device.queue.writeBuffer(attentionValuesUniformBuffer, 0, new Uint32Array([seq_length, n_embd / 4, head_size / 4]));
     const attentionValuesWorkgroups = { x: wgSize(n_embd, 16), y: wgSize(seq_length, 16), z: 1 };
 
     const { resultBuffer: linearMLPResult, passes: linearMLPPasses } = FastMatMulBlock.newInstance(
@@ -1311,21 +1312,15 @@ class AttentionBlockClass extends Block {
         ...VMLPPasses,
         {
           flag: "compute",
-          pipeline: splitQKVPipeline,
-          groups: [splitQKVBindGroup, splitQKVInputBindGroup],
-          workgroups: splitQKVWorkgroups,
+          pipeline: formatQPipeline,
+          groups: [formatQBindGroup, formatQInputBindGroup],
+          workgroups: formatQWorkgroups,
         },
         {
           flag: "compute",
           pipeline: attentionWeightsPipeline,
           groups: [attentionWeightsBindGroup, attentionWeightsInputBindGroup],
           workgroups: attentionWeightsWorkgroups,
-        },
-        {
-          flag: "compute",
-          pipeline: causalMaskPipeline,
-          groups: [causalMaskBindGroup, causalMaskInputBindGroup],
-          workgroups: causalMaskWorkgroups,
         },
         ...softmaxPasses,
         {
@@ -1419,8 +1414,8 @@ class AttentionBlockClass extends Block {
   // Sequence length invariant, no padding needed.
   fusedWeightsShader = `
     struct Meta {
-      M: u32, // n * n_heads
-      N: u32,
+      M: u32, // seq_length * n_heads
+      N: u32, // seq_length
       ED4: u32, // hsize * n_heads
       HD4: u32,
       attentionScale: f32,
@@ -1484,7 +1479,7 @@ class AttentionBlockClass extends Block {
 
       let head: u32 = col / HD4;
       var sum: vec4<f32> = vec4<f32>(0.0);
-      for (let i = 0; i < M; i = i + 1) {
+      for (var i: u32 = 0; i < M; i = i + 1) {
         var weight = weights_array[row * M + i + head * M * M]; // weights is M * M
         sum += sum + values_array[i * ND4 + col] * weight;
       }
