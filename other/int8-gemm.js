@@ -4,7 +4,6 @@
  * Should adjust the absmax from being a global value to a vector-wise value.
  */
 
-
 const M = 1;
 const N = 2048;
 const K = 2048;
@@ -17,51 +16,49 @@ const C = new Float32Array(M * N);
 
 // Initialize matrices A and B with random values
 for (let i = 0; i < M * K; i++) {
-    A[i] = ((Math.random() * 2) - 1) / 5;
+  A[i] = (Math.random() * 2 - 1) / 5;
 }
 for (let i = 0; i < K * N; i++) {
-    B[i] = ((Math.random() * 2) - 1) / 5;
+  B[i] = (Math.random() * 2 - 1) / 5;
 }
-
 
 function quantizeMatrix(matrix, M, N) {
-    const blockSize = 4;
-    const quantizedMatrix = new Int32Array(Math.ceil(M * N / blockSize));
+  const blockSize = 4;
+  const quantizedMatrix = new Int32Array(Math.ceil((M * N) / blockSize));
 
-    // Find the global absmax value
-    let absmax = 0;
-    for (let i = 0; i < M * N; i++) {
-        absmax = Math.max(absmax, Math.abs(matrix[i]));
-    }
+  // Find the global absmax value
+  let absmax = 0;
+  for (let i = 0; i < M * N; i++) {
+    absmax = Math.max(absmax, Math.abs(matrix[i]));
+  }
 
-    // Quantize the matrix values to int8 and pack them into Int32Array
-    for (let i = 0; i < M * N; i += blockSize) {
-        const packedValue =
-            (Math.round(matrix[i] / absmax * 127) & 0xFF) |
-            ((Math.round(matrix[i + 1] / absmax * 127) & 0xFF) << 8) |
-            ((Math.round(matrix[i + 2] / absmax * 127) & 0xFF) << 16) |
-            ((Math.round(matrix[i + 3] / absmax * 127) & 0xFF) << 24);
-        quantizedMatrix[Math.floor(i / blockSize)] = packedValue;
-    }
+  // Quantize the matrix values to int8 and pack them into Int32Array
+  for (let i = 0; i < M * N; i += blockSize) {
+    const packedValue =
+      (Math.round((matrix[i] / absmax) * 127) & 0xff) |
+      ((Math.round((matrix[i + 1] / absmax) * 127) & 0xff) << 8) |
+      ((Math.round((matrix[i + 2] / absmax) * 127) & 0xff) << 16) |
+      ((Math.round((matrix[i + 3] / absmax) * 127) & 0xff) << 24);
+    quantizedMatrix[Math.floor(i / blockSize)] = packedValue;
+  }
 
-    return { quantizedMatrix, absmax };
+  return { quantizedMatrix, absmax };
 }
 
-
 function dequantizeMatrix(quantizedMatrix, absmax, M, N) {
-    const blockSize = 4;
-    const matrix = new Float32Array(M * N);
+  const blockSize = 4;
+  const matrix = new Float32Array(M * N);
 
-    // Dequantize the matrix values from Int32Array to Float32Array
-    for (let i = 0; i < M * N; i += blockSize) {
-        const packedValue = quantizedMatrix[Math.floor(i / blockSize)];
-        matrix[i] = ((packedValue << 24) >> 24) / 127.0 * absmax;
-        matrix[i + 1] = ((packedValue << 16) >> 24) / 127.0 * absmax;
-        matrix[i + 2] = ((packedValue << 8) >> 24) / 127.0 * absmax;
-        matrix[i + 3] = (packedValue >> 24) / 127.0 * absmax;
-    }
+  // Dequantize the matrix values from Int32Array to Float32Array
+  for (let i = 0; i < M * N; i += blockSize) {
+    const packedValue = quantizedMatrix[Math.floor(i / blockSize)];
+    matrix[i] = (((packedValue << 24) >> 24) / 127.0) * absmax;
+    matrix[i + 1] = (((packedValue << 16) >> 24) / 127.0) * absmax;
+    matrix[i + 2] = (((packedValue << 8) >> 24) / 127.0) * absmax;
+    matrix[i + 3] = ((packedValue >> 24) / 127.0) * absmax;
+  }
 
-    return matrix;
+  return matrix;
 }
 
 const qa = quantizeMatrix(A, M, K);
@@ -72,7 +69,6 @@ const quantizedB = qb.quantizedMatrix;
 
 const dqB = dequantizeMatrix(quantizedB, qb.absmax, K, N);
 
-
 // for (let i = 0; i < 10; i++) {
 //     console.log(B[i], dqB[i]);
 // }
@@ -81,45 +77,44 @@ const absmax = Math.max(qa.absmax, qb.absmax);
 
 // Naive CPU implementation of matrix multiplication
 function multiplyMatrices(A, B, C, M, N, K) {
-    for (let i = 0; i < M; i++) {
-        for (let j = 0; j < N; j++) {
-            let sum = 0;
-            for (let k = 0; k < K; k++) {
-                sum += A[i * K + k] * B[k * N + j];
-            }
-            C[i * N + j] = sum;
-        }
+  for (let i = 0; i < M; i++) {
+    for (let j = 0; j < N; j++) {
+      let sum = 0;
+      for (let k = 0; k < K; k++) {
+        sum += A[i * K + k] * B[k * N + j];
+      }
+      C[i * N + j] = sum;
     }
+  }
 }
 
 async function run() {
-    // Create WebGPU device and queue
-    const adapter = await navigator.gpu.requestAdapter();
-    const device = await adapter.requestDevice();
-    const queue = device.queue;
+  // Create WebGPU device and queue
+  const adapter = await navigator.gpu.requestAdapter();
+  const device = await adapter.requestDevice();
+  const queue = device.queue;
 
-    // Create buffers for matrices A, B, and C
-    const aBuffer = device.createBuffer({
-        size: A.byteLength,
-        usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
-    });
-    const bBuffer = device.createBuffer({
-        size: quantizedB.byteLength,
-        usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
-    });
-    const cBuffer = device.createBuffer({
-        size: C.byteLength,
-        usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC,
-    });
+  // Create buffers for matrices A, B, and C
+  const aBuffer = device.createBuffer({
+    size: A.byteLength,
+    usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
+  });
+  const bBuffer = device.createBuffer({
+    size: quantizedB.byteLength,
+    usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
+  });
+  const cBuffer = device.createBuffer({
+    size: C.byteLength,
+    usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC,
+  });
 
-    // Copy matrices A and B to their respective buffers
-    queue.writeBuffer(aBuffer, 0, A);
-    queue.writeBuffer(bBuffer, 0, quantizedB);
+  // Copy matrices A and B to their respective buffers
+  queue.writeBuffer(aBuffer, 0, A);
+  queue.writeBuffer(bBuffer, 0, quantizedB);
 
-    // Create bind group layout and bind group
+  // Create bind group layout and bind group
 
-
-    const shaderCode = `
+  const shaderCode = `
     
     @group(0) @binding(0) var<storage,read> array_a: array<vec4<f32>>;
     @group(0) @binding(1) var<storage,read> array_b: array<i32>;
@@ -233,75 +228,121 @@ async function run() {
     }
 `;
 
+  const shaderModule = device.createShaderModule({
+    code: shaderCode,
+  });
 
-
-
-
-    const shaderModule = device.createShaderModule({
-        code: shaderCode,
-    });
-
-    const bindGroupLayout = device.createBindGroupLayout({
-        entries: [
-            {
-                binding: 0,
-                visibility: GPUShaderStage.COMPUTE,
-                buffer: {
-                    type: 'read-only-storage',
-                },
-            },
-            {
-                binding: 1,
-                visibility: GPUShaderStage.COMPUTE,
-                buffer: {
-                    type: 'read-only-storage',
-                },
-            },
-            {
-                binding: 2,
-                visibility: GPUShaderStage.COMPUTE,
-                buffer: {
-                    type: 'storage',
-                },
-            },
-        ],
-    });
-
-    const bindGroup = device.createBindGroup({
-        layout: bindGroupLayout,
-        entries: [
-            {
-                binding: 0,
-                resource: {
-                    buffer: aBuffer,
-                },
-            },
-            {
-                binding: 1,
-                resource: {
-                    buffer: bBuffer,
-                },
-            },
-            {
-                binding: 2,
-                resource: {
-                    buffer: cBuffer,
-                },
-            },
-        ],
-    });
-
-    const pipelineLayout = device.createPipelineLayout({
-        bindGroupLayouts: [bindGroupLayout],
-    });
-
-    const pipeline = device.createComputePipeline({
-        layout: pipelineLayout,
-        compute: {
-            module: shaderModule,
-            entryPoint: 'main',
+  const bindGroupLayout = device.createBindGroupLayout({
+    entries: [
+      {
+        binding: 0,
+        visibility: GPUShaderStage.COMPUTE,
+        buffer: {
+          type: "read-only-storage",
         },
-    });
+      },
+      {
+        binding: 1,
+        visibility: GPUShaderStage.COMPUTE,
+        buffer: {
+          type: "read-only-storage",
+        },
+      },
+      {
+        binding: 2,
+        visibility: GPUShaderStage.COMPUTE,
+        buffer: {
+          type: "storage",
+        },
+      },
+    ],
+  });
+
+  const bindGroup = device.createBindGroup({
+    layout: bindGroupLayout,
+    entries: [
+      {
+        binding: 0,
+        resource: {
+          buffer: aBuffer,
+        },
+      },
+      {
+        binding: 1,
+        resource: {
+          buffer: bBuffer,
+        },
+      },
+      {
+        binding: 2,
+        resource: {
+          buffer: cBuffer,
+        },
+      },
+    ],
+  });
+
+  const pipelineLayout = device.createPipelineLayout({
+    bindGroupLayouts: [bindGroupLayout],
+  });
+
+  const pipeline = device.createComputePipeline({
+    layout: pipelineLayout,
+    compute: {
+      module: shaderModule,
+      entryPoint: "main",
+    },
+  });
+  const encoder = device.createCommandEncoder();
+  const passEncoder = encoder.beginComputePass();
+
+  // Dispatch the compute kernel
+  passEncoder.setPipeline(pipeline);
+  passEncoder.setBindGroup(0, bindGroup);
+  passEncoder.dispatchWorkgroups(workgroupSizeX, workgroupSizeY, 1);
+  passEncoder.end();
+
+  const readBuffer = device.createBuffer({
+    size: C.byteLength,
+    usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ,
+  });
+
+  // Copy matrix C from the GPU to the CPU
+  encoder.copyBufferToBuffer(cBuffer, 0, readBuffer, 0, C.byteLength);
+
+  device.queue.submit([encoder.finish()]);
+
+  await readBuffer.mapAsync(GPUMapMode.READ);
+  const readBufferData = new Float32Array(readBuffer.getMappedRange());
+
+  const C_cpu = new Float32Array(M * N);
+  multiplyMatrices(A, B, C_cpu, M, N, K);
+
+  for (let i = 0; i < M * N; i++) {
+    if (Math.abs(C_cpu[i] - readBufferData[i]) > 0.1) {
+      console.error("CPU and GPU results differ at index", i);
+      console.error("CPU:", C_cpu[i], "GPU:", readBufferData[i]);
+      break;
+    }
+    // } else {
+    //     console.log("CPU and GPU results are the same at index", i);
+    //     console.log("CPU:", C_cpu[i], "GPU:", readBufferData[i]);
+    // }
+  }
+
+  let mae = 0;
+  for (let i = 0; i < M * N; i++) {
+    mae += Math.abs(C_cpu[i] - readBufferData[i]);
+  }
+  mae /= M * N;
+  console.log("Mean Absolute Error:", mae);
+
+  const NUM_RUNS = 100;
+
+  //warmup
+
+  for (let i = 0; i < NUM_RUNS; i++) {
+    // Dispatch the compute kernel
     const encoder = device.createCommandEncoder();
     const passEncoder = encoder.beginComputePass();
 
@@ -309,105 +350,51 @@ async function run() {
     passEncoder.setPipeline(pipeline);
     passEncoder.setBindGroup(0, bindGroup);
     passEncoder.dispatchWorkgroups(workgroupSizeX, workgroupSizeY, 1);
-    passEncoder.end()
+
+    passEncoder.end();
 
     const readBuffer = device.createBuffer({
-        size: C.byteLength,
-        usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ,
+      size: C.byteLength,
+      usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ,
+    });
+
+    // Copy matrix C from the GPU to the CPU
+    encoder.copyBufferToBuffer(cBuffer, 0, readBuffer, 0, C.byteLength);
+  }
+
+  // Run GPU kernel NUM_RUNS times and measure time
+  let totalTime = 0;
+  for (let i = 0; i < NUM_RUNS; i++) {
+    const start = performance.now();
+
+    // Dispatch the compute kernel
+    const encoder = device.createCommandEncoder();
+    const passEncoder = encoder.beginComputePass();
+
+    // Dispatch the compute kernel
+    passEncoder.setPipeline(pipeline);
+    passEncoder.setBindGroup(0, bindGroup);
+    passEncoder.dispatchWorkgroups(M / workgroupSizeX, N / workgroupSizeY, 1);
+
+    passEncoder.end();
+
+    const readBuffer = device.createBuffer({
+      size: C.byteLength,
+      usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ,
     });
 
     // Copy matrix C from the GPU to the CPU
     encoder.copyBufferToBuffer(cBuffer, 0, readBuffer, 0, C.byteLength);
 
-    device.queue.submit([encoder.finish()]);
+    const end = performance.now();
+    totalTime += end - start;
+  }
+  const averageTime = totalTime / NUM_RUNS;
+  console.log(`Average time per run: ${averageTime.toFixed(2)} ms`);
+  // print flops
 
-    await readBuffer.mapAsync(GPUMapMode.READ);
-    const readBufferData = new Float32Array(readBuffer.getMappedRange());
-
-    const C_cpu = new Float32Array(M * N)
-    multiplyMatrices(A, B, C_cpu, M, N, K);
-
-    for (let i = 0; i < M * N; i++) {
-        if (Math.abs(C_cpu[i] - readBufferData[i]) > 0.1) {
-            console.error("CPU and GPU results differ at index", i);
-            console.error("CPU:", C_cpu[i], "GPU:", readBufferData[i]);
-            break;
-        }
-        // } else {
-        //     console.log("CPU and GPU results are the same at index", i);
-        //     console.log("CPU:", C_cpu[i], "GPU:", readBufferData[i]);
-        // }
-    }
-
-    let mae = 0;
-    for (let i = 0; i < M * N; i++) {
-        mae += Math.abs(C_cpu[i] - readBufferData[i]);
-    }
-    mae /= M * N;
-    console.log("Mean Absolute Error:", mae);
-
-    const NUM_RUNS = 100;
-
-    //warmup
-
-    for (let i = 0; i < NUM_RUNS; i++) {
-
-        // Dispatch the compute kernel
-        const encoder = device.createCommandEncoder();
-        const passEncoder = encoder.beginComputePass();
-
-        // Dispatch the compute kernel
-        passEncoder.setPipeline(pipeline);
-        passEncoder.setBindGroup(0, bindGroup);
-        passEncoder.dispatchWorkgroups(workgroupSizeX, workgroupSizeY, 1);
-
-        passEncoder.end()
-
-        const readBuffer = device.createBuffer({
-            size: C.byteLength,
-            usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ,
-        });
-
-        // Copy matrix C from the GPU to the CPU
-        encoder.copyBufferToBuffer(cBuffer, 0, readBuffer, 0, C.byteLength);
-
-
-    }
-
-    // Run GPU kernel NUM_RUNS times and measure time
-    let totalTime = 0;
-    for (let i = 0; i < NUM_RUNS; i++) {
-        const start = performance.now();
-
-        // Dispatch the compute kernel
-        const encoder = device.createCommandEncoder();
-        const passEncoder = encoder.beginComputePass();
-
-        // Dispatch the compute kernel
-        passEncoder.setPipeline(pipeline);
-        passEncoder.setBindGroup(0, bindGroup);
-        passEncoder.dispatchWorkgroups(M / workgroupSizeX, N / workgroupSizeY, 1);
-
-        passEncoder.end()
-
-        const readBuffer = device.createBuffer({
-            size: C.byteLength,
-            usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ,
-        });
-
-        // Copy matrix C from the GPU to the CPU
-        encoder.copyBufferToBuffer(cBuffer, 0, readBuffer, 0, C.byteLength);
-
-
-        const end = performance.now();
-        totalTime += end - start;
-    }
-    const averageTime = totalTime / NUM_RUNS;
-    console.log(`Average time per run: ${averageTime.toFixed(2)} ms`);
-    // print flops
-
-    const flops = 2 * M * N * K / (averageTime);
-    console.log(`GFLOPS: ${flops / 1e9}`);
+  const flops = (2 * M * N * K) / averageTime;
+  console.log(`GFLOPS: ${flops / 1e9}`);
 }
 
 run();

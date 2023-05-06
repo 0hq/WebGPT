@@ -1,31 +1,14 @@
-const NaiveMatMulBlock = new NaiveMatMulBlockClass();
 const FastMatMulBlock = new FastMatMulBlockClass();
-const FastRowAddBlock = new FastRowAddBlockClass();
-const FastFFNBlock = new FastFFNBlockClass();
 const AttentionBlock = new AttentionBlockClass();
 const ResidualBlock = new ResidualBlockClass();
 const EmbedBlock = new EmbedBlockClass();
-const OldDeEmbedBlock = new OldDeEmbedBlockClass();
+const DeEmbedBlock = new DeEmbedBlockClass();
 const GeluBlock = new GeluBlockClass();
 const LayerNormBlock = new LayerNormBlockClass();
-const TransposeBlock = new TransposeBlockClass();
 const SoftmaxBlock = new SoftmaxBlockClass();
 
 // Needed for deletion.
-const operations = [
-  NaiveMatMulBlock,
-  FastMatMulBlock,
-  FastRowAddBlock,
-  FastFFNBlock,
-  AttentionBlock,
-  ResidualBlock,
-  EmbedBlock,
-  OldDeEmbedBlock,
-  GeluBlock,
-  LayerNormBlock,
-  TransposeBlock,
-  SoftmaxBlock,
-];
+let operations = [FastMatMulBlock, AttentionBlock, ResidualBlock, EmbedBlock, DeEmbedBlock, GeluBlock, LayerNormBlock, SoftmaxBlock];
 
 function initializeOperations(device) {
   for (const operation of operations) operation.initialize(device);
@@ -51,7 +34,7 @@ async function fetchBin(url) {
   return new Float32Array(buffer);
 }
 
-const wgSize = (dim, size) => Math.min(Math.ceil(dim / size), 256);
+const wgSize = (dim, size) => Math.min(Math.ceil(dim / size), Infinity);
 
 function sampleFromDistribution(probs) {
   const rand = Math.random();
