@@ -1253,7 +1253,7 @@ class SimpleTokenizer extends Tokenizer {
 
   async load() {
     console.log("Loading simple tokenizer...");
-    this.encoder = await (await fetch("models/tokenization/simple_tokens.json")).json();
+    this.encoder = await (await fetch("weights/tokenization/simple_tokens.json")).json();
     this.decoder = Object.keys(this.encoder).reduce((acc, x) => ({ ...acc, [this.encoder[x]]: x }), {});
     this.vocab_size = Object.keys(this.encoder).length;
   }
@@ -1281,8 +1281,8 @@ class GPT2Tokenizer extends Tokenizer {
   async load() {
     console.log("Loading GPT2 tokenizer...");
 
-    const bpe_file = await (await fetch("models/tokenization/vocab.bpe")).text();
-    const encoder = await (await fetch("models/tokenization/gpt_tokens.json")).json();
+    const bpe_file = await (await fetch("weights/tokenization/vocab.bpe")).text();
+    const encoder = await (await fetch("weights/tokenization/gpt_tokens.json")).json();
     this.encoder = encoder;
 
     console.log("Building decoder...");
@@ -1689,7 +1689,7 @@ class GPT {
     if (this.initialized) return console.error("Model already loaded");
 
     console.log("Loading model from folder:", folder);
-    const fldr = `models/${folder}/`;
+    const fldr = `weights/${folder}/`;
     const zeros = (dim) => new Float32Array(dim).fill(0);
 
     console.log("Loading params...");

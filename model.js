@@ -257,7 +257,7 @@ class GPT {
     if (this.initialized) return console.error("Model already loaded");
 
     console.log("Loading model from folder:", folder);
-    const fldr = `models/${folder}/`;
+    const fldr = `weights/${folder}/`;
     const zeros = (dim) => new Float32Array(dim).fill(0);
 
     console.log("Loading params...");
