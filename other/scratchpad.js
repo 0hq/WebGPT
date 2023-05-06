@@ -913,4 +913,42 @@ struct BMeta {
   //    }
   //  `,
 
+    transposeShader = `
+    struct Meta {
+      M: u32,
+      N: u32,
+    }
+    
+    @group(1) @binding(0) var<storage, read> input_array: array<f32>;
+    
+    @group(0) @binding(0) var<uniform> uniforms: Meta;
+    @group(0) @binding(1) var<storage, read_write> result_array: array<f32>;
+    
+    // Bank conflicts?
+    var<workgroup> tile: array<array<f32, 8>, 8>;
+    
+    @compute @workgroup_size(8, 8)
+    fn main (@builtin(workgroup_id) wg_id: vec3<u32>,  @builtin(local_invocation_id) local_id: vec3<u32>) {
+      let col: u32 = wg_id.x;
+      let row: u32 = wg_id.y;
+      let N: u32 = uniforms.N;
+      let M: u32 = uniforms.M;
+
+      let tile_col = col * 8u + local_id.x;
+      let tile_row = row * 8u + local_id.y;
+    
+      // Load a tile from input_array to shared memory tile
+      if (tile_row < M && tile_col < N) {
+        tile[local_id.y][local_id.x] = input_array[tile_row * N + tile_col];
+      }
+    
+      workgroupBarrier(); // Ensure all threads have finished writing to the shared memory before proceeding
+        
+      // Write the transposed tile to result_array. Flips dims.
+      if (tile_row < M && tile_col < N) {
+        result_array[tile_col * M + tile_row] = tile[local_id.x][local_id.y]; 
+      }
+    }
+  `;
+
 */

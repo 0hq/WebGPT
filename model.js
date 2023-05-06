@@ -76,7 +76,7 @@ class GPT {
       // console.log(`Using attention cache? ${useAttCache}`);
       const lapsedTime = endTime - startTime;
       console.log(`Kernel execution time: ${lapsedTime} ms`);
-      i > warmupRuns && (totalTime += lapsedTime);
+      i >= warmupRuns && (totalTime += lapsedTime);
 
       const { topKIndices, topKProbs } = selectTopK(logits, top_k);
       const probs = cpuSoftmax(topKProbs, temperature);
@@ -327,14 +327,12 @@ class GPT {
       const normAttentionGamma = await fetchBin(`${prefix}ln_1.weight_gpt.bin`);
       const normAttentionBeta = bias ? await fetchBin(`${prefix}ln_1.bias_gpt.bin`) : zeros(n_embd);
 
-      const qkvWeightsRaw = await fetchBin(`${prefix}attn.c_attn.weight_gpt.bin`);
-      const qkvWeights = transpose(qkvWeightsRaw, 3 * n_embd, n_embd);
+      const qkvWeights = await fetchBin(`${prefix}attn.c_attn.weight_gpt.bin`);
       const qkvBias = bias ? await fetchBin(`${prefix}attn.c_attn.bias_gpt.bin`) : zeros(3 * n_embd);
 
-      // Split into q, k, v. Subarray is more efficient because it's a view.
-      const qWeights = transpose(qkvWeightsRaw.subarray(0, n_embd * n_embd), n_embd, n_embd);
-      const kWeights = transpose(qkvWeightsRaw.subarray(n_embd * n_embd, n_embd * n_embd * 2), n_embd, n_embd);
-      const vWeights = transpose(qkvWeightsRaw.subarray(n_embd * n_embd * 2, n_embd * n_embd * 3), n_embd, n_embd);
+      const qWeights = transpose(qkvWeights.subarray(0, n_embd * n_embd), n_embd, n_embd);
+      const kWeights = transpose(qkvWeights.subarray(n_embd * n_embd, n_embd * n_embd * 2), n_embd, n_embd);
+      const vWeights = transpose(qkvWeights.subarray(n_embd * n_embd * 2, n_embd * n_embd * 3), n_embd, n_embd);
 
       const qkvWeightArray = [qWeights, kWeights, vWeights];
       const qkvBiasArray = [qkvBias.subarray(0, n_embd), qkvBias.subarray(n_embd, n_embd * 2), qkvBias.subarray(n_embd * 2, n_embd * 3)];
@@ -356,8 +354,6 @@ class GPT {
       layer_buffers.push({
         normAttentionGammaBuffer: this.initTensor(normAttentionGamma, [n_embd], ["storage"]),
         normAttentionBetaBuffer: this.initTensor(normAttentionBeta, [n_embd], ["storage"]),
-        qkvWeightsBuffer: this.initTensor(qkvWeights, [n_embd, 3 * n_embd], ["storage"]),
-        qkvBiasBuffer: this.initTensor(qkvBias, [3 * n_embd], ["storage"]),
         qkvWeightArray: qkvWeightArray.map((x) => this.initTensor(x, [n_embd, n_embd], ["storage"])),
         qkvBiasArray: qkvBiasArray.map((x) => this.initTensor(x, [n_embd], ["storage"])),
         linearWeightsBuffer: this.initTensor(linearWeights, [n_embd, n_embd], ["storage"]),
