@@ -116,7 +116,6 @@ class FastMatMulBlockClass extends Block {
   }
 
   fastMatMul(flag) {
-    console.log(flag);
     const outputCode = {
       withCheck: `
       if (y * 4u + 0u < M) {

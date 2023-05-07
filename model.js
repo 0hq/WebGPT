@@ -108,6 +108,8 @@ class GPT {
     // ---------------- Create Passes ---------------- //
     // Note: These are re-initialized because everytime seq_length changes buffers are different sizes.
 
+    // Pipeline creation is major bottleneck to spin up speed! Also buffer re-use.
+
     this.computePasses = [];
     let intermediateBuffer;
     let residualBuffer;
@@ -256,11 +258,24 @@ class GPT {
     if (this.initialized) return console.error("Model already loaded");
 
     console.log("Loading model from folder:", folder);
-    const fldr = `weights/${folder}/`;
-    const zeros = (dim) => new Float32Array(dim).fill(0);
+    const weightsFolder = `weights/${folder}/`;
 
+    const params = await this.loadParameters(weightsFolder);
+    const { embeddingsBuffer, deEmbeddingsBuffers } = await this.loadEmbeddings(params, weightsFolder);
+    const { posEmbdBuffer } = await this.loadPositionalEmbeddings(params, weightsFolder);
+    const layer_buffers = await this.loadLayers(params, weightsFolder);
+
+    console.log("Loading final layer norm...");
+    const { normGammaBuffer, normBetaBuffer } = await this.loadFinalLayerNorm(params, weightsFolder);
+
+    const output = { layer_buffers, embeddingsBuffer, deEmbeddingsBuffers, posEmbdBuffer, normGammaBuffer, normBetaBuffer };
+    console.log("Finished loading model.", output, params);
+    return [output, params];
+  }
+
+  async loadParameters(weightsFolder) {
     console.log("Loading params...");
-    const params = await (await fetch(`${fldr}/params_gpt.json`)).json();
+    const params = await (await fetch(`${weightsFolder}/params_gpt.json`)).json();
 
     // Did you enable GitHub LFS? Won't work without it.
     if (params.n_embd % 4 !== 0) throw new Error("Model load failed: n_embd must be divisible by 4.");
@@ -285,95 +300,161 @@ class GPT {
     const { vocab_chunk_size, splits } = vocabChunkSizeCalc(params.vocab_size, params.n_embd, minSplits, this.device.limits.maxStorageBufferBindingSize);
     if (splits > minSplits) console.warn(`Non-optimal number of vocab splits. Optimal: ${minSplits}, Selected: ${splits}`);
 
+    // Set derived parameters
     params.vocab_chunk_size = vocab_chunk_size;
     params.vocab_chunk_instances = splits;
     params.head_size = params.n_embd / params.n_head;
     params.hidden_size = params.n_embd * 4;
     params.attention_scale = 1 / Math.sqrt(params.n_embd / params.n_head);
     params.bias = params.bias == undefined ? true : params.bias;
-    const { n_ctx, n_embd, n_head, n_layer, bias, vocab_size, hidden_size, vocab_chunk_instances } = params;
 
+    return params;
+  }
+
+  async loadEmbeddings(params, weightsFolder) {
     console.log("Loading token embeddings...");
-    const embeddingWeights = await fetchBin(`${fldr}/transformer.wte.weight_gpt.bin`);
-    const embeddingsBuffer = this.initTensor(embeddingWeights, [vocab_size, n_embd], ["copy_from"]);
+    const embeddingWeights = await fetchBin(`${weightsFolder}/transformer.wte.weight_gpt.bin`);
+    const embeddingsBuffer = this.initTensor(embeddingWeights, [params.vocab_size, params.n_embd], ["copy_from"]);
 
     // Chunks are stored in row-major order and are of dimensions n_embd x vocab_chunk_size.
     // Embedding weights are imported in column-major order and are of dimensions vocab_size x n_embd.
     // We pre-transpose the chunk for the deEmbedding process for the matmul. Could do this on GPU later.
     const deEmbeddingsBuffers = [];
-    for (let i = 0; i < vocab_chunk_instances; i++) {
-      console.log(`Loading deEmbedding chunk ${i + 1}/${vocab_chunk_instances}...`);
-      const offset = i * vocab_chunk_size;
-      let size = vocab_chunk_size;
-      const paddedArray = new Float32Array(vocab_chunk_size * n_embd);
-      if (i === vocab_chunk_instances - 1) {
-        size = vocab_size - offset;
-        paddedArray.set(size * n_embd, zeros((vocab_chunk_size * vocab_chunk_instances - vocab_size) * n_embd));
+    for (let i = 0; i < params.vocab_chunk_instances; i++) {
+      console.log(`Loading deEmbedding chunk ${i + 1}/${params.vocab_chunk_instances}...`);
+      const offset = i * params.vocab_chunk_size;
+      let size = params.vocab_chunk_size;
+      const paddedArray = new Float32Array(params.vocab_chunk_size * params.n_embd);
+      if (i === params.vocab_chunk_instances - 1) {
+        size = params.vocab_size - offset;
+        paddedArray.set(size * params.n_embd, zeros((params.vocab_chunk_size * params.vocab_chunk_instances - params.vocab_size) * params.n_embd));
       }
-      paddedArray.set(embeddingWeights.subarray(offset * n_embd, offset * n_embd + size * n_embd));
-      const chunk = transpose(paddedArray, vocab_chunk_size, n_embd); // Use GPU perhaps?
-      deEmbeddingsBuffers.push(this.initTensor(chunk, [n_embd, vocab_chunk_size], ["storage"]));
+      paddedArray.set(embeddingWeights.subarray(offset * params.n_embd, offset * params.n_embd + size * params.n_embd));
+      const chunk = transpose(paddedArray, params.vocab_chunk_size, params.n_embd); // Use GPU perhaps?
+      deEmbeddingsBuffers.push(this.initTensor(chunk, [params.n_embd, params.vocab_chunk_size], ["storage"]));
     }
 
+    return { embeddingsBuffer, deEmbeddingsBuffers };
+  }
+
+  async loadPositionalEmbeddings(params, weightsFolder) {
     console.log("Loading positional embeddings...");
-    const posEmbeddings = await fetchBin(`${fldr}/transformer.wpe.weight_gpt.bin`);
-    const posEmbdBuffer = this.initTensor(posEmbeddings, [n_ctx, n_embd], ["copy_from"]);
+    const posEmbeddings = await fetchBin(`${weightsFolder}/transformer.wpe.weight_gpt.bin`);
+    const posEmbdBuffer = this.initTensor(posEmbeddings, [params.n_ctx, params.n_embd], ["copy_from"]);
 
-    const layer_buffers = [];
-    for (let i = 0; i < n_layer; i++) {
-      console.log("Loading layer...", i);
-      const prefix = `${fldr}transformer.h.${i}.`;
+    return { posEmbdBuffer };
+  }
 
-      const normAttentionGamma = await fetchBin(`${prefix}ln_1.weight_gpt.bin`);
-      const normAttentionBeta = bias ? await fetchBin(`${prefix}ln_1.bias_gpt.bin`) : zeros(n_embd);
+  async loadFinalLayerNorm(params, weightsFolder) {
+    console.log("Loading final norm...");
+    const prefix = `${weightsFolder}/transformer.ln_f.`;
 
-      const qkvWeights = transpose(await fetchBin(`${prefix}attn.c_attn.weight_gpt.bin`), n_embd, 3 * n_embd);
-      const qkvBias = bias ? await fetchBin(`${prefix}attn.c_attn.bias_gpt.bin`) : zeros(3 * n_embd);
+    const tensorPromises = [
+      this.fetchAndInitTensor(`${prefix}weight_gpt.bin`, [params.n_embd], ["storage"]),
+      this.fetchAndInitTensor(`${prefix}bias_gpt.bin`, [params.n_embd], ["storage"]),
+    ];
 
-      const qWeights = transpose(qkvWeights.subarray(0, n_embd * n_embd), n_embd, n_embd);
-      const kWeights = transpose(qkvWeights.subarray(n_embd * n_embd, n_embd * n_embd * 2), n_embd, n_embd);
-      const vWeights = transpose(qkvWeights.subarray(n_embd * n_embd * 2, n_embd * n_embd * 3), n_embd, n_embd);
+    const [normGammaBuffer, normBetaBuffer] = await Promise.all(tensorPromises);
 
-      const qkvWeightArray = [qWeights, kWeights, vWeights];
-      const qkvBiasArray = [qkvBias.subarray(0, n_embd), qkvBias.subarray(n_embd, n_embd * 2), qkvBias.subarray(n_embd * 2, n_embd * 3)];
+    return { normGammaBuffer, normBetaBuffer };
+  }
 
-      const linearWeights = await fetchBin(`${prefix}attn.c_proj.weight_gpt.bin`);
-      const linearBias = bias ? await fetchBin(`${prefix}attn.c_proj.bias_gpt.bin`) : zeros(n_embd);
+  async loadLayers(params, weightsFolder) {
+    console.log("Loading layers...");
+    const layerPromises = [];
 
-      const normLinearGamma = await fetchBin(`${prefix}ln_2.weight_gpt.bin`);
-      const normLinearBeta = bias ? await fetchBin(`${prefix}ln_2.bias_gpt.bin`) : zeros(n_embd);
-
-      const firstLayerWeights = await fetchBin(`${prefix}mlp.c_fc.weight_gpt.bin`);
-      const firstLayerBias = bias ? await fetchBin(`${prefix}mlp.c_fc.bias_gpt.bin`) : zeros(hidden_size);
-
-      const secondLayerWeights = await fetchBin(`${prefix}mlp.c_proj.weight_gpt.bin`);
-      const secondLayerBias = bias ? await fetchBin(`${prefix}mlp.c_proj.bias_gpt.bin`) : zeros(n_embd);
-
-      layer_buffers.push({
-        normAttentionGammaBuffer: this.initTensor(normAttentionGamma, [n_embd], ["storage"]),
-        normAttentionBetaBuffer: this.initTensor(normAttentionBeta, [n_embd], ["storage"]),
-        qkvWeightArray: qkvWeightArray.map((x) => this.initTensor(x, [n_embd, n_embd], ["storage"])),
-        qkvBiasArray: qkvBiasArray.map((x) => this.initTensor(x, [n_embd], ["storage"])),
-        linearWeightsBuffer: this.initTensor(linearWeights, [n_embd, n_embd], ["storage"]),
-        linearBiasBuffer: this.initTensor(linearBias, [n_embd], ["storage"]),
-        normLinearGammaBuffer: this.initTensor(normLinearGamma, [n_embd], ["storage"]),
-        normLinearBetaBuffer: this.initTensor(normLinearBeta, [n_embd], ["storage"]),
-        firstLayerWeightsBuffer: this.initTensor(firstLayerWeights, [n_embd, hidden_size], ["storage"]),
-        firstLayerBiasBuffer: this.initTensor(firstLayerBias, [hidden_size], ["storage"]),
-        secondLayerWeightsBuffer: this.initTensor(secondLayerWeights, [hidden_size, n_embd], ["storage"]),
-        secondLayerBiasBuffer: this.initTensor(secondLayerBias, [n_embd], ["storage"]),
-      });
+    for (let i = 0; i < params.n_layer; i++) {
+      layerPromises.push(this.loadLayer(params, weightsFolder, i));
     }
 
-    console.log("Loading final layer norm...");
-    const layerNormGamma = await fetchBin(`${fldr}/transformer.ln_f.weight_gpt.bin`);
-    const layerNormBeta = bias ? await fetchBin(`${fldr}/transformer.ln_f.bias_gpt.bin`) : zeros(n_embd);
-    const normGammaBuffer = this.initTensor(layerNormGamma, [n_embd], ["storage"]);
-    const normBetaBuffer = this.initTensor(layerNormBeta, [n_embd], ["storage"]);
+    const layer_buffers = await Promise.all(layerPromises);
+    return layer_buffers;
+  }
 
-    const output = { layer_buffers, embeddingsBuffer, deEmbeddingsBuffers, posEmbdBuffer, normGammaBuffer, normBetaBuffer };
-    console.log("Finished loading model.", output, params);
-    return [output, params];
+  async loadLayer(params, weightsFolder, layerIndex) {
+    console.log("Starting to load layer...", layerIndex);
+    const prefix = `${weightsFolder}transformer.h.${layerIndex}.`;
+
+    // Create an array of promises for fetching and initializing the tensors
+    const tensorPromises = [
+      this.fetchAndInitTensor(`${prefix}ln_1.weight_gpt.bin`, [params.n_embd], ["storage"]),
+      this.fetchAndInitTensor(`${prefix}ln_1.bias_gpt.bin`, [params.n_embd], ["storage"]),
+      this.fetchAndSplitQKVWeightTensors(`${prefix}attn.c_attn.weight_gpt.bin`, [params.n_embd, 3 * params.n_embd], ["storage"]),
+      this.fetchAndSplitQKVBiasTensors(`${prefix}attn.c_attn.bias_gpt.bin`, [params.n_embd], ["storage"]),
+      this.fetchAndInitTensor(`${prefix}attn.c_proj.weight_gpt.bin`, [params.n_embd, params.n_embd], ["storage"]),
+      this.fetchAndInitTensor(`${prefix}attn.c_proj.bias_gpt.bin`, [params.n_embd], ["storage"]),
+      this.fetchAndInitTensor(`${prefix}ln_2.weight_gpt.bin`, [params.n_embd], ["storage"]),
+      this.fetchAndInitTensor(`${prefix}ln_2.bias_gpt.bin`, [params.n_embd], ["storage"]),
+      this.fetchAndInitTensor(`${prefix}mlp.c_fc.weight_gpt.bin`, [params.n_embd, params.hidden_size], ["storage"]),
+      this.fetchAndInitTensor(`${prefix}mlp.c_fc.bias_gpt.bin`, [params.hidden_size], ["storage"]),
+      this.fetchAndInitTensor(`${prefix}mlp.c_proj.weight_gpt.bin`, [params.hidden_size, params.n_embd], ["storage"]),
+      this.fetchAndInitTensor(`${prefix}mlp.c_proj.bias_gpt.bin`, [params.n_embd], ["storage"]),
+    ];
+
+    // Wait for all tensors to be fetched and initialized
+    const [
+      normAttentionGammaBuffer,
+      normAttentionBetaBuffer,
+      qkvWeightArray,
+      qkvBiasArray,
+      linearWeightsBuffer,
+      linearBiasBuffer,
+      normLinearGammaBuffer,
+      normLinearBetaBuffer,
+      firstLayerWeightsBuffer,
+      firstLayerBiasBuffer,
+      secondLayerWeightsBuffer,
+      secondLayerBiasBuffer,
+    ] = await Promise.all(tensorPromises);
+
+    // Process the fetched data and return the layer buffers
+    return {
+      normAttentionGammaBuffer,
+      normAttentionBetaBuffer,
+      qkvWeightArray,
+      qkvBiasArray,
+      linearWeightsBuffer,
+      linearBiasBuffer,
+      normLinearGammaBuffer,
+      normLinearBetaBuffer,
+      firstLayerWeightsBuffer,
+      firstLayerBiasBuffer,
+      secondLayerWeightsBuffer,
+      secondLayerBiasBuffer,
+    };
+  }
+
+  async fetchAndSplitQKVWeightTensors(url, dims, ops) {
+    const data = transpose(await fetchBin(url), dims[0], dims[1]);
+
+    const qWeights = transpose(data.subarray(0, dims[0] * dims[0]), dims[0], dims[0]);
+    const kWeights = transpose(data.subarray(dims[0] * dims[0], dims[0] * dims[0] * 2), dims[0], dims[0]);
+    const vWeights = transpose(data.subarray(dims[0] * dims[0] * 2, dims[0] * dims[0] * 3), dims[0], dims[0]);
+
+    const qWeightsBuffer = this.initTensor(qWeights, [dims[0], dims[0]], ops);
+    const kWeightsBuffer = this.initTensor(kWeights, [dims[0], dims[0]], ops);
+    const vWeightsBuffer = this.initTensor(vWeights, [dims[0], dims[0]], ops);
+
+    return [qWeightsBuffer, kWeightsBuffer, vWeightsBuffer];
+  }
+
+  async fetchAndSplitQKVBiasTensors(url, dims, ops) {
+    const data = await fetchBin(url);
+
+    const qBias = data.subarray(0, dims[0]);
+    const kBias = data.subarray(dims[0], dims[0] * 2);
+    const vBias = data.subarray(dims[0] * 2, dims[0] * 3);
+
+    const qBiasBuffer = this.initTensor(qBias, [dims[0]], ops);
+    const kBiasBuffer = this.initTensor(kBias, [dims[0]], ops);
+    const vBiasBuffer = this.initTensor(vBias, [dims[0]], ops);
+
+    return [qBiasBuffer, kBiasBuffer, vBiasBuffer];
+  }
+
+  async fetchAndInitTensor(url, dims, ops) {
+    const data = await fetchBin(url);
+    return this.initTensor(data, dims, ops);
   }
 
   initTensor(data, dims, ops) {

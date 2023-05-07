@@ -67,8 +67,13 @@ function selectTopK(probs, top_k) {
 
 // ----------------------- Matrix Operations -----------------------
 
+const zeros = (dim) => new Float32Array(dim).fill(0);
+
 function transpose(array, input_rows, input_cols) {
-  if (array.length !== input_rows * input_cols) throw new Error("Transpose dims failed");
+  if (array.length !== input_rows * input_cols) {
+    console.log(array.length, input_rows, input_cols);
+    throw new Error("Transpose dims failed");
+  }
 
   const transpose = [];
   for (let col = 0; col < input_cols; col++) {

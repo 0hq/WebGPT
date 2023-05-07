@@ -101,7 +101,7 @@ Have you forgotten I built WebGPT?&#13;&#10;</textarea
         loadModelButton.disabled = true;
         loadGPT2ModelButton.disabled = true;
 
-        GPTModel = new GPT("large-models/gpt2-large", "bpe");
+        GPTModel = new GPT("gpt2", "bpe");
         await GPTModel.initialize();
 
         setTextareaDisabled(false);
