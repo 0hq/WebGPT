@@ -18,6 +18,10 @@ function destroyOperationBuffers() {
   for (const operation of operations) operation.destroyBuffers();
 }
 
+function clearOperationCache() {
+  for (const operation of operations) operation.clearBufferCache();
+}
+
 function destroyOperations() {
   for (const operation of operations) operation.destroy();
 }
