@@ -18,9 +18,17 @@
       <i>PS: Loading models is 5x slower on the web rather than running locally. Just <a href="https://github.com/0hq/WebGPT">clone the repo</a> and open!</i>
     </p>
 
-    <button id="loadModelButton" onclick="loadModelHandler()" disabled>Load Shakespeare Model</button>
-    <button id="loadGPT2ModelButton" onclick="loadGPT2ModelHandler()" disabled>Load GPT2 Model</button>
+    <button class="loadModelButton" onclick="loadModel('better_shakespeare', 'char')" disabled>Load Shakespeare Model</button>
+    <button class="loadModelButton" onclick="loadModel('gpt2', 'bpe')" disabled>Load GPT2 117M Model</button>
     <button id="destroyCacheButton" onclick="destroyCache()" disabled>Destroy Cache</button>
+
+    <p>
+      <i>Special models (download required):</i>
+    </p>
+    <button class="loadModelButton" onclick="loadModel('large-models/gpt2-medium', 'bpe')" disabled>Load GPT2 377M Model</button>
+    <button class="loadModelButton" onclick="loadModel('large-models/gpt2-large', 'bpe')" disabled>Load GPT2 777M Model</button>
+    <button class="loadModelButton" onclick="loadModel('large-models/gpt2-xl', 'bpe')" disabled>Load GPT2 1.5B Model</button>
+
     <br />
     <br />
     <label for="tokens">Number of tokens:</label>
@@ -42,8 +50,10 @@ Have you forgotten I built WebGPT?&#13;&#10;</textarea
     <br /><br />
     <script>
       const webgpuSupportMessage = document.getElementById("webgpuSupportMessage");
-      const loadModelButton = document.getElementById("loadModelButton");
-      const loadGPT2ModelButton = document.getElementById("loadGPT2ModelButton");
+      const loadModelButton = document.getElementsByClassName("loadModelButton");
+      const setModelButtonDisabled = (bool) => {
+        for (let i = 0; i < loadModelButton.length; i++) loadModelButton[i].disabled = bool;
+      };
       const destroyCacheButton = document.getElementById("destroyCacheButton");
 
       const tokensInput = document.getElementById("tokensInput");
@@ -61,8 +71,7 @@ Have you forgotten I built WebGPT?&#13;&#10;</textarea
         console.error("WebGPU is not supported");
       } else {
         webgpuSupportMessage.innerHTML = "WebGPU is supported in your browser!";
-        loadModelButton.disabled = false;
-        loadGPT2ModelButton.disabled = false;
+        setModelButtonDisabled(false);
       }
 
       async function startGeneration() {
@@ -82,11 +91,10 @@ Have you forgotten I built WebGPT?&#13;&#10;</textarea
         setTextareaDisabled(false);
       }
 
-      async function loadModelHandler() {
-        loadModelButton.disabled = true;
-        loadGPT2ModelButton.disabled = true;
+      async function loadModel(folder, tokenizer) {
+        setModelButtonDisabled(true);
 
-        GPTModel = new GPT("better_shakespeare", "char");
+        GPTModel = new GPT(folder, tokenizer);
         await GPTModel.initialize();
 
         promptTextarea.value = GPTModel.defaultPrompt;
@@ -98,26 +106,6 @@ Have you forgotten I built WebGPT?&#13;&#10;</textarea
         tokensInput.disabled = false;
         topKInput.disabled = false;
         temperatureInput.disabled = false;
-
-        destroyCacheButton.disabled = false;
-      }
-
-      async function loadGPT2ModelHandler() {
-        loadModelButton.disabled = true;
-        loadGPT2ModelButton.disabled = true;
-
-        GPTModel = new GPT("large-models/gpt2-medium", "bpe");
-        await GPTModel.initialize();
-
-        setTextareaDisabled(false);
-        tokensInput.disabled = false;
-        topKInput.disabled = false;
-        temperatureInput.disabled = false;
-
-        promptTextarea.value = GPTModel.defaultPrompt;
-        topKInput.value = GPTModel.defaultTopK;
-        tokensInput.value = GPTModel.defaultTokens;
-        temperatureInput.value = GPTModel.defaultTemperature;
 
         destroyCacheButton.disabled = false;
       }
@@ -151,8 +139,9 @@ Have you forgotten I built WebGPT?&#13;&#10;</textarea
         destroyOperations();
 
         GPTModel = null;
-        loadModelButton.disabled = false;
-        loadGPT2ModelButton.disabled = false;
+
+        setModelButtonDisabled(false);
+
         destroyCacheButton.disabled = true;
         tokensInput.disabled = true;
         topKInput.disabled = true;
