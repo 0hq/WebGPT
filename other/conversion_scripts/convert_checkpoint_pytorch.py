@@ -3,6 +3,9 @@ import struct
 import torch
 import os
 
+transposed = ['attn.c_attn.weight', 'attn.c_proj.weight',
+              'mlp.c_fc.weight', 'mlp.c_proj.weight']
+
 
 def save_weights_to_bin_files(checkpoint, folder_name):
     for key, value in checkpoint['model'].items():
@@ -10,7 +13,12 @@ def save_weights_to_bin_files(checkpoint, folder_name):
         if key.startswith('_orig_mod.'):
             continue
         with open(os.path.join(folder_name, f"{key}_gpt.bin"), 'wb') as file:
-            for single_value in value.numpy().flatten():
+            values = value.cpu().numpy()
+            # Only use this if using old minGPT model.
+            # if any(key.endswith(w) for w in transposed):
+            #     values = values.T
+
+            for single_value in values.flatten():
                 file.write(struct.pack('<f', single_value))
 
 

@@ -443,7 +443,6 @@ class LayerNormBlockClass extends Block {
       op_buffer[col] = threadVariance / f32(N);
       workgroupBarrier();
       
-      // Reduce to one value sum. Optimize with bit shifts.
       for (var i: u32 = wg_size >> 1; i > 0; i = i >> 1) {
         if (col < i) {
           op_buffer[col] = op_buffer[col] + op_buffer[col + i];
@@ -595,7 +594,6 @@ class SoftmaxBlockClass extends Block {
       op_buffer[col] = threadSum;
       workgroupBarrier();
       
-      // Reduce to one value sum. Optimize with bit shifts.
       for (var i: u32 = wg_size >> 1; i > 0; i = i >> 1) {
         if (col < i) {
           op_buffer[col] = op_buffer[col] + op_buffer[col + i];
@@ -666,6 +664,7 @@ class GeluBlockClass extends Block {
     const HALF: vec4<f32> = vec4<f32>(0.5);
     const SQRPI: vec4<f32> = vec4<f32>(0.7978845608);
     const COEFF: vec4<f32> = vec4<f32>(0.044715);
+    
     fn gelu_vec4(x: vec4<f32>) -> vec4<f32> {
       let x_cubed: vec4<f32> = pow(x, vec4<f32>(3.0));
       let cdf_approx: vec4<f32> = HALF * (vec4<f32>(1.0) + tanh(SQRPI * (x + COEFF * x_cubed)));

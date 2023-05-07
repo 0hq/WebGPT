@@ -35,7 +35,7 @@ class GPT {
       throw new Error("Model incompatible. n_embd and n_head must be divisible by 4 for fast matmul.");
     }
 
-    if (this.folder == "gpt2") {
+    if (this.tokenizerType == "bpe") {
       this.defaultPrompt = `What is the answer to life, the universe, and everything?\n`;
       this.defaultTopK = 3;
       this.defaultTemperature = 1;
@@ -65,15 +65,14 @@ class GPT {
     let totalTime = 0;
 
     for (let i = 0; i < max_new_tokens; i++) {
-      const idx_cond = history.slice(-this.params.block_size);
-      const useAttCache = i !== 0 && history.length <= this.params.block_size && this.doAttentionCache;
+      const idx_cond = history.slice(-this.params.n_ctx);
+      const useAttCache = i !== 0 && history.length <= this.params.n_ctx;
 
       const startTime = performance.now();
       const logits = await this.run(idx_cond, useAttCache);
       const endTime = performance.now();
 
       // console.log(`\nIteration ${i + 1} of ${max_new_tokens}`);
-      // console.log(`Using attention cache? ${useAttCache}`);
       const lapsedTime = endTime - startTime;
       console.log(`Kernel execution time: ${lapsedTime} ms`);
       i >= warmupRuns && (totalTime += lapsedTime);
@@ -291,7 +290,8 @@ class GPT {
     params.head_size = params.n_embd / params.n_head;
     params.hidden_size = params.n_embd * 4;
     params.attention_scale = 1 / Math.sqrt(params.n_embd / params.n_head);
-    const { block_size, n_embd, n_head, n_layer, bias, vocab_size, hidden_size, vocab_chunk_instances } = params;
+    params.bias = params.bias == undefined ? true : params.bias;
+    const { n_ctx, n_embd, n_head, n_layer, bias, vocab_size, hidden_size, vocab_chunk_instances } = params;
 
     console.log("Loading token embeddings...");
     const embeddingWeights = await fetchBin(`${fldr}/transformer.wte.weight_gpt.bin`);
@@ -317,7 +317,7 @@ class GPT {
 
     console.log("Loading positional embeddings...");
     const posEmbeddings = await fetchBin(`${fldr}/transformer.wpe.weight_gpt.bin`);
-    const posEmbdBuffer = this.initTensor(posEmbeddings, [block_size, n_embd], ["copy_from"]);
+    const posEmbdBuffer = this.initTensor(posEmbeddings, [n_ctx, n_embd], ["copy_from"]);
 
     const layer_buffers = [];
     for (let i = 0; i < n_layer; i++) {
@@ -327,7 +327,7 @@ class GPT {
       const normAttentionGamma = await fetchBin(`${prefix}ln_1.weight_gpt.bin`);
       const normAttentionBeta = bias ? await fetchBin(`${prefix}ln_1.bias_gpt.bin`) : zeros(n_embd);
 
-      const qkvWeights = await fetchBin(`${prefix}attn.c_attn.weight_gpt.bin`);
+      const qkvWeights = transpose(await fetchBin(`${prefix}attn.c_attn.weight_gpt.bin`), n_embd, 3 * n_embd);
       const qkvBias = bias ? await fetchBin(`${prefix}attn.c_attn.bias_gpt.bin`) : zeros(3 * n_embd);
 
       const qWeights = transpose(qkvWeights.subarray(0, n_embd * n_embd), n_embd, n_embd);
@@ -337,18 +337,16 @@ class GPT {
       const qkvWeightArray = [qWeights, kWeights, vWeights];
       const qkvBiasArray = [qkvBias.subarray(0, n_embd), qkvBias.subarray(n_embd, n_embd * 2), qkvBias.subarray(n_embd * 2, n_embd * 3)];
 
-      const linearWeights = transpose(await fetchBin(`${prefix}attn.c_proj.weight_gpt.bin`), n_embd, n_embd);
+      const linearWeights = await fetchBin(`${prefix}attn.c_proj.weight_gpt.bin`);
       const linearBias = bias ? await fetchBin(`${prefix}attn.c_proj.bias_gpt.bin`) : zeros(n_embd);
-
-      const attentionCache = zeros(block_size * n_head * block_size);
 
       const normLinearGamma = await fetchBin(`${prefix}ln_2.weight_gpt.bin`);
       const normLinearBeta = bias ? await fetchBin(`${prefix}ln_2.bias_gpt.bin`) : zeros(n_embd);
 
-      const firstLayerWeights = transpose(await fetchBin(`${prefix}mlp.c_fc.weight_gpt.bin`), hidden_size, n_embd);
+      const firstLayerWeights = await fetchBin(`${prefix}mlp.c_fc.weight_gpt.bin`);
       const firstLayerBias = bias ? await fetchBin(`${prefix}mlp.c_fc.bias_gpt.bin`) : zeros(hidden_size);
 
-      const secondLayerWeights = transpose(await fetchBin(`${prefix}mlp.c_proj.weight_gpt.bin`), n_embd, hidden_size);
+      const secondLayerWeights = await fetchBin(`${prefix}mlp.c_proj.weight_gpt.bin`);
       const secondLayerBias = bias ? await fetchBin(`${prefix}mlp.c_proj.bias_gpt.bin`) : zeros(n_embd);
 
       layer_buffers.push({
@@ -364,7 +362,6 @@ class GPT {
         firstLayerBiasBuffer: this.initTensor(firstLayerBias, [hidden_size], ["storage"]),
         secondLayerWeightsBuffer: this.initTensor(secondLayerWeights, [hidden_size, n_embd], ["storage"]),
         secondLayerBiasBuffer: this.initTensor(secondLayerBias, [n_embd], ["storage"]),
-        attentionCacheBuffer: this.initTensor(attentionCache, [block_size * n_head, block_size], ["storage", "copy_from", "copy_to"]),
       });
     }
 
