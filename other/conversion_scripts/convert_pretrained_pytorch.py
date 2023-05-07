@@ -13,6 +13,8 @@ def load_pretrained_gpt_model(model_type):
 transposed = ['attn.c_attn.weight', 'attn.c_proj.weight',
               'mlp.c_fc.weight', 'mlp.c_proj.weight']
 
+ignored = ['.attn.masked_bias', '.attn.bias']
+
 
 def export_weights_to_files(model, folder_name):
     os.makedirs(folder_name, exist_ok=True)
@@ -21,6 +23,10 @@ def export_weights_to_files(model, folder_name):
 
     for k, v in state_dict.items():
         print(f"{k}: {v.shape}")
+
+        if any(i in k for i in ignored):
+            print(f"Skipping {k}")
+            continue
 
         with open(os.path.join(folder_name, f"{k}_gpt.bin"), 'wb') as f:
             values = v.cpu().numpy()
@@ -43,7 +49,7 @@ def main(model_type, folder_name):
 
 
 if __name__ == "__main__":
-    model_type = 'gpt2'
+    model_type = 'gpt2-large'
     folder_name = f"{model_type}/"
 
     main(model_type, folder_name)
