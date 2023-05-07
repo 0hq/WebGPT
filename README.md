@@ -33,14 +33,14 @@ Note: **You'll need to use Git LFS** to download the model files, after cloning 
 - [x] Kernel shared memory for matmul!
 - [x] Destroy buffers after use!
 - [x] Create kernel instruction classes + optimize pipeline creation.
+- [X] Fuse all kernels.
+- [X] Optimize all other kernels.
+- [X] Compute pass splitting for larger models _(maxStorageBufferBindingSize)_
 - [ ] Run selection ops on GPU (topk, selection softmax)
-- [ ] Fuse all kernels.
 - [ ] Investigate why attention cache isn't giving proper speed-ups.
 - [ ] Make simple instructional version without special stuff.
 - [ ] Optimize workgroup sizes, specifically for single row/col operations.
-- [ ] Optimize all other kernels.
 - [ ] Convert into a package.
-- [ ] Compute pass splitting for larger models _(maxStorageBufferBindingSize)_
 - [ ] Write better comments + make Youtube explainer.
 
 ## Acknowledgements
