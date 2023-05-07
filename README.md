@@ -7,11 +7,11 @@ After six years of development, WebGPU is about to launch across most major web 
 WebGPT is a vanilla JS and HTML implementation of a transformer model, intended as a proof-of-concept as well as educational resource. WebGPT has been tested to be working with models up to 500 M parameters, though could likely support far more with further testing/optimization.
 
 ### Current Stats
-2020 M1 Mac: 3ms/token at 5M parameters with f32 precision.
-2020 M1 Mac: 30ms/token at 117M parameters with f32 precision.
-2020 M1 Mac: 70ms/token at 377M parameters with f32 precision.
-2020 M1 Mac: 120ms/token at 775M parameters with f32 precision.
-1.5B is workign but unstable, sitting around 1000ms/token due to inefficiencies.
+2020 M1 Mac: 3ms/token at 5M parameters with f32 precision.  
+2020 M1 Mac: 30ms/token at 117M parameters with f32 precision.  
+2020 M1 Mac: 70ms/token at 377M parameters with f32 precision.  
+2020 M1 Mac: 120ms/token at 775M parameters with f32 precision.  
+1.5B is workign but unstable, sitting around 1000ms/token due to inefficiencies.  
 
 ## Running WebGPT
 
