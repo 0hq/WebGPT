@@ -6,8 +6,6 @@
 
 class Block {
   constructor() {
-    this.bufferDeletionStack = [];
-    this.pipelineCache;
     this.name = "";
   }
 
@@ -15,6 +13,8 @@ class Block {
     this.device = device;
     this.initBindGroups();
     this.pipelineCache = new Map();
+    this.boundBufferCache = new Map();
+    this.unboundBufferCache = new Map();
   }
 
   initBindGroup(layout, buffers, label = "") {
@@ -28,12 +28,49 @@ class Block {
     });
   }
 
-  initBuffer(ops, dims) {
+  initUniform(size, values) {
+    const key = `uniform_${values.map((v) => v[1].toString()).join(",")}`;
+    if (this.unboundBufferCache.has(key)) {
+      const buffer = this.unboundBufferCache.get(key).pop();
+      if (this.unboundBufferCache.get(key).length === 0) this.unboundBufferCache.delete(key);
+      return buffer;
+    }
+    const buffer = this.device.createBuffer({
+      size: size * 4,
+      usage: bufferUsageDict["uniform"],
+      mappedAtCreation: true,
+    });
+    const mappedRange = buffer.getMappedRange();
+    for (const value of values) {
+      if (value[1].constructor.name === "Float32Array") {
+        new Float32Array(mappedRange, value[0]).set(value[1]);
+      } else if (value[1].constructor.name === "Uint32Array") {
+        new Uint32Array(mappedRange, value[0]).set(value[1]);
+      }
+    }
+    buffer.unmap();
+    if (!this.boundBufferCache.has(key)) this.boundBufferCache.set(key, []);
+    this.boundBufferCache.get(key).push(buffer);
+    return buffer;
+  }
+
+  initResultBuffer(dims) {
+    const key = `result_${dims.join(",")}`;
+    if (this.unboundBufferCache.has(key)) {
+      const buffer = this.unboundBufferCache.get(key).pop();
+      if (this.unboundBufferCache.get(key).length === 0) this.unboundBufferCache.delete(key);
+      return buffer;
+    }
+    return this.initBuffer(["storage", "copy_from"], dims, key);
+  }
+
+  initBuffer(ops, dims, key = "") {
     const buffer = this.device.createBuffer({
       size: this.bufferSize(dims[0], dims[1] || 1, dims[2] || 1),
       usage: ops.map((u) => bufferUsageDict[u]).reduce((a, b) => a | b),
     });
-    this.bufferDeletionStack.push(buffer);
+    if (!this.boundBufferCache.has(key)) this.boundBufferCache.set(key, []);
+    this.boundBufferCache.get(key).push(buffer);
     return buffer;
   }
 
@@ -83,9 +120,21 @@ class Block {
     this.pipelineCache = null;
   }
 
+  clearBufferCache() {
+    // delete all unbound buffers
+    this.unboundBufferCache.forEach((buffers) => buffers.map((buffer) => buffer.destroy()));
+    // set unbound buffers to bound buffers
+    this.unboundBufferCache = this.boundBufferCache;
+    // clear bound buffers
+    this.boundBufferCache = new Map();
+  }
+
   destroyBuffers() {
-    this.bufferDeletionStack.map((buffer) => buffer.destroy());
-    this.bufferDeletionStack = [];
+    this.unboundBufferCache.forEach((buffers) => buffers.map((buffer) => buffer.destroy()));
+    this.unboundBufferCache = new Map();
+
+    this.boundBufferCache.forEach((buffers) => buffers.map((buffer) => buffer.destroy()));
+    this.boundBufferCache = new Map();
   }
 }
 
@@ -108,12 +157,11 @@ class FastMatMulBlockClass extends Block {
   newInstance(rows, cols, shared, inputBuffer, weightsBuffer, biasBuffer) {
     if (cols % 8 !== 0) throw new Error("Cols must be divisible by 16."); // Is this not 8? Or is it 16?
     const pipeline = this.getPipeline(rows);
-    const uniformBuffer = this.initBuffer(["uniform", "copy_to"], [4]);
-    const resultBuffer = this.initBuffer(["storage", "copy_from"], [rows, cols]);
+    const uniformBuffer = this.initUniform(4, [[0, new Uint32Array([rows, cols, Math.ceil(cols / 4), Math.ceil(shared / 4)])]]);
+    const resultBuffer = this.initResultBuffer([rows, cols]);
     const opBindGroup = this.initBindGroup(this.u_s_Layout, [uniformBuffer, resultBuffer], `${this.name}_OpG`);
     const inputBindGroup = this.initBindGroup(this.r_r_r_Layout, [inputBuffer, weightsBuffer, biasBuffer], `${this.name}_InputG`);
     const workgroups = { x: wgSize(cols, 8 * 8), y: wgSize(rows, 4 * 8) };
-    this.device.queue.writeBuffer(uniformBuffer, 0, new Uint32Array([rows, cols, Math.ceil(cols / 4), Math.ceil(shared / 4)]));
 
     return {
       resultBuffer,
@@ -288,12 +336,11 @@ class ResidualBlockClass extends Block {
   newInstance(rows, cols, outputBuf, residualBuf) {
     if (cols % 4 !== 0) throw new Error("Cols must be divisible by 4.");
     const pipeline = this.getPipeline();
-    const uniformBuffer = this.initBuffer(["uniform", "copy_to"], [4]);
-    const resultBuffer = this.initBuffer(["storage", "copy_from"], [rows, cols]);
+    const uniformBuffer = this.initUniform(4, [[0, new Uint32Array([rows, Math.ceil(cols / 4)])]]);
+    const resultBuffer = this.initResultBuffer([rows, cols]);
     const opBindGroup = this.initBindGroup(this.u_s_Layout, [uniformBuffer, resultBuffer], `${this.name}_OpG`);
     const inputBindGroup = this.initBindGroup(this.r_r_Layout, [outputBuf, residualBuf], `${this.name}_InputG`);
     const workgroups = { x: wgSize(cols, 32), y: wgSize(rows, 8), z: 1 };
-    this.device.queue.writeBuffer(uniformBuffer, 0, new Uint32Array([rows, Math.ceil(cols / 4)]));
 
     return {
       resultBuffer,
@@ -364,23 +411,21 @@ class LayerNormBlockClass extends Block {
 
     const workgroupsX = cols > 4096 ? 256 : 64;
     const statsPipeline = this.getStatsPipeline(workgroupsX);
-    const statsUniformBuffer = this.initBuffer(["uniform", "copy_to"], [4]);
-    const statsResultBuffer = this.initBuffer(["storage", "copy_from"], [rows, 2]);
+    const statsUniformBuffer = this.initUniform(4, [[0, new Uint32Array([cols])]]);
+    const statsResultBuffer = this.initResultBuffer([rows, 2]);
     const statsBindGroup = this.initBindGroup(this.u_s_Layout, [statsUniformBuffer, statsResultBuffer], `${this.name}_BindGroup_stats`);
     const statsInputBindGroup = this.initBindGroup(this.r_Layout, [inputBuffer], `${this.name}_InputG`);
     const statsWorkgroups = { x: 1, y: wgSize(rows, 1), z: 1 };
-    this.device.queue.writeBuffer(statsUniformBuffer, 0, new Uint32Array([cols]));
 
     const normPipeline = this.getNormPipeline();
-    const normUniformBuffer = this.initBuffer(["uniform", "copy_to"], [4]);
-    const normResultBuffer = this.initBuffer(["storage", "copy_from"], [rows, cols]);
+    const normUniformBuffer = this.initUniform(4, [[0, new Uint32Array([rows, Math.ceil(cols / 4)])]]);
+    const normResultBuffer = this.initResultBuffer([rows, cols]);
     const normBindGroup = this.initBindGroup(this.u_s_Layout, [normUniformBuffer, normResultBuffer], `${this.name}_BindGroup_norm`);
     const normInputBindGroup = this.initBindGroup(
       this.r_r_r_r_Layout,
       [inputBuffer, gammaBuffer, betaBuffer, statsResultBuffer],
       `${this.name}_InputBindGroup_norm`
     );
-    this.device.queue.writeBuffer(normUniformBuffer, 0, new Uint32Array([rows, Math.ceil(cols / 4)]));
     const normWorkgroups = { x: wgSize(cols, 32), y: wgSize(rows, 8), z: 1 };
 
     return {
@@ -523,10 +568,8 @@ class SoftmaxBlockClass extends Block {
     const workgroupsX = cols > 4096 ? 256 : 64;
     const fusedPipeline = this.getFusedPipeline(workgroupsX, transpose);
 
-    const uniformBuffer = this.initBuffer(["uniform", "copy_to"], [4]);
-    this.device.queue.writeBuffer(uniformBuffer, 0, new Uint32Array([rows, cols]));
-
-    const resultBuffer = this.initBuffer(["storage", "copy_from"], [rows, cols], `${this.name}_ResultBuffer_`);
+    const uniformBuffer = this.initUniform(4, [[0, new Uint32Array([rows, cols])]]);
+    const resultBuffer = this.initResultBuffer([rows, cols], `${this.name}_ResultBuffer_`);
     const bindGroup = this.initBindGroup(this.u_s_Layout, [uniformBuffer, resultBuffer], `${this.name}_BindGroup_`);
     const inputBindGroup = this.initBindGroup(this.r_Layout, [inputBuffer], `${this.name}_BindGroup__Input`);
     const workgroups = { x: 1, y: wgSize(rows, 1), z: 1 };
@@ -640,12 +683,11 @@ class GeluBlockClass extends Block {
   newInstance(rows, cols, inputBuf) {
     if (cols % 4 !== 0) throw new Error("Cols must be divisible by 4.");
     const pipeline = this.getPipeline();
-    const uniformBuffer = this.initBuffer(["uniform", "copy_to"], [4]);
-    const resultBuffer = this.initBuffer(["storage", "copy_from"], [rows, cols]);
+    const uniformBuffer = this.initUniform(4, [[0, new Uint32Array([rows, Math.ceil(cols / 4)])]]);
+    const resultBuffer = this.initResultBuffer([rows, cols]);
     const opBindGroup = this.initBindGroup(this.u_s_Layout, [uniformBuffer, resultBuffer], `${this.name}_OpG`);
     const inputBindGroup = this.initBindGroup(this.r_Layout, [inputBuf], `${this.name}_InputG`);
     const workgroups = { x: wgSize(cols, 32), y: wgSize(rows, 8), z: 1 };
-    this.device.queue.writeBuffer(uniformBuffer, 0, new Uint32Array([rows, Math.ceil(cols / 4)]));
 
     return {
       resultBuffer,
@@ -710,6 +752,39 @@ class EmbedBlockClass extends Block {
   constructor() {
     super();
     this.name = "embed";
+  }
+
+  staticLoad(embdOutputBuffer, posEmbdOutputBuffer, embdBuffers, posEmbdBuffer, idx, seq_length, n_embd, vocab_chunk_size) {
+    // Can build a cache later.
+    const embdCopyCommands = Array(seq_length)
+      .fill()
+      .map((_, i) => {
+        const chunkOffset = Math.floor(idx[i] / vocab_chunk_size);
+        const chunkIdx = idx[i] % vocab_chunk_size;
+
+        return {
+          flag: "copy",
+          src: embdBuffers[chunkOffset],
+          srcOffset: this.bufferSize(n_embd) * chunkIdx,
+          dst: embdOutputBuffer,
+          dstOffset: this.bufferSize(n_embd) * i,
+          size: this.bufferSize(n_embd),
+        };
+      });
+
+    // Also can be cached.
+    const posCopyCommand = {
+      flag: "copy",
+      src: posEmbdBuffer,
+      srcOffset: 0,
+      dst: posEmbdOutputBuffer,
+      dstOffset: 0,
+      size: this.bufferSize(seq_length, n_embd),
+    };
+
+    return {
+      passes: [...embdCopyCommands, posCopyCommand],
+    };
   }
 
   newInstance(idx, seq_length, n_embd, vocab_chunk_size, embdBuffers, posEmbdBuffer, ResidualBlock) {
@@ -782,12 +857,11 @@ class DeEmbedBlockClass extends Block {
 
     const deEmbedPasses = deEmbeddingsBuffers.flatMap((embdBuffer, i) => {
       // Some future optimizations where we can assume that vocab_size is consistent.
-      const uniformBuffer = this.initBuffer(["uniform", "copy_to"], [4]);
-      const resultBuffer = this.initBuffer(["storage", "copy_from"], [vocab_chunk_size]);
+      const uniformBuffer = this.initUniform(4, [[0, new Uint32Array([vocab_chunk_size, Math.ceil(vocab_chunk_size / 4), Math.ceil(n_embd / 4)])]]);
+      const resultBuffer = this.initResultBuffer([vocab_chunk_size]);
       const opBindGroup = this.initBindGroup(this.u_s_Layout, [uniformBuffer, resultBuffer], `${this.name}_OpG`);
       const inputBindGroup = this.initBindGroup(this.r_r_Layout, [slicedEmbedOutputBuffer, embdBuffer], `${this.name}_InputG`);
       const workgroups = { x: wgSize(vocab_chunk_size, 32), y: 1, z: 1 };
-      this.device.queue.writeBuffer(uniformBuffer, 0, new Uint32Array([vocab_chunk_size, Math.ceil(vocab_chunk_size / 4), Math.ceil(n_embd / 4)]));
 
       return [
         {
@@ -952,24 +1026,24 @@ class AttentionBlockClass extends Block {
     );
 
     const formatQPipeline = this.getFormatQPipeline();
-    const formatQUniformBuffer = this.initBuffer(["uniform", "copy_to"], [4]);
-    const formatQResultBuffer = this.initBuffer(["storage", "copy_from"], [seq_length * n_head, head_size]);
+    const formatQUniformBuffer = this.initUniform(4, [[0, new Uint32Array([seq_length, n_embd, head_size])]]);
+    const formatQResultBuffer = this.initResultBuffer([seq_length * n_head, head_size]);
     const formatQBindGroup = this.initBindGroup(this.u_s_Layout, [formatQUniformBuffer, formatQResultBuffer]);
     const formatQInputBindGroup = this.initBindGroup(this.r_Layout, [QResultBuffer], `${this.name}_formatQInputG`);
-    this.device.queue.writeBuffer(formatQUniformBuffer, 0, new Uint32Array([seq_length, n_embd, head_size]));
     const formatQWorkgroups = { x: wgSize(n_embd, 8), y: wgSize(seq_length, 8), z: 1 };
 
     const attentionWeightsPipeline = this.getNewAttentionWeightsPipeline();
-    const attentionWeightsUniformBuffer = this.initBuffer(["uniform", "copy_to"], [8]);
-    const attentionWeightsResultBuffer = this.initBuffer(["storage", "copy_from"], [seq_length * n_head, seq_length]);
+    const attentionWeightsUniformBuffer = this.initUniform(8, [
+      [0, new Uint32Array([seq_length * n_head, seq_length, n_embd / 4, head_size / 4])],
+      [16, new Float32Array([attentionDotProductScale])],
+    ]);
+    const attentionWeightsResultBuffer = this.initResultBuffer([seq_length * n_head, seq_length]);
     const attentionWeightsBindGroup = this.initBindGroup(
       this.u_s_Layout,
       [attentionWeightsUniformBuffer, attentionWeightsResultBuffer],
       `${this.name}_AttentionWeightsG`
     );
     const attentionWeightsInputBindGroup = this.initBindGroup(this.r_r_Layout, [formatQResultBuffer, KResultBuffer], `${this.name}_AttentionWeightsInputG`);
-    this.device.queue.writeBuffer(attentionWeightsUniformBuffer, 0, new Uint32Array([seq_length * n_head, seq_length, n_embd / 4, head_size / 4]));
-    this.device.queue.writeBuffer(attentionWeightsUniformBuffer, 16, new Float32Array([attentionDotProductScale]));
     const attentionWeightsWorkgroups = { x: wgSize(seq_length, 8), y: wgSize(seq_length * n_head, 8), z: 1 };
 
     const { resultBuffer: softmaxOutputBuffer, passes: softmaxPasses } = SoftmaxBlock.newInstance(
@@ -979,11 +1053,10 @@ class AttentionBlockClass extends Block {
     );
 
     const attentionValuesPipeline = this.getNewAttentionValuesPipeline();
-    const attentionValuesUniformBuffer = this.initBuffer(["uniform", "copy_to"], [4]);
-    const attentionValuesResultBuffer = this.initBuffer(["storage", "copy_from"], [seq_length, n_embd]);
+    const attentionValuesUniformBuffer = this.initUniform(4, [[0, new Uint32Array([seq_length, n_embd / 4, head_size / 4])]]);
+    const attentionValuesResultBuffer = this.initResultBuffer([seq_length, n_embd]);
     const attentionValuesBindGroup = this.initBindGroup(this.u_s_Layout, [attentionValuesUniformBuffer, attentionValuesResultBuffer]);
     const attentionValuesInputBindGroup = this.initBindGroup(this.r_r_Layout, [softmaxOutputBuffer, VResultBuffer], `${this.name}_AttentionValuesInputG`);
-    this.device.queue.writeBuffer(attentionValuesUniformBuffer, 0, new Uint32Array([seq_length, n_embd / 4, head_size / 4]));
     const attentionValuesWorkgroups = { x: wgSize(n_embd, 32), y: wgSize(seq_length, 8), z: 1 };
 
     const { resultBuffer: linearMLPResult, passes: linearMLPPasses } = FastMatMulBlock.newInstance(

@@ -248,7 +248,7 @@ class GPT {
     const output = resultBuffer.getMappedRange();
     const outputArray = new Float32Array(output).slice(0); // Copy the array, otherwise it'll be destroyed.
 
-    destroyOperationBuffers();
+    clearOperationCache();
 
     return outputArray;
   }
