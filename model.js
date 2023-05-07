@@ -31,10 +31,6 @@ class GPT {
     this.tokenizer = this.tokenizerType == "bpe" ? new GPT2Tokenizer() : new SimpleTokenizer();
     await this.tokenizer.load();
 
-    if (this.params.n_embd % 4 !== 0 || this.params.n_head % 4 !== 0) {
-      throw new Error("Model incompatible. n_embd and n_head must be divisible by 4 for fast matmul.");
-    }
-
     if (this.tokenizerType == "bpe") {
       this.defaultPrompt = `What is the answer to life, the universe, and everything?\n`;
       this.defaultTopK = 3;
@@ -57,6 +53,9 @@ class GPT {
       console.error("Model not loaded yet");
       return;
     }
+
+    // Buffer size (321644800) exceeds the max buffer size limit (268435456).
+    //  - While calling [Device].CreateBuffer([BufferDescriptor]).
 
     let history = this.tokenizer.encode(prompt);
     console.log(`Prompt (${history.length} tokens):\n${prompt}`);
@@ -101,7 +100,7 @@ class GPT {
   }
 
   async run(idx) {
-    const { posEmbdBuffer, layer_buffers, normGammaBuffer, normBetaBuffer, embeddingsBuffer, deEmbeddingsBuffers } = this.model;
+    const { posEmbdBuffer, layer_buffers, normGammaBuffer, normBetaBuffer, embeddingsBuffers, deEmbeddingsBuffers } = this.model;
     const { attention_scale, n_embd, n_head, head_size, n_layer, vocab_size, hidden_size, vocab_chunk_size, vocab_chunk_instances } = this.params;
     const seq_length = idx.length;
 
@@ -114,7 +113,7 @@ class GPT {
     let intermediateBuffer;
     let residualBuffer;
     {
-      const { passes, resultBuffer } = EmbedBlock.newInstance(idx, seq_length, n_embd, embeddingsBuffer, posEmbdBuffer, ResidualBlock);
+      const { passes, resultBuffer } = EmbedBlock.newInstance(idx, seq_length, n_embd, vocab_chunk_size, embeddingsBuffers, posEmbdBuffer, ResidualBlock);
       intermediateBuffer = resultBuffer;
       residualBuffer = resultBuffer;
       this.computePasses.push(...passes);
@@ -261,14 +260,14 @@ class GPT {
     const weightsFolder = `weights/${folder}/`;
 
     const params = await this.loadParameters(weightsFolder);
-    const { embeddingsBuffer, deEmbeddingsBuffers } = await this.loadEmbeddings(params, weightsFolder);
+    const { embeddingsBuffers, deEmbeddingsBuffers } = await this.loadEmbeddings(params, weightsFolder);
     const { posEmbdBuffer } = await this.loadPositionalEmbeddings(params, weightsFolder);
     const layer_buffers = await this.loadLayers(params, weightsFolder);
 
     console.log("Loading final layer norm...");
     const { normGammaBuffer, normBetaBuffer } = await this.loadFinalLayerNorm(params, weightsFolder);
 
-    const output = { layer_buffers, embeddingsBuffer, deEmbeddingsBuffers, posEmbdBuffer, normGammaBuffer, normBetaBuffer };
+    const output = { layer_buffers, embeddingsBuffers, deEmbeddingsBuffers, posEmbdBuffer, normGammaBuffer, normBetaBuffer };
     console.log("Finished loading model.", output, params);
     return [output, params];
   }
@@ -308,33 +307,49 @@ class GPT {
     params.attention_scale = 1 / Math.sqrt(params.n_embd / params.n_head);
     params.bias = params.bias == undefined ? true : params.bias;
 
+    // Check for overflow in buffers larger than maxStorageBufferBindingSize
+    const maxBufferSize = this.device.limits.maxStorageBufferBindingSize / 4;
+    if (params.n_embd * params.n_ctx > maxBufferSize) console.warn("Model load failed: n_embd * n_ctx must be less than maxStorageBufferBindingSize.");
+    if (params.n_embd * params.hidden_size > maxBufferSize)
+      console.warn("Model load failed: n_embd * hidden_size must be less than maxStorageBufferBindingSize.");
+    if (params.n_ctx * params.n_ctx * params.n_head > maxBufferSize)
+      console.warn("Model load failed: n_ctx * n_ctx must be less than maxStorageBufferBindingSize.");
+    if (params.n_embd * params.n_embd * 3 > maxBufferSize)
+      console.warn("Model load failed: n_embd * n_embd * 3 must be less than maxStorageBufferBindingSize.");
+
+    console.log("Params:", params);
+
     return params;
   }
 
   async loadEmbeddings(params, weightsFolder) {
     console.log("Loading token embeddings...");
     const embeddingWeights = await fetchBin(`${weightsFolder}/transformer.wte.weight_gpt.bin`);
-    const embeddingsBuffer = this.initTensor(embeddingWeights, [params.vocab_size, params.n_embd], ["copy_from"]);
 
     // Chunks are stored in row-major order and are of dimensions n_embd x vocab_chunk_size.
     // Embedding weights are imported in column-major order and are of dimensions vocab_size x n_embd.
     // We pre-transpose the chunk for the deEmbedding process for the matmul. Could do this on GPU later.
+    const embeddingsBuffers = [];
     const deEmbeddingsBuffers = [];
     for (let i = 0; i < params.vocab_chunk_instances; i++) {
       console.log(`Loading deEmbedding chunk ${i + 1}/${params.vocab_chunk_instances}...`);
       const offset = i * params.vocab_chunk_size;
       let size = params.vocab_chunk_size;
+
       const paddedArray = new Float32Array(params.vocab_chunk_size * params.n_embd);
       if (i === params.vocab_chunk_instances - 1) {
         size = params.vocab_size - offset;
         paddedArray.set(size * params.n_embd, zeros((params.vocab_chunk_size * params.vocab_chunk_instances - params.vocab_size) * params.n_embd));
       }
       paddedArray.set(embeddingWeights.subarray(offset * params.n_embd, offset * params.n_embd + size * params.n_embd));
+
+      embeddingsBuffers.push(this.initTensor(paddedArray, [params.vocab_chunk_size, params.n_embd], ["copy_from"]));
+
       const chunk = transpose(paddedArray, params.vocab_chunk_size, params.n_embd); // Use GPU perhaps?
       deEmbeddingsBuffers.push(this.initTensor(chunk, [params.n_embd, params.vocab_chunk_size], ["storage"]));
     }
 
-    return { embeddingsBuffer, deEmbeddingsBuffers };
+    return { embeddingsBuffers, deEmbeddingsBuffers };
   }
 
   async loadPositionalEmbeddings(params, weightsFolder) {
@@ -453,6 +468,7 @@ class GPT {
   }
 
   async fetchAndInitTensor(url, dims, ops) {
+    console.log("Fetching and initializing tensor...", url);
     const data = await fetchBin(url);
     return this.initTensor(data, dims, ops);
   }
@@ -475,6 +491,9 @@ class GPT {
   }
 
   bufferSize(dimX, dimY = 1, dimZ = 1) {
-    return Math.ceil((dimX * dimY * dimZ * Float32Array.BYTES_PER_ELEMENT) / this.minBufferOffset) * this.minBufferOffset;
+    const size = Math.ceil((dimX * dimY * dimZ * Float32Array.BYTES_PER_ELEMENT) / this.minBufferOffset) * this.minBufferOffset;
+    if (size > this.device.limits.maxStorageBufferBindingSize)
+      console.warn("Warning: Buffer size calc result exceeds GPU limit, are you using this value for a tensor size?", dimX, dimY, dimZ, size);
+    return size;
   }
 }

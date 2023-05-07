@@ -13,7 +13,7 @@ def load_pretrained_gpt_model(model_type):
 transposed = ['attn.c_attn.weight', 'attn.c_proj.weight',
               'mlp.c_fc.weight', 'mlp.c_proj.weight']
 
-ignored = ['.attn.masked_bias', '.attn.bias']
+ignored = ['.attn.masked_bias', '.attn.bias', 'lm_head.weight']
 
 
 def export_weights_to_files(model, folder_name):
@@ -49,7 +49,7 @@ def main(model_type, folder_name):
 
 
 if __name__ == "__main__":
-    model_type = 'gpt2-large'
+    model_type = 'gpt2-xl'
     folder_name = f"{model_type}/"
 
     main(model_type, folder_name)

@@ -18,6 +18,10 @@ function destroyOperationBuffers() {
   for (const operation of operations) operation.destroyBuffers();
 }
 
+function destroyOperations() {
+  for (const operation of operations) operation.destroy();
+}
+
 const bufferUsageDict = {
   copy_from: GPUBufferUsage.COPY_SRC,
   copy_to: GPUBufferUsage.COPY_DST,

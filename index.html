@@ -19,7 +19,9 @@
     </p>
 
     <button id="loadModelButton" onclick="loadModelHandler()" disabled>Load Shakespeare Model</button>
-    <button id="loadGPT2ModelButton" onclick="loadGPT2ModelHandler()" disabled>Load GPT2 Model</button><br />
+    <button id="loadGPT2ModelButton" onclick="loadGPT2ModelHandler()" disabled>Load GPT2 Model</button>
+    <button id="destroyCacheButton" onclick="destroyCache()" disabled>Destroy Cache</button>
+    <br />
     <br />
     <label for="tokens">Number of tokens:</label>
     <input type="number" min="1" max="300" value="100" id="tokensInput" disabled />
@@ -42,6 +44,7 @@ Have you forgotten I built WebGPT?&#13;&#10;</textarea
       const webgpuSupportMessage = document.getElementById("webgpuSupportMessage");
       const loadModelButton = document.getElementById("loadModelButton");
       const loadGPT2ModelButton = document.getElementById("loadGPT2ModelButton");
+      const destroyCacheButton = document.getElementById("destroyCacheButton");
 
       const tokensInput = document.getElementById("tokensInput");
       const topKInput = document.getElementById("topKInput");
@@ -95,13 +98,15 @@ Have you forgotten I built WebGPT?&#13;&#10;</textarea
         tokensInput.disabled = false;
         topKInput.disabled = false;
         temperatureInput.disabled = false;
+
+        destroyCacheButton.disabled = false;
       }
 
       async function loadGPT2ModelHandler() {
         loadModelButton.disabled = true;
         loadGPT2ModelButton.disabled = true;
 
-        GPTModel = new GPT("gpt2", "bpe");
+        GPTModel = new GPT("large-models/gpt2-medium", "bpe");
         await GPTModel.initialize();
 
         setTextareaDisabled(false);
@@ -113,6 +118,8 @@ Have you forgotten I built WebGPT?&#13;&#10;</textarea
         topKInput.value = GPTModel.defaultTopK;
         tokensInput.value = GPTModel.defaultTokens;
         temperatureInput.value = GPTModel.defaultTemperature;
+
+        destroyCacheButton.disabled = false;
       }
 
       function setTextareaDisabled(bool) {
@@ -137,6 +144,20 @@ Have you forgotten I built WebGPT?&#13;&#10;</textarea
         }
 
         setTextareaDisabled(false);
+      }
+
+      function destroyCache() {
+        GPTModel.unloadBuffers();
+        destroyOperations();
+
+        GPTModel = null;
+        loadModelButton.disabled = false;
+        loadGPT2ModelButton.disabled = false;
+        destroyCacheButton.disabled = true;
+        tokensInput.disabled = true;
+        topKInput.disabled = true;
+        temperatureInput.disabled = true;
+        setTextareaDisabled(true);
       }
     </script>
   </body>

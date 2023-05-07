@@ -7,11 +7,14 @@
 class Block {
   constructor() {
     this.bufferDeletionStack = [];
+    this.pipelineCache;
+    this.name = "";
   }
 
   initialize(device) {
     this.device = device;
     this.initBindGroups();
+    this.pipelineCache = new Map();
   }
 
   initBindGroup(layout, buffers, label = "") {
@@ -35,7 +38,9 @@ class Block {
   }
 
   bufferSize(dimA, dimB = 1) {
-    return Math.ceil((dimA * dimB * Float32Array.BYTES_PER_ELEMENT) / 1) * 1;
+    const size = Math.ceil((dimA * dimB * Float32Array.BYTES_PER_ELEMENT) / 1) * 1;
+    if (size > this.device.limits.maxStorageBufferBindingSize) throw new Error("Buffer size exceeds GPU limit.");
+    return size;
   }
 
   // Could be removed with auto bind groups, currently initializing everytime so probably slowing things down.
@@ -69,6 +74,15 @@ class Block {
     });
   }
 
+  destroy() {
+    this.destroyPipelineCache();
+    this.destroyBuffers();
+  }
+
+  destroyPipelineCache() {
+    this.pipelineCache = null;
+  }
+
   destroyBuffers() {
     this.bufferDeletionStack.map((buffer) => buffer.destroy());
     this.bufferDeletionStack = [];
@@ -79,7 +93,6 @@ class FastMatMulBlockClass extends Block {
   constructor() {
     super();
     this.name = "fastMatMul";
-    this.pipelineCache = new Map();
   }
 
   getPipeline(rows) {
@@ -262,7 +275,6 @@ class ResidualBlockClass extends Block {
   constructor() {
     super();
     this.name = "residual";
-    this.pipelineCache = new Map();
   }
 
   getPipeline() {
@@ -329,7 +341,6 @@ class LayerNormBlockClass extends Block {
   constructor() {
     super();
     this.name = "layerNorm";
-    this.pipelineCache = new Map();
   }
 
   getStatsPipeline(workgroups) {
@@ -498,7 +509,6 @@ class SoftmaxBlockClass extends Block {
   constructor() {
     super();
     this.name = "softmax";
-    this.pipelineCache = new Map();
   }
 
   getFusedPipeline(workgroups, transpose) {
@@ -617,7 +627,6 @@ class GeluBlockClass extends Block {
   constructor() {
     super();
     this.name = "gelu";
-    this.pipelineCache = new Map();
   }
 
   getPipeline() {
@@ -703,7 +712,7 @@ class EmbedBlockClass extends Block {
     this.name = "embed";
   }
 
-  newInstance(idx, seq_length, n_embd, embdBuffer, posEmbdBuffer, ResidualBlock) {
+  newInstance(idx, seq_length, n_embd, vocab_chunk_size, embdBuffers, posEmbdBuffer, ResidualBlock) {
     const embdOutputBuffer = this.initBuffer(["storage", "copy_to"], [seq_length, n_embd]);
     const posEmbdOutputBuffer = this.initBuffer(["storage", "copy_to"], [seq_length, n_embd]);
 
@@ -711,10 +720,13 @@ class EmbedBlockClass extends Block {
     const embdCopyCommands = Array(seq_length)
       .fill()
       .map((_, i) => {
+        const chunkOffset = Math.floor(idx[i] / vocab_chunk_size);
+        const chunkIdx = idx[i] % vocab_chunk_size;
+
         return {
           flag: "copy",
-          src: embdBuffer,
-          srcOffset: this.bufferSize(n_embd) * idx[i],
+          src: embdBuffers[chunkOffset],
+          srcOffset: this.bufferSize(n_embd) * chunkIdx,
           dst: embdOutputBuffer,
           dstOffset: this.bufferSize(n_embd) * i,
           size: this.bufferSize(n_embd),
@@ -744,7 +756,6 @@ class DeEmbedBlockClass extends Block {
   constructor() {
     super();
     this.name = "deembed";
-    this.pipelineCache = new Map();
   }
 
   getPipeline() {
@@ -871,7 +882,6 @@ class AttentionBlockClass extends Block {
   constructor() {
     super();
     this.name = "attention";
-    this.pipelineCache = new Map();
   }
 
   getNewAttentionWeightsPipeline() {
