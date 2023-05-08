@@ -11,7 +11,7 @@ WebGPT is a vanilla JS and HTML implementation of a transformer model, intended 
 2020 M1 Mac: 30ms/token at 117M parameters with f32 precision.  
 2020 M1 Mac: 70ms/token at 377M parameters with f32 precision.  
 2020 M1 Mac: 120ms/token at 775M parameters with f32 precision.  
-1.5B is workign but unstable, sitting around 1000ms/token due to inefficiencies.  
+1.5B is working but unstable, sitting around 1000ms/token due to inefficiencies.  
 
 ## Running WebGPT
 
