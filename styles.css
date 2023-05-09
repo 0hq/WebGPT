@@ -1,0 +1,146 @@
+* {
+  box-sizing: content-box;
+}
+
+body {
+  font-family: "Helvetica Neue", Helvetica, Arial, sans-serif;
+  display: flex;
+  justify-content: center;
+  font-size: 16px;
+}
+
+.container {
+  width: 90%;
+}
+
+h1 {
+  font-size: 36px;
+}
+
+h2 {
+  font-size: 20px;
+  line-height: 36px;
+}
+
+h3 {
+  font-weight: normal;
+  font-size: 16px;
+  margin-bottom: 30px;
+}
+
+button {
+  color: rgb(36, 41, 47);
+  background-color: rgb(246, 248, 250);
+  transition: 80ms cubic-bezier(0.33, 1, 0.68, 1);
+  transition-property: color,background-color,box-shadow,border-color;
+  display: inline-block;
+  padding: 5px 16px;
+  line-height: 20px;
+  vertical-align: middle;
+  cursor: pointer;
+  user-select: none;
+  border: 1px solid;
+  border-radius: 6px;
+  appearance: none;
+  border-color: rgba(31, 35, 40, 0.15);
+  position: relative;
+  margin-right: 10px;
+}
+
+button:hover {
+  background-color: rgb(243, 244, 246);
+  transition-duration: .1s;
+}
+
+button:active {
+  background-color: rgb(235, 236, 240);
+}
+
+button:disabled {
+  background-color: rgba(239, 239, 239, 0.3);
+  color: rgba(16, 16, 16, 0.3);
+  border-color: rgba(118, 118, 118, 0.3);
+  cursor: default;
+}
+
+button.loading::after {
+  content: "";
+  position: absolute;
+  width: 12px;
+  height: 12px;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  margin: auto;
+  border: 0.2rem solid #6c757d;
+  border-right-color: transparent;
+  border-radius: 50%;
+  vertical-align: middle;
+  color: #6c757d;
+  animation: spinner .75s linear infinite;
+}
+
+button.loading .button-text {
+  visibility: hidden;
+}
+
+@keyframes spinner {
+  100% {
+    transform: rotate(360deg);
+  }
+}
+
+textarea {
+  resize: vertical;
+  box-sizing: border-box; 
+  font-family: "Helvetica Neue", Helvetica, Arial, sans-serif;
+  margin-top: 20px;
+}
+
+.prompt {
+  display: block;
+  width: 100%;
+  padding: 10px 20px;
+  max-width: 700px;
+  background-clip: padding-box;
+  border: 1px solid #dee2e6;
+  appearance: none;
+  border-radius: 6px;
+}
+
+.prompt:disabled {
+  background-color: rgba(239, 239, 239, 0.3);
+  color: rgba(16, 16, 16, 0.3);
+  border-color: rgba(118, 118, 118, 0.3);
+  cursor: default;
+  user-select: none;
+}
+
+input[type="number"] {
+  display: inline-block;
+  line-height: 20px;
+  background-clip: padding-box;
+  border: 1px solid #dee2e6;
+  appearance: none;
+  border-radius: 6px;
+  padding: 5px 5px 5px 12px;;
+  line-height: 20px;
+  margin: 30px 10px 0px 0;
+}
+
+input[type="number"]:disabled {
+  background-color: rgba(239, 239, 239, 0.3);
+  color: rgba(16, 16, 16, 0.3);
+  border-color: rgba(118, 118, 118, 0.3);
+  cursor: default;
+  user-select: none;
+}
+
+.support-message.green {
+  color: #13795b;
+}
+
+.support-message.red {
+  color: #c6303e;
+}
