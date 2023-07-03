@@ -37,6 +37,7 @@ Note: **You'll need to use Git LFS** to download the model files, after cloning 
 - [X] Optimize all other kernels.
 - [X] Compute pass splitting for larger models _(maxStorageBufferBindingSize)_
 - [ ] Run selection ops on GPU (topk, selection softmax)
+- [ ] Attention kernel is optimized for small models, not for large models where each head having it's own matmul is more efficient.
 - [ ] Investigate why attention cache isn't giving proper speed-ups.
 - [ ] Make simple instructional version without special stuff.
 - [ ] Optimize workgroup sizes, specifically for single row/col operations.
@@ -48,7 +49,3 @@ Note: **You'll need to use Git LFS** to download the model files, after cloning 
 When I started this project I had no idea how transformers worked or how to implement them (or GPUs or matmul kernels or WebGPU or tokenization for that matter), so Andrej Karpathy's series on neural networks and building GPT from scratch were invaluable: [Andrej's Youtube](https://www.youtube.com/@AndrejKarpathy). I've also used some code as well from the nanoGPT repository: [nanoGPT](https://github.com/karpathy/nanoGPT).
 
 I copied from LatitudeGames' implementation of OpenAI's GPT-3 tokenizer in Javascript: [GPT-3-Encoder](https://github.com/latitudegames/GPT-3-Encoder).
-
-## Note: I'm looking for work!
-
-I'm currently in the process of switching into the AI field. I'm specifically looking for opportunites at larger research labs in a variety of jobs, with the goal of breaking into the space and finding an area in which to specialize. If you're interested, check out my personal website: [Personal Website](https://depue.design/)
