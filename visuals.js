@@ -116,7 +116,6 @@ class Visuals {
           var outColor = vec4<f32>(0.0);
           outColor = hdrColorMapping(&outColor, 1.0, vectorValue * 0.1);
 
-          // vector
           return outColor;
         }
 
