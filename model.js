@@ -15,6 +15,8 @@ class GPT {
     this.defaultTemperature;
     this.defaultTokens;
 
+    this.externalBuffer;
+
     this.unloadDeletionStack = [];
   }
 
@@ -204,6 +206,18 @@ class GPT {
         intermediateBuffer = resultBuffer;
         residualBuffer = resultBuffer;
         this.computePasses.push(...passes);
+      }
+    }
+    {
+      if (this.externalBuffer) {
+        this.computePasses.push({
+          flag: "copy",
+          src: intermediateBuffer,
+          srcOffset: 0,
+          dst: this.externalBuffer,
+          dstOffset: 0,
+          size: this.bufferSize(seq_length, n_embd),
+        });
       }
     }
     {
