@@ -9,6 +9,7 @@
     <script src="tokenizer.js"></script>
     <script src="instructions.js"></script>
     <script src="model.js"></script>
+    <script src="visuals.js"></script>
     <script src="globals.js"></script>
   </head>
   <body>
@@ -48,6 +49,9 @@ Ah, how dare you challenge me?
 Have you forgotten I built WebGPT?&#13;&#10;</textarea
     >
     <br /><br />
+    <button id="updateVisuals" onclick="updateVisuals()" disabled>Force Update Visuals</button>
+    <br /><br />
+    <div id="visualsContainer"></div>
     <script>
       const webgpuSupportMessage = document.getElementById("webgpuSupportMessage");
       const loadModelButton = document.getElementsByClassName("loadModelButton");
@@ -61,8 +65,10 @@ Have you forgotten I built WebGPT?&#13;&#10;</textarea
       const temperatureInput = document.getElementById("temperatureInput");
       const generateButton = document.getElementById("generateButton");
       const promptTextarea = document.getElementById("prompt");
+      const updateVisualsButton = document.getElementById("updateVisuals");
 
       let GPTModel = null;
+      let visuals = null;
 
       // Check for WebGPU support
       if (!navigator.gpu) {
@@ -86,6 +92,7 @@ Have you forgotten I built WebGPT?&#13;&#10;</textarea
 
         for await (const text of textStream) {
           promptTextarea.value += text;
+          visuals.render();
         }
 
         setTextareaDisabled(false);
@@ -96,6 +103,7 @@ Have you forgotten I built WebGPT?&#13;&#10;</textarea
 
         GPTModel = new GPT(folder, tokenizer);
         await GPTModel.initialize();
+
 
         promptTextarea.value = GPTModel.defaultPrompt;
         topKInput.value = GPTModel.defaultTopK;
@@ -108,6 +116,13 @@ Have you forgotten I built WebGPT?&#13;&#10;</textarea
         temperatureInput.disabled = false;
 
         destroyCacheButton.disabled = false;
+        updateVisualsButton.disabled = false;
+
+        if (!visuals) {
+          visuals = new Visuals(GPTModel);
+          visuals.init();
+          visuals.render();
+        }
       }
 
       function setTextareaDisabled(bool) {
@@ -140,13 +155,21 @@ Have you forgotten I built WebGPT?&#13;&#10;</textarea
 
         GPTModel = null;
 
+        visuals.destroy();
+        visuals = null;
+
         setModelButtonDisabled(false);
 
         destroyCacheButton.disabled = true;
         tokensInput.disabled = true;
         topKInput.disabled = true;
         temperatureInput.disabled = true;
+        updateVisualsButton.disabled = true;
         setTextareaDisabled(true);
+      }
+
+      function updateVisuals() {
+          visuals.render();
       }
     </script>
   </body>
