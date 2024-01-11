@@ -22,8 +22,6 @@ class Visuals {
     const containerEl = document.getElementById("visualsContainer");
     const gpuCanvasEl = document.createElement("canvas");
 
-    containerEl.appendChild(gpuCanvasEl);
-
     containerEl.style.width = this.params.n_embd + "px";
     containerEl.style.height = this.params.n_ctx + "px";
     gpuCanvasEl.style.width = "100%";
@@ -38,6 +36,8 @@ class Visuals {
       device: this.device,
       format: gpuCanvasFormat,
     });
+
+    containerEl.appendChild(gpuCanvasEl);
 
     this.containerEl = containerEl;
     this.gpuCanvasFormat = gpuCanvasFormat;
@@ -239,7 +239,6 @@ class Visuals {
 
   destroy() {
     this.gpuCanvasEl.remove();
-
     this.uniformBuffer.destroy();
     this.embeddingsBuffer.destroy();
   }
