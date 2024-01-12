@@ -53,8 +53,6 @@ class Visuals {
     this.uniforms = {
       width: this.model.params.n_embd,
       height: this.model.params.n_ctx,
-      n_embd: this.params.n_embd,
-      n_ctx: this.params.n_ctx,
     };
   }
 
@@ -114,13 +112,14 @@ class Visuals {
           let vectorValue = embeddingsBuffer[index];
 
           var outColor = vec4<f32>(0.0);
-          outColor = hdrColorMapping(&outColor, 1.0, vectorValue * 0.1);
+          outColor = hdrColorMapping(outColor, 1.0, vectorValue * 0.1);
 
           return outColor;
         }
 
-        fn hdrColorMapping(colorPtr: ptr<function, vec4<f32>>, hdrThreshold: f32, vectorValue: f32) -> vec4<f32> {
-          var color = *colorPtr;
+        fn hdrColorMapping(colorRef: vec4<f32>, hdrThreshold: f32, vectorValue: f32) -> vec4<f32> {
+          var color = colorRef;
+
           if (vectorValue < 0.0) {
             color.b = -vectorValue;
             if (vectorValue < -hdrThreshold) {
