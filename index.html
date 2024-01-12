@@ -6,6 +6,7 @@
       http-equiv="origin-trial"
       content="Anx9P4m5tzLOL/wLICKy/mA+DRyoSsTkyqmnK5t+S7oyw7A2SeBI2jO4LKqoQiQgChP2MTtqMNKofelMwvGtPQsAAABKeyJvcmlnaW4iOiJodHRwczovL2ttZWFucy5vcmc6NDQzIiwiZmVhdHVyZSI6IldlYkdQVSIsImV4cGlyeSI6MTY5MTcxMTk5OX0="
     />
+    <link rel="stylesheet" href="styles.css">
     <script src="tokenizer.js"></script>
     <script src="instructions.js"></script>
     <script src="model.js"></script>
@@ -13,45 +14,54 @@
     <script src="globals.js"></script>
   </head>
   <body>
-    <h1>WebGPU GPT Model Demo</h1>
-    <p id="webgpuSupportMessage">Checking WebGPU support...</p>
-    <p>
-      <i>PS: Loading models is 5x slower on the web rather than running locally. Just <a href="https://github.com/0hq/WebGPT">clone the repo</a> and open!</i>
-    </p>
+    <div class="container">
 
-    <button class="loadModelButton" onclick="loadModel('better_shakespeare', 'char')" disabled>Load Shakespeare Model</button>
-    <button class="loadModelButton" onclick="loadModel('gpt2', 'bpe')" disabled>Load GPT2 117M Model</button>
-    <button id="destroyCacheButton" onclick="destroyCache()" disabled>Destroy Cache</button>
+      <h1>WebGPU GPT Model Demo</h1>
+      <h3 id="webgpuSupportMessage" class="support-message">Checking WebGPU support...</h3>
+      <p>
+        <i>PS: Loading models is 5x slower on the web rather than running locally. Just <a href="https://github.com/0hq/WebGPT">clone the repo</a> and open!</i>
+      </p>
 
-    <p>
-      <i>Special models (download required):</i>
-    </p>
-    <button class="loadModelButton" onclick="loadModel('large-models/gpt2-medium', 'bpe')" disabled>Load GPT2 377M Model</button>
-    <button class="loadModelButton" onclick="loadModel('large-models/gpt2-large', 'bpe')" disabled>Load GPT2 777M Model</button>
-    <button class="loadModelButton" onclick="loadModel('large-models/gpt2-xl', 'bpe')" disabled>Load GPT2 1.5B Model</button>
+      <button class="loadModelButton" onclick="loadModel('better_shakespeare', 'char', this)" disabled>
+        <span class="button-text">Load Shakespeare Model</span>
+      </button>
+      <button class="loadModelButton" onclick="loadModel('gpt2', 'bpe', this)" disabled>
+        <span class="button-text">Load GPT2 117M Model</span>
+      </button>
+      <button id="destroyCacheButton" onclick="destroyCache()" disabled>Destroy Cache</button>
 
-    <br />
-    <br />
-    <label for="tokens">Number of tokens:</label>
-    <input type="number" min="1" max="300" value="100" id="tokensInput" disabled />
-    <br /><br />
-    <label for="topK">Top K:</label>
-    <input type="number" min="1" max="100" value="2" id="topKInput" disabled />
-    <br /><br />
-    <label for="temperature">Temperature:</label>
-    <input type="number" step="0.01" min="0.1" max="2" value="1" id="temperatureInput" disabled />
-    <br /><br />
-    <button id="generateButton" onclick="startGeneration()" disabled>Generate Text</button>
-    <br /><br />
-    <textarea id="prompt" rows="15" cols="50" disabled>
+      <p>
+        <i>Special models (download required):</i>
+      </p>
+      <button class="loadModelButton" onclick="loadModel('large-models/gpt2-medium', 'bpe', this)" disabled>
+        <span class="button-text">Load GPT2 377M Model</span>
+      </button>
+      <button class="loadModelButton" onclick="loadModel('large-models/gpt2-large', 'bpe', this)" disabled>
+        <span class="button-text">Load GPT2 777M Model</span>
+      </button>
+      <button class="loadModelButton" onclick="loadModel('large-models/gpt2-xl', 'bpe', this)" disabled>
+        <span class="button-text">Load GPT2 1.5B Model</span>
+      </button>
+
+      <div>
+        <button id="generateButton" onclick="startGeneration()" disabled>Generate Text</button>
+        <label for="tokens">Number of tokens:</label>
+        <input type="number" min="1" max="300" value="100" id="tokensInput" disabled />
+        <label for="topK">Top K:</label>
+        <input type="number" min="1" max="100" value="2" id="topKInput" disabled />
+        <label for="temperature">Temperature:</label>
+        <input type="number" step="0.01" min="0.1" max="2" value="1" id="temperatureInput" disabled />
+        <textarea class="prompt" id="prompt" rows="15" cols="50" disabled>
 WILL:
 Ah, how dare you challenge me?
 Have you forgotten I built WebGPT?&#13;&#10;</textarea
     >
+    </div>
     <br /><br />
     <button id="updateVisuals" onclick="updateVisuals()" disabled>Force Update Visuals</button>
     <br /><br />
     <div id="visualsContainer"></div>
+    </div>
     <script>
       const webgpuSupportMessage = document.getElementById("webgpuSupportMessage");
       const loadModelButton = document.getElementsByClassName("loadModelButton");
@@ -74,9 +84,11 @@ Have you forgotten I built WebGPT?&#13;&#10;</textarea
       if (!navigator.gpu) {
         webgpuSupportMessage.innerHTML =
           "WebGPU is not supported in your browser yet. Update Chrome to v113 or download <a href='https://www.google.com/chrome/canary/'>Chrome Canary</a>. Also available on <a href='https://www.microsoftedgeinsider.com/en-us/download/canary'>Edge Canary</a>.";
+          webgpuSupportMessage.classList.add('red');
         console.error("WebGPU is not supported");
       } else {
         webgpuSupportMessage.innerHTML = "WebGPU is supported in your browser!";
+        webgpuSupportMessage.classList.add('green');
         setModelButtonDisabled(false);
       }
 
@@ -98,13 +110,14 @@ Have you forgotten I built WebGPT?&#13;&#10;</textarea
         setTextareaDisabled(false);
       }
 
-      async function loadModel(folder, tokenizer) {
+      async function loadModel(folder, tokenizer, buttonEl) {
         setModelButtonDisabled(true);
 
+        buttonEl.classList.add('loading');
         GPTModel = new GPT(folder, tokenizer);
         await GPTModel.initialize();
 
-
+        buttonEl.classList.remove('loading');
         promptTextarea.value = GPTModel.defaultPrompt;
         topKInput.value = GPTModel.defaultTopK;
         tokensInput.value = GPTModel.defaultTokens;
