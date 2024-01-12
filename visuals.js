@@ -20,7 +20,8 @@ class Visuals {
 
   initFoundation() {
     const containerEl = document.getElementById("visualsContainer");
-    const gpuCanvasEl = document.createElement("canvas");
+    // const gpuCanvasEl = document.createElement("canvas");
+    const gpuCanvasEl = document.getElementById("visualsCanvas");
 
     containerEl.style.width = this.params.n_embd + "px";
     containerEl.style.height = this.params.n_ctx + "px";

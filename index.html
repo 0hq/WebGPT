@@ -12,165 +12,93 @@
     <script src="visuals.js"></script>
     <script src="globals.js"></script>
   </head>
-  <body>
-    <h1>WebGPU GPT Model Demo</h1>
-    <p id="webgpuSupportMessage">Checking WebGPU support...</p>
-    <p>
-      <i>PS: Loading models is 5x slower on the web rather than running locally. Just <a href="https://github.com/0hq/WebGPT">clone the repo</a> and open!</i>
-    </p>
-
-    <button class="loadModelButton" onclick="loadModel('better_shakespeare', 'char')" disabled>Load Shakespeare Model</button>
-    <button class="loadModelButton" onclick="loadModel('gpt2', 'bpe')" disabled>Load GPT2 117M Model</button>
-    <button id="destroyCacheButton" onclick="destroyCache()" disabled>Destroy Cache</button>
-
-    <p>
-      <i>Special models (download required):</i>
-    </p>
-    <button class="loadModelButton" onclick="loadModel('large-models/gpt2-medium', 'bpe')" disabled>Load GPT2 377M Model</button>
-    <button class="loadModelButton" onclick="loadModel('large-models/gpt2-large', 'bpe')" disabled>Load GPT2 777M Model</button>
-    <button class="loadModelButton" onclick="loadModel('large-models/gpt2-xl', 'bpe')" disabled>Load GPT2 1.5B Model</button>
-
-    <br />
-    <br />
-    <label for="tokens">Number of tokens:</label>
-    <input type="number" min="1" max="300" value="100" id="tokensInput" disabled />
-    <br /><br />
-    <label for="topK">Top K:</label>
-    <input type="number" min="1" max="100" value="2" id="topKInput" disabled />
-    <br /><br />
-    <label for="temperature">Temperature:</label>
-    <input type="number" step="0.01" min="0.1" max="2" value="1" id="temperatureInput" disabled />
-    <br /><br />
-    <button id="generateButton" onclick="startGeneration()" disabled>Generate Text</button>
-    <br /><br />
-    <textarea id="prompt" rows="15" cols="50" disabled>
-WILL:
-Ah, how dare you challenge me?
-Have you forgotten I built WebGPT?&#13;&#10;</textarea
+  <body style="background-color: black;">
+    <p style="position: absolute; bottom: 8px; left: 10px; font-size: 15px; color: gray; font-family: monospace; margin: 0;">@willdepue x gpt-2 base</p>
+    <p id="prompt" rows="15" cols="50" disabled style="
+      position: absolute;
+      top: 0;
+      bottom: 0;
+      left: 0; 
+      right: 0;
+      width: 1024px; 
+      height: 1280px;
+      margin-top: auto;
+      margin-bottom: auto;
+      margin-left: auto; 
+      margin-right: auto;
+      color: white;
+      word-break: break-all;
+      font-size: 24px; 
+      font-family: 'Times New Roman', Times, serif; 
+      line-height: 30px; 
+      /* z-index: 10; */
+    ">Loading...</p>
+    <div id="visualsContainer" style="position: absolute; 
+      top: 0;
+      bottom: 0;
+      left: 0; 
+      right: 0; 
+      margin-left: auto; 
+      margin-right: auto; 
+      margin-top: auto; 
+      margin-bottom: auto; 
+      width: 768px; 
+      border: 1px solid white;
+      height: 1024px;
+      background-color: transparent;
+      /* z-index: -10; */
+      "
     >
-    <br /><br />
-    <button id="updateVisuals" onclick="updateVisuals()" disabled>Force Update Visuals</button>
-    <br /><br />
-    <div id="visualsContainer"></div>
+    <canvas id="visualsCanvas"></canvas>
+    </div>
     <script>
-      const webgpuSupportMessage = document.getElementById("webgpuSupportMessage");
-      const loadModelButton = document.getElementsByClassName("loadModelButton");
-      const setModelButtonDisabled = (bool) => {
-        for (let i = 0; i < loadModelButton.length; i++) loadModelButton[i].disabled = bool;
-      };
-      const destroyCacheButton = document.getElementById("destroyCacheButton");
-
-      const tokensInput = document.getElementById("tokensInput");
-      const topKInput = document.getElementById("topKInput");
-      const temperatureInput = document.getElementById("temperatureInput");
-      const generateButton = document.getElementById("generateButton");
       const promptTextarea = document.getElementById("prompt");
-      const updateVisualsButton = document.getElementById("updateVisuals");
-
-      let GPTModel = null;
-      let visuals = null;
 
       // Check for WebGPU support
       if (!navigator.gpu) {
-        webgpuSupportMessage.innerHTML =
-          "WebGPU is not supported in your browser yet. Update Chrome to v113 or download <a href='https://www.google.com/chrome/canary/'>Chrome Canary</a>. Also available on <a href='https://www.microsoftedgeinsider.com/en-us/download/canary'>Edge Canary</a>.";
-        console.error("WebGPU is not supported");
-      } else {
-        webgpuSupportMessage.innerHTML = "WebGPU is supported in your browser!";
-        setModelButtonDisabled(false);
+        throw new Error("WebGPU is not supported");
       }
 
-      async function startGeneration() {
-        setTextareaDisabled(true);
-
-        const prompt = promptTextarea.value || " ";
-        const numTokens = tokensInput.value;
-
-        const topK = topKInput.value;
-        const temperature = temperatureInput.value;
-        const textStream = GPTModel.generate(prompt, numTokens, topK, temperature);
-
-        for await (const text of textStream) {
-          promptTextarea.value += text;
-          visuals.render();
-        }
-
-        setTextareaDisabled(false);
+      // If less than 4k screen, scale down visuals
+      console.log('width, height', window.innerWidth, window.innerHeight);
+      if (window.innerWidth < 1200 || window.innerHeight < 1500 ) {
+        document.body.style.zoom = "50%";
+      } else if ( window.innerHeight < 2000 ) {
+        document.body.style.zoom = "80%";
       }
 
-      async function loadModel(folder, tokenizer) {
-        setModelButtonDisabled(true);
 
-        GPTModel = new GPT(folder, tokenizer);
+      async function loop() {
+        const GPTModel = new GPT('gpt2', 'bpe');
         await GPTModel.initialize();
-
-
-        promptTextarea.value = GPTModel.defaultPrompt;
-        topKInput.value = GPTModel.defaultTopK;
-        tokensInput.value = GPTModel.defaultTokens;
-        temperatureInput.value = GPTModel.defaultTemperature;
-
-        setTextareaDisabled(false);
-        tokensInput.disabled = false;
-        topKInput.disabled = false;
-        temperatureInput.disabled = false;
-
-        destroyCacheButton.disabled = false;
-        updateVisualsButton.disabled = false;
-
-        if (!visuals) {
-          visuals = new Visuals(GPTModel);
+        
+        async function run() {
+          const visuals = new Visuals(GPTModel);
           visuals.init();
           visuals.render();
+
+          const prompt = "What is the answer to life, the universe, and everything?"
+          const promptLength = GPTModel.tokenizer.encode(prompt).length;
+          console.log(promptLength);
+          promptTextarea.innerHTML = prompt;
+          const numTokens = 1024 - promptLength;
+
+          const topK = 3
+          const temperature = 1
+          const textStream = GPTModel.generate(prompt, numTokens, topK, temperature);
+
+          for await (const text of textStream) {
+            promptTextarea.innerHTML += text;
+            visuals.render();
+          }
+        }
+        
+        while (true) {
+          await run();
         }
       }
 
-      function setTextareaDisabled(bool) {
-        promptTextarea.disabled = bool;
-        generateButton.disabled = bool;
-      }
-
-      async function continueGeneration() {
-        setTextareaDisabled(true);
-
-        const prompt = outputDiv.innerHTML || " ";
-        const numTokens = tokensInput.value;
-
-        outputDiv.innerHTML = prompt;
-
-        const topK = topKInput.value;
-        const temperature = temperatureInput.value;
-        const textStream = generate(prompt, numTokens, 10, topK, temperature);
-
-        for await (const text of textStream) {
-          outputDiv.innerHTML += text;
-        }
-
-        setTextareaDisabled(false);
-      }
-
-      function destroyCache() {
-        GPTModel.unloadBuffers();
-        destroyOperations();
-
-        GPTModel = null;
-
-        visuals.destroy();
-        visuals = null;
-
-        setModelButtonDisabled(false);
-
-        destroyCacheButton.disabled = true;
-        tokensInput.disabled = true;
-        topKInput.disabled = true;
-        temperatureInput.disabled = true;
-        updateVisualsButton.disabled = true;
-        setTextareaDisabled(true);
-      }
-
-      function updateVisuals() {
-          visuals.render();
-      }
+      loop()
     </script>
   </body>
 </html>
