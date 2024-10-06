@@ -353,7 +353,6 @@ class GPT {
       const paddedArray = new Float32Array(params.vocab_chunk_size * params.n_embd);
       if (i === params.vocab_chunk_instances - 1) {
         size = params.vocab_size - offset;
-        paddedArray.set(size * params.n_embd, zeros((params.vocab_chunk_size * params.vocab_chunk_instances - params.vocab_size) * params.n_embd));
       }
       paddedArray.set(embeddingWeights.subarray(offset * params.n_embd, offset * params.n_embd + size * params.n_embd));
 
