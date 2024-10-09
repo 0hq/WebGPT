@@ -96,7 +96,7 @@ class GPT2Tokenizer extends Tokenizer {
       const encoded_bytes = this.textEncoder.encode(token);
       let bytes = [];
       for (let i = 0; i < encoded_bytes.length; i++) {
-        bytes.push(this.byte_encoder[encoded_bytes[i].toString()]);
+        bytes.push(this.byte_encoder[encoded_bytes[i]]);
       }
       token = bytes.join("");
 
